@@ -1,15 +1,17 @@
 # Agent guide
 
-Build an independent execution boundary for Multica agents. The runtime is not
-implemented yet; a fake lifecycle probe exists. Distinguish planned capabilities
+Build an independent execution boundary for Multica agents. An experimental offline
+Docker executor and fake lifecycle probe exist. Distinguish planned capabilities
 from verified behavior.
 
 ## Map
 
 - `README.md`: purpose, scope and contributor setup.
 - `adrs/`: architecture (0001), images/tools (0002), identity/MCP (0003),
-  component reuse and security acceptance gates (0004), lifecycle probe (0005).
+  component reuse and security acceptance gates (0004), lifecycle probe (0005),
+  offline execution and recovery (0006).
 - `cmd/sandbox-probe`, `internal/`: test executor, controller and HTTP integration.
+- `internal/docker/`, `internal/execution/`: offline backend and execution contract.
 - `integration/`, `scripts/test-upstream.sh`: disposable upstream contract tests.
 - [GitHub Project](https://github.com/users/gently-whitesnow/projects/2): delivery;
   issues hold acceptance and handoff state, ADRs hold durable decisions.
@@ -40,7 +42,7 @@ running `./verify.sh`: Harness reads the Git index. Use `harness explain <id>`
 through the clone-local binary to investigate findings; fix their cause rather
 than weakening the frame. Inspect `git diff --check` before committing.
 Run `VERIFY_UPSTREAM=1 ./verify.sh` for lifecycle/client changes; Docker must be
-available. Never run the probe against production tasks. Keep fixture data generic.
+available. Run `VERIFY_CONTAINERS=1 ./verify.sh` for backend changes. Never run the probe against production tasks. Keep fixture data generic.
 CI is paused; run verification locally. Do not re-enable CI without an explicit
 request. Use `VERIFY_COMMIT_RANGE=master..HEAD ./verify.sh` before publishing.
 Before starting an issue, inspect its ADRs and existing branches/PRs. Leave a concise

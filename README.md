@@ -9,8 +9,8 @@ Multica's [security model](https://multica.ai/docs/security-model) states:
 multica-sandbox is being built to provide that boundary: disposable environments
 for running AI coding agents in your infrastructure.
 
-**Status:** experimental lifecycle probe; no agent sandbox or coding adapter yet.
-Docker/Sysbox first, Kubernetes next. Independent runtime, no Multica fork.
+**Status:** experimental offline container executor; no coding agent adapter yet.
+Docker/runc tested; Sysbox and Kubernetes remain planned. Independent runtime, no Multica fork.
 
 ## Design
 
@@ -47,7 +47,7 @@ gates follow [ADR 0004](adrs/0004-reuse-and-security-gates.md).
 ## Lifecycle probe
 
 The probe registers its own test runtime and processes one task with fixed output.
-It executes no agent code. Use only an isolated test workspace; see
+By default it uses a timer; container mode runs an operator-selected test command. Use only an isolated test workspace; see
 [ADR 0005](adrs/0005-upstream-lifecycle-probe.md) for scope and recovery limits.
 
 Run the reproducible upstream contract suite (Go 1.26.4+, Docker, Git, curl and
@@ -60,7 +60,8 @@ OpenSSL; Go may download upstream's required toolchain):
 This builds the pinned upstream revision, migrates a disposable PostgreSQL database,
 starts a loopback-only server, and tests lifecycle calls and process-crash recovery.
 Fixture users and queued tasks are SQL-seeded; this does not test UI task creation.
-Containers and generated fixture credentials are removed on exit.
+Containers and generated fixture credentials are removed on exit. The suite also
+tests offline container completion, failure, cancellation, timeout and recovery.
 
 For manual use against your own isolated test server, put its controller token in
 `MULTICA_PROBE_TOKEN` and run:
@@ -76,6 +77,29 @@ hosts. `-recover-only` reconciles without claiming; `-duration 30s` leaves time 
 cancel; `-fail` reports a simulated failure. Transport uncertainty exits with an
 error; the next invocation recovers orphaned work through Multica. Linux/macOS only.
 
+## Offline container mode
+
+Preload a digest-pinned OCI image, then append container options and an absolute
+command to the probe invocation above:
+
+```sh
+-image alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc \
+-duration 30s -- /bin/sh -c 'echo example > /workspace/result'
+```
+
+An independently built compatible image works too. Image-declared volumes are
+rejected. The fixed policy uses a non-root user, no network, no host mounts,
+read-only root, bounded tmpfs and CPU/memory/process limits. Image loading happens
+outside execution. Container output and files are discarded, not sent to Multica.
+The fixed completion message reports test execution, not completion of agent work.
+
+Use the same daemon identity, backend, Docker endpoint and lock on restart.
+Surviving containers are removed **before** Multica recovers tasks. Cancellation
+and timeout remove execution before acknowledgement. Supervise the controller:
+a SIGKILL leaves containers alive until restart; no independent deadline reaper
+exists yet. See [ADR 0006](adrs/0006-offline-container-execution.md) for the tested
+runtime, compatibility contract and shared-kernel limitations.
+
 ## Contributing
 
 Install the pinned
@@ -87,7 +111,8 @@ Install the pinned
 ```
 
 `verify.sh` runs Harness, formatting, vet, race tests and build. Set
-`VERIFY_UPSTREAM=1` to include the disposable upstream suite.
+`VERIFY_UPSTREAM=1` to include the disposable upstream suite. Set
+`VERIFY_CONTAINERS=1` for hostile-container conformance (preload the image above).
 Set `VERIFY_COMMIT_RANGE=master..HEAD` to validate published commit messages.
 All available Harness checks for Go, YAML and repository documentation are required.
 Harness does not execute tests or toolchains; `verify.sh` runs those locally.

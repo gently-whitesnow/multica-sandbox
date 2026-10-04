@@ -2,8 +2,11 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
+
+	"github.com/gently-whitesnow/multica-sandbox/internal/execution"
 
 	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
 )
@@ -24,6 +27,7 @@ type API interface {
 
 type Probe struct {
 	API      API
+	Backend  execution.Backend
 	Interval time.Duration
 	Duration time.Duration
 	Fail     bool
@@ -31,6 +35,11 @@ type Probe struct {
 }
 
 func (p *Probe) Connect(ctx context.Context, workspace, daemon string) (multica.Runtime, multica.Recovery, error) {
+	if p.Backend != nil {
+		if err := p.Backend.Reconcile(ctx); err != nil {
+			return multica.Runtime{}, multica.Recovery{}, err
+		}
+	}
 	rt, err := p.API.Register(ctx, workspace, daemon)
 	if err != nil {
 		return rt, multica.Recovery{}, err
@@ -64,7 +73,7 @@ func (p *Probe) Run(ctx context.Context, runtime string) error {
 	}
 }
 
-func (p *Probe) execute(ctx context.Context, t multica.Task, ticks <-chan time.Time) error {
+func (p *Probe) execute(ctx context.Context, t multica.Task, ticks <-chan time.Time) (result error) {
 	p.observe("claimed", t.ID)
 	if err := p.API.RenewPreparation(ctx, t); err != nil {
 		return err
@@ -72,44 +81,59 @@ func (p *Probe) execute(ctx context.Context, t multica.Task, ticks <-chan time.T
 	if err := p.API.Start(ctx, t); err != nil {
 		return err
 	}
-	p.observe("started", t.ID)
 	if err := p.API.Message(ctx, t.ID); err != nil {
 		return err
 	}
+	done, stop, err := p.launch(ctx, t)
+	if err != nil {
+		return err
+	}
+	defer func() { result = errors.Join(result, stop()) }()
+	p.observe("started", t.ID)
 	timer := time.NewTimer(p.Duration)
 	defer timer.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			// No subprocess survives this fake executor. Restart delegates recovery to Multica.
 			return ctx.Err()
 		case <-ticks:
 			if err := p.API.Heartbeat(ctx, t.RuntimeID); err != nil {
 				return err
 			}
-			active, err := p.reconcile(ctx, t.ID)
+			active, err := p.reconcile(ctx, t.ID, stop)
 			if err != nil || !active {
 				return err
 			}
+		case err := <-done:
+			return p.finish(ctx, t.ID, err, stop)
 		case <-timer.C:
-			active, err := p.reconcile(ctx, t.ID)
-			if err != nil || !active {
-				return err
+			var failure error
+			if p.Backend != nil || p.Fail {
+				failure = fmt.Errorf("execution failed or timed out")
 			}
-			if p.Fail {
-				err = p.API.Fail(ctx, t.ID)
-			} else {
-				err = p.API.Complete(ctx, t.ID)
-			}
-			if err == nil {
-				p.observe("reported", t.ID)
-			}
-			return err
+			return p.finish(ctx, t.ID, failure, stop)
 		}
 	}
 }
-
-func (p *Probe) reconcile(ctx context.Context, id string) (bool, error) {
+func (p *Probe) finish(ctx context.Context, id string, failure error, stop func() error) error {
+	if err := stop(); err != nil {
+		return err
+	}
+	active, err := p.reconcile(ctx, id, stop)
+	if err != nil || !active {
+		return err
+	}
+	if failure != nil {
+		err = p.API.Fail(ctx, id)
+	} else {
+		err = p.API.Complete(ctx, id)
+	}
+	if err == nil {
+		p.observe("reported", id)
+	}
+	return err
+}
+func (p *Probe) reconcile(ctx context.Context, id string, stop func() error) (bool, error) {
 	status, err := p.API.Status(ctx, id)
 	if err != nil {
 		return false, err
@@ -118,6 +142,9 @@ func (p *Probe) reconcile(ctx context.Context, id string) (bool, error) {
 	case "running":
 		return true, nil
 	case "cancelled":
+		if err := stop(); err != nil {
+			return false, err
+		}
 		err = p.API.CancelAck(ctx, id)
 		if err == nil {
 			p.observe("cancelled", id)
