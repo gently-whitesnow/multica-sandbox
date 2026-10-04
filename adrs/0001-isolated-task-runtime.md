@@ -13,9 +13,21 @@ but leave workspace preparation with the external daemon.
 ## Decision
 
 Implement an independent controller and single-task runner. Register logical
-Codex/Claude runtimes through Multica's Daemon API without runtime profiles.
+runtimes for supported agent tools through Multica's Daemon API without profiles.
 Multica remains responsible for tasks and retries; the controller handles claims,
 leases, execution events, cancellation and reconciliation after restart.
+
+Separate execution backends, agent adapters and inference configuration. An
+adapter handles a tool's launch protocol, task context, events, cancellation and
+sessions. Advertise only capabilities supported by both the adapter and Multica;
+support for a tool in upstream does not automatically implement our adapter.
+
+Multica supplies runtime/model selection and task settings. The agent tool calls
+a compatible hosted or self-hosted inference endpoint, directly or through an
+optional gateway. Configure approved endpoints and credential references at
+deployment time; resolve credentials for each run under sandbox policy. Model
+serving, billing and provider account management remain external. No particular
+CLI, model vendor or inference gateway is required by the architecture.
 
 Start with Docker/Sysbox, then add a Kubernetes backend. Isolate preparation and
 execution; constrain mounts, egress, credentials, resources and lifetime. Keep
@@ -41,5 +53,6 @@ state and granted credentials remain part of the trust boundary.
 ## References
 
 - [Multica security model](https://multica.ai/docs/security-model)
+- [Multica agent configuration](https://multica.ai/docs/agents#agent-configuration)
 - [Upstream Daemon API client](https://github.com/multica-ai/multica/blob/b4ca5b4a23e68b26292a680dca7689a952bb1cd5/server/internal/daemon/client.go)
 - [chrissnell controller: architectural reference](https://github.com/chrissnell/multica/tree/3829cb503922d940d332fd1c7c64ec348e80159c/server/cmd/multica-k8s-controller)

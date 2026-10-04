@@ -12,7 +12,8 @@ implemented yet; distinguish planned capabilities from verified behavior.
 
 ## Rules
 
-- Write code, documentation and commit messages in English. Be concise.
+- Keep code and documentation concise.
+- Separate sandbox backends, agent adapters and inference configuration.
 - Keep Multica as the task authority; do not introduce a second task queue.
 - Keep credentials, runtime state and downloaded tools outside Git.
 - Keep controller privileges outside agent execution environments.

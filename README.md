@@ -22,14 +22,22 @@ Docker/Sysbox first, Kubernetes next. Independent runtime, no Multica fork.
 - Keep controller credentials and host runtime sockets outside agent containers.
 
 Multica owns tasks and retries. The controller manages execution environments;
-the runner executes one task with Codex or Claude Code. Containers share the
-host kernel: isolation depends on the runtime, policy and granted credentials.
+the runner executes one task through a supported agent adapter.
+
+Execution backends, agent adapters and inference connections are separate.
+Multica selects the runtime and model; the agent tool calls a compatible model
+endpoint directly or through a gateway. Planned adapters translate task context,
+events and sessions without coupling sandbox policy to a model vendor. Hosted
+and self-hosted inference depend on the selected tool's protocol support.
+
+Containers share the host kernel: isolation depends on the runtime, policy and
+granted credentials.
 
 See [ADR 0001](adrs/0001-isolated-task-runtime.md) for the architecture and scope.
 
 ## Contributing
 
-Use English and keep documentation concise. Install the pinned
+Install the pinned
 [Harness CLI](https://github.com/gently-whitesnow/harness-cli) and verify:
 
 ```sh
