@@ -15,7 +15,7 @@ import (
 	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
 )
 
-func restartProcess(t *testing.T, api *multica.Client, rt multica.Runtime) {
+func restartProcess(t *testing.T, api *multica.Client, rt multica.Runtime, container bool) {
 	t.Helper()
 	dir := t.TempDir()
 	binary := filepath.Join(dir, "probe")
@@ -23,11 +23,19 @@ func restartProcess(t *testing.T, api *multica.Client, rt multica.Runtime) {
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build: %v %s", err, out)
 	}
-	id := enqueue(t, rt, 7)
+	n := 7
+	if container {
+		n = 20
+	}
+	id := enqueue(t, rt, n)
 	args := []string{"-server", os.Getenv("MULTICA_TEST_URL"), "-workspace", workspace, "-daemon", daemon, "-lock", filepath.Join(dir, "controller.lock"), "-duration", "1h", "-interval", "100ms"}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, binary, args...)
+	runArgs := append([]string{}, args...)
+	if container {
+		runArgs = append(runArgs, "-image", image, "--", "/bin/sh", "-c", "sleep 60")
+	}
+	cmd := exec.CommandContext(ctx, binary, runArgs...)
 	cmd.Env = append(os.Environ(), "MULTICA_PROBE_TOKEN="+token(t))
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -61,7 +69,15 @@ func restartProcess(t *testing.T, api *multica.Client, rt multica.Runtime) {
 	}
 	cmd.Wait()
 	status(t, api, id, "running")
-	restart := exec.CommandContext(ctx, binary, append(args, "-recover-only")...)
+	if container && ownedContainers(t) == "" {
+		t.Fatal("expected a surviving container after SIGKILL")
+	}
+	if container {
+		args = append(args, "-image", image, "-recover-only", "--", "/bin/true")
+	} else {
+		args = append(args, "-recover-only")
+	}
+	restart := exec.CommandContext(ctx, binary, args...)
 	restart.Env = cmd.Env
 	out, err := restart.CombinedOutput()
 	if err != nil {
@@ -71,5 +87,8 @@ func restartProcess(t *testing.T, api *multica.Client, rt multica.Runtime) {
 		t.Fatalf("restart failed to reconcile: %s", out)
 	}
 	status(t, api, id, "failed")
+	if container && ownedContainers(t) != "" {
+		t.Fatal("recovery left execution alive")
+	}
 	t.Log("SIGKILL released the instance lock; a fresh process recovered the orphan under the same daemon identity")
 }

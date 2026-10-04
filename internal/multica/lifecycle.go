@@ -91,10 +91,10 @@ func (c *Client) Status(ctx context.Context, id string) (string, error) {
 	return out.Status, err
 }
 func (c *Client) Message(ctx context.Context, id string) error {
-	return c.taskPost(ctx, id, "messages", map[string]any{"messages": []map[string]any{{"seq": 1, "type": "text", "content": "Lifecycle probe started; no agent code is executed.", "created_at": time.Now().UTC()}}})
+	return c.taskPost(ctx, id, "messages", map[string]any{"messages": []map[string]any{{"seq": 1, "type": "text", "content": "Test execution started; this runtime does not implement an agent adapter.", "created_at": time.Now().UTC()}}})
 }
 func (c *Client) Complete(ctx context.Context, id string) error {
-	return c.taskPost(ctx, id, "complete", map[string]string{"output": "Lifecycle probe completed; no agent code was executed."})
+	return c.taskPost(ctx, id, "complete", map[string]string{"output": "Test execution completed; this does not complete the requested agent work."})
 }
 func (c *Client) Fail(ctx context.Context, id string) error {
 	return c.taskPost(ctx, id, "fail", map[string]string{"error": "Lifecycle probe failure", "failure_reason": "execution_failed"})
