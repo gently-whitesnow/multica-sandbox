@@ -20,6 +20,9 @@ Docker/Sysbox first, Kubernetes next. Independent runtime, no Multica fork.
 - Reuse immutable toolchains and prepared workspace caches; give each run its
   own writable state. Keep resumable sessions separate from disposable caches.
 - Keep controller credentials and host runtime sockets outside agent containers.
+- Use the project's optional base image or your own compatible OCI image.
+- Declare your own tool set in configuration: tools baked into the image or
+  pinned bundles mounted read-only, without changing sandbox code.
 
 Multica owns tasks and retries. The controller manages execution environments;
 the runner executes one task through a supported agent adapter.
@@ -34,6 +37,8 @@ Containers share the host kernel: isolation depends on the runtime, policy and
 granted credentials.
 
 See [ADR 0001](adrs/0001-isolated-task-runtime.md) for the architecture and scope.
+Image customization and tool delivery follow
+[ADR 0002](adrs/0002-custom-images-and-tools.md).
 
 ## Contributing
 

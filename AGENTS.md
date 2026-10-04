@@ -14,6 +14,7 @@ implemented yet; distinguish planned capabilities from verified behavior.
 
 - Keep code and documentation concise.
 - Separate sandbox backends, agent adapters and inference configuration.
+- Keep custom images and declarative tool sets first-class configuration.
 - Keep Multica as the task authority; do not introduce a second task queue.
 - Keep credentials, runtime state and downloaded tools outside Git.
 - Keep controller privileges outside agent execution environments.
