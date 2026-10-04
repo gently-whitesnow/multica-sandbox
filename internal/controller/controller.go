@@ -90,7 +90,7 @@ func (p *Probe) execute(ctx context.Context, t multica.Task, ticks <-chan time.T
 	}
 	defer func() {
 		if cleanupErr := stop(); cleanupErr != nil {
-			result = errors.Join(result, cleanupErr)
+			result = errors.Join(result, &CleanupError{Err: cleanupErr})
 		}
 	}()
 	p.observe("started", t.ID)

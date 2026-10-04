@@ -13,7 +13,7 @@ func (p *Probe) launch(ctx context.Context, t multica.Task) (<-chan error, func(
 		return nil, func() error { return nil }, nil
 	}
 	waitCtx, cancel := context.WithTimeout(ctx, p.Duration)
-	run, err := p.Backend.Start(waitCtx, t.ID+":"+t.DispatchedAt)
+	run, err := p.Backend.Start(waitCtx, t.WorkspaceID+":"+t.RuntimeID+":"+t.ID+":"+t.DispatchedAt)
 	if err != nil {
 		cancel()
 		return nil, nil, err
@@ -35,3 +35,9 @@ func (p *Probe) launch(ctx context.Context, t multica.Task) (<-chan error, func(
 	}
 	return done, stop, nil
 }
+
+// CleanupError keeps a failed teardown distinguishable from a revoked API grant.
+type CleanupError struct{ Err error }
+
+func (e *CleanupError) Error() string { return "execution cleanup failed: " + e.Err.Error() }
+func (e *CleanupError) Unwrap() error { return e.Err }

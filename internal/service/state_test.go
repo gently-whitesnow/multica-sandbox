@@ -50,3 +50,32 @@ func TestConfigRejectsUnknownAndInvalidFields(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestFleetConfigAndExplicitStateMigration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	valid := `{"server":"https://example.invalid","workspaces":"all-accessible","daemon":"10000000-0000-4000-8000-000000000002","image":"test","command":["/bin/true"],"timeout":"1s"}`
+	if err := os.WriteFile(path, []byte(valid), 0600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := ReadConfig(path)
+	if err != nil || c.Concurrency != 1 {
+		t.Fatalf("default fleet capacity: %+v %v", c, err)
+	}
+	for _, extra := range []string{`,"workspace":"10000000-0000-4000-8000-000000000001"}`, `,"concurrency":33}`, `,"concurrency":-1}`} {
+		if err := os.WriteFile(path, []byte(valid[:len(valid)-1]+extra), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ReadConfig(path); err == nil {
+			t.Fatal("invalid scope/capacity accepted")
+		}
+	}
+	dir := t.TempDir()
+	before := identity{"https://example.invalid", "workspace", "daemon", "engine"}
+	if err := bindState(dir, before); err != nil {
+		t.Fatal(err)
+	}
+	before.Workspace = "*"
+	if err := bindState(dir, before); err == nil {
+		t.Fatal("silently migrated legacy state")
+	}
+}

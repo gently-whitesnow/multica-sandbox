@@ -10,12 +10,14 @@ import (
 )
 
 type Config struct {
-	Server    string   `json:"server"`
-	Workspace string   `json:"workspace"`
-	Daemon    string   `json:"daemon"`
-	Image     string   `json:"image"`
-	Command   []string `json:"command"`
-	Timeout   string   `json:"timeout"`
+	Server      string   `json:"server"`
+	Workspaces  string   `json:"workspaces,omitempty"`
+	Concurrency int      `json:"concurrency,omitempty"`
+	Workspace   string   `json:"workspace"`
+	Daemon      string   `json:"daemon"`
+	Image       string   `json:"image"`
+	Command     []string `json:"command"`
+	Timeout     string   `json:"timeout"`
 }
 
 var uuid = regexp.MustCompile(`^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`)
@@ -44,8 +46,11 @@ func ReadConfig(path string) (Config, error) {
 		return c, fmt.Errorf("unexpected trailing configuration")
 	}
 	duration, err := time.ParseDuration(c.Timeout)
-	if err != nil || duration <= 0 || !uuid.MatchString(c.Workspace) || !uuid.MatchString(c.Daemon) || c.Image == "" || len(c.Command) == 0 {
-		return c, fmt.Errorf("valid workspace/daemon UUIDs, image, command and positive timeout required")
+	if err != nil || duration <= 0 || !(uuid.MatchString(c.Workspace) && c.Workspaces == "" || c.Workspace == "" && c.Workspaces == "all-accessible") || !uuid.MatchString(c.Daemon) || c.Concurrency < 0 || c.Concurrency > 32 || c.Image == "" || len(c.Command) == 0 {
+		return c, fmt.Errorf("workspace UUID or all-accessible mode, daemon UUID, capacity 0-32, image, command and positive timeout required")
+	}
+	if c.Concurrency == 0 {
+		c.Concurrency = 1
 	}
 	return c, nil
 }

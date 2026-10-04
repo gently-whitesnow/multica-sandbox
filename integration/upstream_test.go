@@ -69,6 +69,9 @@ func fixture(t *testing.T) (*multica.Client, multica.Runtime) {
 	return api, rt
 }
 func enqueue(t *testing.T, rt multica.Runtime, n int) string {
+	return enqueueWorkspace(t, rt, n, workspace)
+}
+func enqueueWorkspace(t *testing.T, rt multica.Runtime, n int, workspace string) string {
 	t.Helper()
 	id := fmt.Sprintf("20000000-0000-4000-8000-%012d", n)
 	agent := fmt.Sprintf("30000000-0000-4000-8000-%012d", n)
@@ -187,5 +190,7 @@ func TestUpstreamLifecycle(t *testing.T) {
 	t.Run("process-crash", func(t *testing.T) { restartProcess(t, api, rt, false) })
 	t.Run("containers", func(t *testing.T) { containerLifecycle(t, api, rt) })
 	t.Run("server-owned-retry", func(t *testing.T) { serverRetry(t, api, rt) })
+	t.Run("multi-workspace", func(t *testing.T) { multiWorkspace(t) })
+	t.Run("multi-workspace-restart", func(t *testing.T) { fleetRestart(t) })
 	t.Run("controller-service", func(t *testing.T) { containerService(t, api, rt) })
 }

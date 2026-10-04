@@ -46,7 +46,7 @@ gates follow [ADR 0004](adrs/0004-reuse-and-security-gates.md).
 
 ## Controller service
 
-Use an isolated Multica workspace: the current runtime executes configured test
+Use isolated test workspaces: the current runtime executes configured test
 commands, not the task's agent instructions. Requires Linux Docker with cgroup v2,
 builtin seccomp and resource controllers; Docker Desktop is tested for development.
 The controller uses the host socket and creates sibling workload containers.
@@ -57,7 +57,7 @@ mkdir -p var
 cp deploy/controller.example.json var/controller.json
 ```
 
-Edit the server origin (HTTPS), workspace UUID and a unique, stable daemon UUID.
+Edit the server origin (HTTPS) and a unique, stable daemon UUID.
 Set a preloaded image pinned by digest, an absolute executable/arguments and timeout.
 Place the Multica controller token in `var/multica-token` with restrictive permissions.
 Both files stay outside Git. The token is mounted only into the trusted controller.
@@ -68,7 +68,8 @@ docker compose up -d --build
 docker compose logs -f controller
 ```
 
-One controller processes tasks sequentially. Every attempt gets a fresh non-root,
+One controller serves all accessible workspaces with a shared `concurrency` limit
+(default 1, maximum 32) and at most one active attempt per workspace. Every attempt gets a fresh non-root,
 networkless container with bounded resources and temporary storage. Custom images
 need no inheritance; image-declared volumes are rejected. No service tokens or
 host mounts enter execution. Workload output/files are discarded; completion is a
@@ -76,9 +77,21 @@ fixed test result. No agent adapter, MCP or checkpoint recovery is implemented.
 
 Docker restarts a crashed controller. On startup it removes its old executions
 before asking Multica to recover tasks. Persistent state binds the shared lock to
-the daemon, workspace, server and Docker Engine. Preserve the named volume across
+the daemon, discovery scope, server and Docker Engine. Preserve the named volume across
 updates, use one controller per identity, and do not scale this Compose service.
 Never remove the state volume while the controller is active.
+
+Use a dedicated user PAT. Add that user to each workspace; the controller discovers
+membership every 10 seconds and registers a runtime. The runtime owner manually
+sets public visibility in Multica. Public does not share across workspaces.
+An mdt_ token discovers only its bound workspace. Inference credentials remain
+separate and unsupported. New workspace registration never sweeps active containers.
+
+Legacy `workspace: UUID` configuration remains single-workspace and sequential;
+use `workspaces: "all-accessible"` instead for discovery. Changing scope rejects
+an existing identity volume. Stop the old service, confirm its executions are
+removed, retain the old volume for rollback, then explicitly use a fresh state
+volume with the same daemon. Never run both services simultaneously.
 
 `docker compose stop` gracefully removes active execution and intentionally leaves
 the controller stopped. Restart with `docker compose up -d`; interrupted tasks are
