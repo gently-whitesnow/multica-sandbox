@@ -82,7 +82,7 @@ func (b *Backend) Start(ctx context.Context, attempt string) (execution.Run, err
 	}
 	r := &run{name: b.name(attempt)}
 	if _, err := command(ctx, b.createArgs(r.name)...); err != nil {
-		return nil, err
+		return nil, errors.Join(err, b.cleanupUncertainCreate(r))
 	}
 	if err := r.check(ctx); err != nil {
 		return nil, errors.Join(err, r.cleanup())
@@ -91,6 +91,18 @@ func (b *Backend) Start(ctx context.Context, attempt string) (execution.Run, err
 		return nil, errors.Join(err, r.cleanup())
 	}
 	return r, nil
+}
+func (b *Backend) cleanupUncertainCreate(r *run) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	owner, err := command(ctx, "inspect", "--format", `{{index .Config.Labels "io.multica-sandbox.owner"}}`, r.name)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(string(owner)) != b.Owner {
+		return fmt.Errorf("refusing cleanup of a container with a different owner")
+	}
+	return r.Remove(ctx)
 }
 func (b *Backend) createArgs(name string) []string {
 	args := []string{"create", "--name", name, "--label", ownerLabel + "=" + b.Owner,
