@@ -6,7 +6,8 @@ implemented yet; distinguish planned capabilities from verified behavior.
 ## Map
 
 - `README.md`: purpose, scope and contributor setup.
-- `adrs/`: short architectural decisions; start with ADR 0001.
+- `adrs/`: architecture (0001), images/tools (0002), identity/MCP (0003),
+  component reuse and security acceptance gates (0004).
 - `.harness.json`: pinned repository quality contract.
 - `scripts/install-harness.sh`, `verify.sh`: setup and verification.
 
@@ -17,7 +18,12 @@ implemented yet; distinguish planned capabilities from verified behavior.
 - Keep custom images and declarative tool sets first-class configuration.
 - Keep Multica as the task authority; do not introduce a second task queue.
 - Keep credentials, runtime state and downloaded tools outside Git.
-- Keep controller privileges outside agent execution environments.
+- Keep controller privileges and service credentials outside agent environments.
+- Allow only short-lived run identity inside; authorize external actions through
+  trusted MCP services and enforce network policy outside the sandbox.
+- Prefer maintained components. Document a concrete gap before replacing one.
+- Require adversarial conformance checks before advertising backend or adapter
+  support; a working happy path is insufficient.
 - Record architectural changes in numbered ADRs. Keep navigation here.
 - Add language checks and meaningful runtime tests when implementation starts.
 

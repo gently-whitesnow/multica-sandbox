@@ -1,6 +1,6 @@
 # ADR 0001: Independent runtime with isolated task execution
 
-Status: Accepted
+Status: Accepted; credential delivery superseded by ADR 0003
 Date: 2026-10-04
 
 ## Context
@@ -22,12 +22,10 @@ adapter handles a tool's launch protocol, task context, events, cancellation and
 sessions. Advertise only capabilities supported by both the adapter and Multica;
 support for a tool in upstream does not automatically implement our adapter.
 
-Multica supplies runtime/model selection and task settings. The agent tool calls
-a compatible hosted or self-hosted inference endpoint, directly or through an
-optional gateway. Configure approved endpoints and credential references at
-deployment time; resolve credentials for each run under sandbox policy. Model
-serving, billing and provider account management remain external. No particular
-CLI, model vendor or inference gateway is required by the architecture.
+Multica supplies runtime/model selection and task settings. Provider credentials
+remain outside agent environments under ADR 0003; inference transport is an open
+integration decision. Model serving, billing and provider account management
+remain external. No particular CLI, model vendor or gateway is required.
 
 Start with Docker/Sysbox, then add a Kubernetes backend. Isolate preparation and
 execution; constrain mounts, egress, credentials, resources and lifetime. Keep
