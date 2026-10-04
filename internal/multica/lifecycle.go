@@ -1,0 +1,116 @@
+package multica
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"time"
+)
+
+type Runtime struct {
+	ID       string `json:"id"`
+	Provider string `json:"provider"`
+}
+
+// Task deliberately excludes credentials and arbitrary claim payloads.
+type Task struct {
+	ID                  string `json:"id"`
+	RuntimeID           string `json:"runtime_id"`
+	DispatchedAt        string `json:"dispatched_at"`
+	StartClaimSupported bool   `json:"start_claim_supported"`
+}
+
+type Recovery struct {
+	Orphaned int `json:"orphaned"`
+	Retried  int `json:"retried"`
+}
+
+func (c *Client) Register(ctx context.Context, workspace, daemon string) (Runtime, error) {
+	if !validID(workspace) || !validID(daemon) {
+		return Runtime{}, fmt.Errorf("workspace and daemon must be UUIDs")
+	}
+	var out struct {
+		Runtimes []Runtime `json:"runtimes"`
+	}
+	err := c.call(ctx, http.MethodPost, "/api/daemon/register", map[string]any{
+		"workspace_id": workspace, "daemon_id": daemon, "device_name": "sandbox-probe",
+		"runtimes": []map[string]string{{"name": "Sandbox lifecycle probe (not an agent)", "type": ProbeProvider, "version": "experimental", "status": "online"}},
+	}, &out)
+	if err != nil {
+		return Runtime{}, err
+	}
+	if len(out.Runtimes) != 1 || !validID(out.Runtimes[0].ID) || out.Runtimes[0].Provider != ProbeProvider {
+		return Runtime{}, fmt.Errorf("unexpected runtime registration")
+	}
+	return out.Runtimes[0], nil
+}
+
+func (c *Client) Recover(ctx context.Context, runtime string) (Recovery, error) {
+	var out Recovery
+	err := c.runtimePost(ctx, runtime, "/recover-orphans", &out)
+	return out, err
+}
+func (c *Client) Heartbeat(ctx context.Context, runtime string) error {
+	return c.call(ctx, http.MethodPost, "/api/daemon/heartbeat", map[string]string{"runtime_id": runtime}, nil)
+}
+func (c *Client) Claim(ctx context.Context, runtime string) (*Task, error) {
+	var out struct {
+		Task *Task `json:"task"`
+	}
+	if err := c.runtimePost(ctx, runtime, "/tasks/claim", &out); err != nil {
+		return nil, err
+	}
+	if out.Task != nil {
+		t := out.Task
+		if !validID(t.ID) || t.RuntimeID != runtime || !t.StartClaimSupported {
+			return nil, fmt.Errorf("unsupported or mismatched claim")
+		}
+		if _, err := time.Parse(time.RFC3339Nano, t.DispatchedAt); err != nil {
+			return nil, fmt.Errorf("claim lacks valid dispatch timestamp")
+		}
+	}
+	return out.Task, nil
+}
+func (c *Client) RenewPreparation(ctx context.Context, t Task) error {
+	if !validID(t.ID) {
+		return fmt.Errorf("invalid task ID")
+	}
+	return c.runtimePost(ctx, t.RuntimeID, "/tasks/"+t.ID+"/prepare-lease", nil)
+}
+func (c *Client) Start(ctx context.Context, t Task) error {
+	return c.taskPost(ctx, t.ID, "start", map[string]any{"runtime_id": t.RuntimeID, "dispatched_at": t.DispatchedAt, "capabilities": []string{}})
+}
+func (c *Client) Status(ctx context.Context, id string) (string, error) {
+	if !validID(id) {
+		return "", fmt.Errorf("invalid task ID")
+	}
+	var out struct {
+		Status string `json:"status"`
+	}
+	err := c.call(ctx, http.MethodGet, "/api/daemon/tasks/"+id+"/status", nil, &out)
+	return out.Status, err
+}
+func (c *Client) Message(ctx context.Context, id string) error {
+	return c.taskPost(ctx, id, "messages", map[string]any{"messages": []map[string]any{{"seq": 1, "type": "text", "content": "Lifecycle probe started; no agent code is executed.", "created_at": time.Now().UTC()}}})
+}
+func (c *Client) Complete(ctx context.Context, id string) error {
+	return c.taskPost(ctx, id, "complete", map[string]string{"output": "Lifecycle probe completed; no agent code was executed."})
+}
+func (c *Client) Fail(ctx context.Context, id string) error {
+	return c.taskPost(ctx, id, "fail", map[string]string{"error": "Lifecycle probe failure", "failure_reason": "execution_failed"})
+}
+func (c *Client) CancelAck(ctx context.Context, id string) error {
+	return c.taskPost(ctx, id, "cancel-ack", map[string]any{})
+}
+func (c *Client) runtimePost(ctx context.Context, id, suffix string, out any) error {
+	if !validID(id) {
+		return fmt.Errorf("invalid runtime ID")
+	}
+	return c.call(ctx, http.MethodPost, "/api/daemon/runtimes/"+id+suffix, map[string]any{}, out)
+}
+func (c *Client) taskPost(ctx context.Context, id, action string, body any) error {
+	if !validID(id) {
+		return fmt.Errorf("invalid task ID")
+	}
+	return c.call(ctx, http.MethodPost, "/api/daemon/tasks/"+id+"/"+action, body, nil)
+}

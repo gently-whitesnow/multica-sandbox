@@ -1,5 +1,5 @@
 #!/bin/sh
-# Verify the repository scaffold; runtime checks belong here once implemented.
+# Verify the probe and repository contract.
 set -eu
 ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)
 cd "$ROOT"
@@ -10,6 +10,14 @@ if [ ! -x "$HARNESS" ]; then
   exit 2
 fi
 "$HARNESS" check
-sh -n scripts/install-harness.sh verify.sh
+for script in scripts/*.sh verify.sh; do sh -n "$script"; done
+if [ -n "${VERIFY_COMMIT_RANGE:-}" ]; then
+  "$HARNESS" commits check "$VERIFY_COMMIT_RANGE"
+fi
+[ -z "$(gofmt -l cmd internal integration)" ]
+go vet ./...
+go test -race ./...
+go build ./...
+if [ "${VERIFY_UPSTREAM:-0}" = 1 ]; then ./scripts/test-upstream.sh; fi
 git diff --check
 git diff --cached --check
