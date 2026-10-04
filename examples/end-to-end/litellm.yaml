@@ -1,0 +1,17 @@
+model_list:
+  - model_name: demo
+    litellm_params:
+      model: os.environ/UPSTREAM_MODEL
+      api_base: http://cli-proxy:8317/v1
+      api_key: os.environ/PROXY_BRIDGE_KEY
+      max_tokens: 4096
+      timeout: 60
+      num_retries: 0
+litellm_settings:
+  drop_params: true
+  set_verbose: false
+  turn_off_message_logging: true
+  enable_post_custom_auth_checks: true
+general_settings:
+  custom_auth: litellm_auth.authorize
+  custom_auth_run_common_checks: true

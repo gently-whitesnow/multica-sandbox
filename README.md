@@ -9,7 +9,7 @@ Multica's [security model](https://multica.ai/docs/security-model) states:
 multica-sandbox is being built to provide that boundary: disposable environments
 for running AI coding agents in your infrastructure.
 
-**Status:** experimental offline container executor; no coding agent adapter yet.
+**Status:** experimental offline controller; a separate real-agent lab exists.
 Docker/runc tested; Sysbox and Kubernetes remain planned. Independent runtime, no Multica fork.
 
 ## Design
@@ -32,8 +32,8 @@ the runner executes one task through a supported agent adapter.
 Execution backends, agent adapters and inference connections are separate.
 Multica selects the runtime and model. Planned adapters translate task context,
 events and sessions without coupling sandbox policy to a model vendor. Provider
-credentials stay outside the sandbox. The inference transport contract remains
-open; adapters must demonstrate compatibility before being advertised.
+credentials stay outside the sandbox. ADR 0009 selects a protected OpenAI-compatible
+inference gateway; adapters must demonstrate compatibility before being advertised.
 
 Containers share the host kernel: isolation depends on the runtime, policy and
 granted credentials.
@@ -119,10 +119,12 @@ Set `VERIFY_SERVICE=1` to build and test the actual controller image through Com
 The service fixture shares only the disposable server's network namespace to use
 loopback HTTP; deployment configuration requires HTTPS for non-loopback origins.
 
+[Identity/MCP](examples/identity-mcp/README.md) and [end-to-end lab](examples/end-to-end/README.md):
+Compose fixtures and trust-boundary diagrams; separate from the offline controller.
+
 ## Contributing
 
-Install the pinned
-[Harness CLI](https://github.com/gently-whitesnow/harness-cli) and verify:
+Install the pinned [Harness CLI](https://github.com/gently-whitesnow/harness-cli) and verify:
 
 ```sh
 ./scripts/install-harness.sh
@@ -133,6 +135,7 @@ Install the pinned
 `VERIFY_UPSTREAM=1` to include the disposable upstream suite, or `VERIFY_SERVICE=1`
 to also build and test the Compose controller. Set
 `VERIFY_CONTAINERS=1` for hostile-container conformance (preload the image above).
+Set `VERIFY_IDENTITY=1` for the disposable identity/MCP fixture.
 Set `VERIFY_COMMIT_RANGE=master..HEAD` to validate published commit messages.
 All available Harness checks for Go, YAML and repository documentation are required.
 Harness does not execute tests or toolchains; `verify.sh` runs those locally.
