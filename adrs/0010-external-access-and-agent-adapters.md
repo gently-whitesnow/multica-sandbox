@@ -18,6 +18,10 @@ services. Deployment examples may assemble those services without making them
 runtime-owned components. Lifecycle signals or bounded identity leases are still
 needed for external services to revoke ended attempts under ADR 0009.
 
+ADR 0012 permits an optional credential-translation relay in the controller process
+for key-only inference deployments. External gateways remain the default; provider
+routing, IAM and budgets remain external in both paths.
+
 Use OpenCode as the first end-to-end example adapter because it supports custom
 providers, remote MCP authorization headers and machine-readable output. Keep
 agent adapters separate from model sources and sandbox backends. Codex CLI,

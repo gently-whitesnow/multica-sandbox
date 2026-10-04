@@ -11,7 +11,7 @@ from verified behavior.
   component reuse and security acceptance gates (0004), lifecycle probe (0005),
   offline execution and recovery (0006), containerized service (0007),
   multi-workspace authority (0008), attempt authorization (0009), external services/adapters (0010),
-  managed MCP identity delivery (0011).
+  managed MCP identity delivery (0011), inference credential translation (0012).
 - `examples/end-to-end/`: opt-in real Multica/OpenCode/inference lab.
 - `examples/identity-mcp/`: disposable identity and MCP contract fixture.
 - `cmd/sandbox-controller`, `internal/service/`: persistent controller service.
