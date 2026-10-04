@@ -1,0 +1,41 @@
+services:
+  controller:
+    build: .
+    image: multica-sandbox-controller:local
+    restart: unless-stopped
+    stop_grace_period: 45s
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 128
+    mem_limit: 256m
+    cpus: 1
+    environment:
+      HOME: /tmp
+      DOCKER_HOST: unix:///var/run/docker.sock
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16777216
+    volumes:
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./var/controller.json
+        target: /etc/multica-sandbox/controller.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - controller-state:/var/lib/multica-sandbox
+    secrets: [multica_token]
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: '3'
+secrets:
+  multica_token:
+    file: ./var/multica-token
+volumes:
+  controller-state:

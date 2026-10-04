@@ -88,7 +88,11 @@ func (p *Probe) execute(ctx context.Context, t multica.Task, ticks <-chan time.T
 	if err != nil {
 		return err
 	}
-	defer func() { result = errors.Join(result, stop()) }()
+	defer func() {
+		if cleanupErr := stop(); cleanupErr != nil {
+			result = errors.Join(result, cleanupErr)
+		}
+	}()
 	p.observe("started", t.ID)
 	timer := time.NewTimer(p.Duration)
 	defer timer.Stop()

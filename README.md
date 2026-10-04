@@ -44,61 +44,67 @@ Image customization and tool delivery follow
 [ADR 0003](adrs/0003-identity-and-mcp-access.md); component selection and acceptance
 gates follow [ADR 0004](adrs/0004-reuse-and-security-gates.md).
 
-## Lifecycle probe
+## Controller service
 
-The probe registers its own test runtime and processes one task with fixed output.
-By default it uses a timer; container mode runs an operator-selected test command. Use only an isolated test workspace; see
-[ADR 0005](adrs/0005-upstream-lifecycle-probe.md) for scope and recovery limits.
-
-Run the reproducible upstream contract suite (Go 1.26.4+, Docker, Git, curl and
-OpenSSL; Go may download upstream's required toolchain):
-
-```sh
-./scripts/test-upstream.sh
-```
-
-This builds the pinned upstream revision, migrates a disposable PostgreSQL database,
-starts a loopback-only server, and tests lifecycle calls and process-crash recovery.
-Fixture users and queued tasks are SQL-seeded; this does not test UI task creation.
-Containers and generated fixture credentials are removed on exit. The suite also
-tests offline container completion, failure, cancellation, timeout and recovery.
-
-For manual use against your own isolated test server, put its controller token in
-`MULTICA_PROBE_TOKEN` and run:
+Use an isolated Multica workspace: the current runtime executes configured test
+commands, not the task's agent instructions. Requires Linux Docker with cgroup v2,
+builtin seccomp and resource controllers; Docker Desktop is tested for development.
+The controller uses the host socket and creates sibling workload containers.
+Socket access is host-administrative authority; prefer a dedicated worker host.
 
 ```sh
-go run ./cmd/sandbox-probe -server https://test.example.com \
-  -workspace WORKSPACE_UUID -daemon STABLE_DAEMON_UUID \
-  -lock /absolute/trusted/path/controller.lock
+mkdir -p var
+cp deploy/controller.example.json var/controller.json
 ```
 
-Reuse the daemon identity and lock path on restart. Never share that identity across
-hosts. `-recover-only` reconciles without claiming; `-duration 30s` leaves time to
-cancel; `-fail` reports a simulated failure. Transport uncertainty exits with an
-error; the next invocation recovers orphaned work through Multica. Linux/macOS only.
-
-## Offline container mode
-
-Preload a digest-pinned OCI image, then append container options and an absolute
-command to the probe invocation above:
+Edit the server origin (HTTPS), workspace UUID and a unique, stable daemon UUID.
+Set a preloaded image pinned by digest, an absolute executable/arguments and timeout.
+Place the Multica controller token in `var/multica-token` with restrictive permissions.
+Both files stay outside Git. The token is mounted only into the trusted controller.
 
 ```sh
--image alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc \
--duration 30s -- /bin/sh -c 'echo example > /workspace/result'
+docker pull alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
+docker compose up -d --build
+docker compose logs -f controller
 ```
 
-An independently built compatible image works too. Image-declared volumes are
-rejected. The fixed policy uses a non-root user, no network, no host mounts,
-read-only root, bounded tmpfs and CPU/memory/process limits. Image loading happens
-outside execution. Container output and files are discarded, not sent to Multica.
-The fixed completion message reports test execution, not completion of agent work.
+One controller processes tasks sequentially. Every attempt gets a fresh non-root,
+networkless container with bounded resources and temporary storage. Custom images
+need no inheritance; image-declared volumes are rejected. No service tokens or
+host mounts enter execution. Workload output/files are discarded; completion is a
+fixed test result. No agent adapter, MCP or checkpoint recovery is implemented.
 
-Use the same daemon identity, backend, Docker endpoint and lock on restart.
-Surviving containers are removed **before** Multica recovers tasks. Cancellation
-and timeout remove execution before acknowledgement. Supervise the controller:
-a SIGKILL leaves containers alive until restart; no independent deadline reaper
-exists yet. See [ADR 0006](adrs/0006-offline-container-execution.md) for the tested
-runtime, compatibility contract and shared-kernel limitations.
+Docker restarts a crashed controller. On startup it removes its old executions
+before asking Multica to recover tasks. Persistent state binds the shared lock to
+the daemon, workspace, server and Docker Engine. Preserve the named volume across
+updates, use one controller per identity, and do not scale this Compose service.
+Never remove the state volume while the controller is active.
+
+`docker compose stop` gracefully removes active execution and intentionally leaves
+the controller stopped. Restart with `docker compose up -d`; interrupted tasks are
+reconciled then. No independent deadline or automatic live-hang recovery exists.
+Docker unavailability, invalid config or repeated crashes can delay cleanup.
+See [ADR 0007](adrs/0007-containerized-controller-service.md) for deployment limits
+and [ADR 0006](adrs/0006-offline-container-execution.md) for execution policy.
+
+## One-attempt probe
+
+For explicit experiments, use `go run ./cmd/sandbox-probe` with `-server`,
+`-workspace`, `-daemon`, an absolute `-lock` path and `MULTICA_PROBE_TOKEN`.
+Without `-image` it runs a timer. Add `-image IMAGE@sha256:DIGEST -duration 30s --
+/bin/sh -c 'echo test > /workspace/result'` for an offline command.
+`-recover-only` reaps/reconciles without claiming; `-fail` simulates timer failure.
+Reuse the same identity, backend and lock. See [ADR 0005](adrs/0005-upstream-lifecycle-probe.md).
+
+## Upstream verification
+
+`./scripts/test-upstream.sh` builds the pinned, unmodified Multica revision and
+runs disposable PostgreSQL/server containers. Tests seed generic tasks directly
+in the database; UI task creation is not covered. Requires Go 1.26.4+, Docker,
+Git, curl and OpenSSL; upstream may download its required Go toolchain.
+Set `VERIFY_SERVICE=1` to build and test the actual controller image through Compose.
+The service fixture shares only the disposable server's network namespace to use
+loopback HTTP; deployment configuration requires HTTPS for non-loopback origins.
 
 ## Contributing
 
@@ -111,7 +117,8 @@ Install the pinned
 ```
 
 `verify.sh` runs Harness, formatting, vet, race tests and build. Set
-`VERIFY_UPSTREAM=1` to include the disposable upstream suite. Set
+`VERIFY_UPSTREAM=1` to include the disposable upstream suite, or `VERIFY_SERVICE=1`
+to also build and test the Compose controller. Set
 `VERIFY_CONTAINERS=1` for hostile-container conformance (preload the image above).
 Set `VERIFY_COMMIT_RANGE=master..HEAD` to validate published commit messages.
 All available Harness checks for Go, YAML and repository documentation are required.

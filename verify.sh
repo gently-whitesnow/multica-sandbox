@@ -21,6 +21,6 @@ go build ./...
 if [ "${VERIFY_CONTAINERS:-0}" = 1 ]; then
  go test -race -tags containers -count=1 ./internal/docker
 fi
-if [ "${VERIFY_UPSTREAM:-0}" = 1 ]; then ./scripts/test-upstream.sh; fi
+if [ "${VERIFY_UPSTREAM:-0}" = 1 ] || [ "${VERIFY_SERVICE:-0}" = 1 ]; then ./scripts/test-upstream.sh; fi
 git diff --check
 git diff --cached --check
