@@ -9,7 +9,7 @@ NAME="multica-sandbox-contract-$$"
 DB="$NAME-db"
 SERVER="$NAME-server"
 cleanup() {
- docker rm -f "$SERVER" "$DB" >/dev/null 2>&1 || true
+ docker rm -fv "$SERVER" "$DB" >/dev/null 2>&1 || true
  docker network rm "$NAME" >/dev/null 2>&1 || true
  rm -rf "$TMP"
 }
