@@ -36,13 +36,13 @@ Apply outbound destination validation at the MCP service too, including redirect
 and DNS resolution, to prevent credential leakage and SSRF.
 
 Enforce default-deny network policy outside agent control. Allow only configured
-identity, MCP and narrow controller endpoints; prevent direct Internet/internal
+identity, MCP, protected inference and narrow controller endpoints; prevent direct Internet/internal
 API access, cloud metadata, host sockets and Kubernetes API access. Remove default
 service-account mounts. The controller channel accepts only that run's lifecycle
 events. External Git and package operations also require mediated access; local
 Git, compilers and filesystem operations remain local. An adapter requiring raw
-provider credentials is unsupported. Inference transport remains open: no direct
-provider access is enabled until its identity-based contract is decided and tested.
+provider credentials is unsupported. ADR 0009 selects a protected OpenAI-compatible inference gateway with separate
+audience and attempt authorization. Direct provider access remains forbidden.
 
 Audit principal, task, attempt, tool, target, policy decision and outcome outside
 the sandbox; redact sensitive inputs/results. Treat tool results as untrusted.

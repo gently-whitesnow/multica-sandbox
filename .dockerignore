@@ -4,3 +4,7 @@
 !cmd/**
 !internal/
 !internal/**
+!go.sum
+!examples/
+!examples/identity-mcp/
+!examples/identity-mcp/*.go

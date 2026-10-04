@@ -10,7 +10,8 @@ from verified behavior.
 - `adrs/`: architecture (0001), images/tools (0002), identity/MCP (0003),
   component reuse and security acceptance gates (0004), lifecycle probe (0005),
   offline execution and recovery (0006), containerized service (0007),
-  multi-workspace authority (0008).
+  multi-workspace authority (0008), attempt authorization (0009).
+- `examples/identity-mcp/`: disposable identity and MCP contract fixture.
 - `cmd/sandbox-controller`, `internal/service/`: persistent controller service.
 - `Dockerfile`, `compose.yaml`, `deploy/`: controller packaging/configuration.
 - `cmd/sandbox-probe`, `internal/`: test executor, controller and HTTP integration.
@@ -48,6 +49,7 @@ Run `VERIFY_UPSTREAM=1 ./verify.sh` for lifecycle/client changes; Docker must be
 available. Run `VERIFY_CONTAINERS=1 ./verify.sh` for backend changes and
 `VERIFY_SERVICE=1 ./verify.sh` for service/packaging changes. Never run test commands
 against production tasks. Keep fixture data generic.
+Run `VERIFY_IDENTITY=1 ./verify.sh` for identity/MCP fixture changes.
 CI is paused; run verification locally. Do not re-enable CI without an explicit
 request. Use `VERIFY_COMMIT_RANGE=master..HEAD ./verify.sh` before publishing.
 Before starting an issue, inspect its ADRs and existing branches/PRs. Leave a concise
