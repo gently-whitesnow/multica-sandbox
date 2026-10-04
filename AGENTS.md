@@ -10,7 +10,7 @@ from verified behavior.
 - `adrs/`: architecture (0001), images/tools (0002), identity/MCP (0003),
   component reuse and security acceptance gates (0004), lifecycle probe (0005),
   offline execution and recovery (0006), containerized service (0007),
-  proposed multi-workspace authority (0008).
+  multi-workspace authority (0008).
 - `cmd/sandbox-controller`, `internal/service/`: persistent controller service.
 - `Dockerfile`, `compose.yaml`, `deploy/`: controller packaging/configuration.
 - `cmd/sandbox-probe`, `internal/`: test executor, controller and HTTP integration.

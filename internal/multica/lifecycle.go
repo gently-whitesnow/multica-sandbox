@@ -14,6 +14,7 @@ type Runtime struct {
 
 // Task deliberately excludes credentials and arbitrary claim payloads.
 type Task struct {
+	WorkspaceID         string `json:"workspace_id"`
 	ID                  string `json:"id"`
 	RuntimeID           string `json:"runtime_id"`
 	DispatchedAt        string `json:"dispatched_at"`

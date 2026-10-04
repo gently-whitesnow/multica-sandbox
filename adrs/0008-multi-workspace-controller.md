@@ -1,16 +1,16 @@
 # ADR 0008: Shared controller, workspace-scoped authority
 
-Status: Proposed
+Status: Accepted
 Date: 2026-10-04
 
 ## Context
 
 A deployment may serve 100 workspaces without 100 machines or controller processes.
-The current controller deliberately binds one state volume to one workspace.
+The original controller binds one state volume to one workspace.
 PR #11 is a single-workspace baseline, not a multi-tenant implementation.
 
 Research inspected upstream main at b4ca5b4a23e68b26292a680dca7689a952bb1cd5.
-These are source findings, not a new multi-workspace integration or load test:
+The following source findings informed the implementation:
 
 - Runtime rows belong to one workspace. Public visibility shares them with that
   workspace's members; it does not make a runtime server-global.
@@ -24,15 +24,15 @@ These are source findings, not a new multi-workspace integration or load test:
 
 ## Decision
 
-Propose one controller process per worker connected to one Multica server,
+Use one controller process per worker connected to one Multica server,
 one stable daemon identity, and separate
 runtime registrations for each authorized workspace and supported adapter.
 Keep runtime visibility independent from controller admission and inference policy.
 Public runtimes are optional sharing inside each workspace, never tenant isolation.
 
 Start with a dedicated service user using the existing PAT path, membership-based
-workspace discovery. Configure either all accessible memberships explicitly or
-an operator allowlist. Serving the whole server requires provisioning membership
+workspace discovery. Discover all accessible memberships; no required allowlist. Leave public visibility
+under the runtime owner's manual control. Serving the whole server requires provisioning membership
 for existing and newly created workspaces. Membership is required for the service user;
 this is not a new upstream service-account credential type. A shared PAT broadens
 controller compromise impact. Evaluate workspace-scoped token sets when separate
@@ -50,7 +50,8 @@ telemetry accordingly. Discovering a workspace does not authorize future actions
 Removal must stop new claims and revoke/drain its work without disturbing others.
 Cleanup must retain ownership records for removed workspaces and must not run a
 worker-wide sweep during individual workspace registration. Migrate ADR 0007's
-single-workspace identity binding explicitly; never silently reuse its state.
+single-workspace identity binding explicitly using a fresh state volume after
+stopping the old service and verifying cleanup; never silently reuse its state.
 
 Inference credentials are independent of Multica control-plane credentials.
 A trusted service maps validated run identity to workspace policy and a secret
@@ -66,11 +67,28 @@ open: prove a compatible MCP path or separately review a change to ADR 0003 befo
 supporting agents that require native provider HTTP. Do not build a general LLM
 proxy or identity issuer inside the controller.
 
+### Implementation bounds
+
+The first fleet uses HTTP batch claims (one task per fair workspace round), a
+configurable global limit of 1–32, and one active attempt per workspace. Discovery
+runs every 10 seconds, idle heartbeats every 15 seconds, and claims every second.
+Membership loss cancels its local attempt. HTTP 403/404 scope failures remove that
+runtime; transport, protocol and cleanup uncertainty stop the entire controller.
+Revocation is eventually observed, not instantaneous. Active tasks also check
+server status every second; upstream membership caches can delay rejection.
+
+Startup removes all containers labeled with the persisted daemon identity before
+any claims, including executions whose workspace is no longer accessible. The
+runtime registry retains removed workspace mappings. Server task recovery waits
+for restored access or upstream recovery mechanisms when membership is absent.
+Rejoining waits for local teardown before recovery. Registrations never auto-publish.
+
 ## Consequences
 
-Implement multi-workspace discovery, isolation and bounded capacity before the
-first real-agent integration. Test cross-workspace denial, revoked membership,
-public runtime scope, restart cleanup and noisy-neighbor behavior against upstream.
+Multi-workspace discovery, isolation and bounded capacity precede the first real
+agent integration. Acceptance covers claim scope, revoked membership, manual
+visibility, restart cleanup and workspace fairness. Integration measurements
+belong to issue #12; a 100-workspace fixture is not a production capacity guarantee.
 Then prove two workspaces use distinct inference credentials without exposing
 those credentials to either sandbox. Shared worker trust is explicit; stronger
 host/tenant isolation remains a deployment and backend concern.

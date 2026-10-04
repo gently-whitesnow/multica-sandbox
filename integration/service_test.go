@@ -40,9 +40,13 @@ func dockerTest(t *testing.T, args ...string) string {
 }
 func prepareService(t *testing.T) serviceFixture {
 	t.Helper()
+	c := service.Config{Server: "http://127.0.0.1:8080", Workspace: workspace, Daemon: daemon, Image: image, Command: []string{"/bin/sh", "-c", "sleep 3"}, Timeout: "30s"}
+	return prepareServiceConfig(t, c)
+}
+func prepareServiceConfig(t *testing.T, c service.Config) serviceFixture {
+	t.Helper()
 	dir := t.TempDir()
 	f := serviceFixture{fmt.Sprintf("sandbox-service-%d", time.Now().UnixNano()), filepath.Join(dir, "compose.json"), t}
-	c := service.Config{Server: "http://127.0.0.1:8080", Workspace: workspace, Daemon: daemon, Image: image, Command: []string{"/bin/sh", "-c", "sleep 3"}, Timeout: "30s"}
 	writeJSON(t, filepath.Join(dir, "config.json"), c)
 	if err := os.WriteFile(filepath.Join(dir, "token"), []byte(token(t)), 0600); err != nil {
 		t.Fatal(err)
