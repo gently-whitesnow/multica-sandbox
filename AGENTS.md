@@ -11,9 +11,11 @@ from verified behavior.
   component reuse and security acceptance gates (0004), lifecycle probe (0005),
   offline execution and recovery (0006), containerized service (0007),
   multi-workspace authority (0008), attempt authorization (0009), external services/adapters (0010),
-  managed MCP identity delivery (0011), inference credential translation (0012).
+  managed MCP identity delivery (0011), inference credential translation (0012),
+  identity resolution contract (0013).
 - `examples/end-to-end/`: opt-in real Multica/OpenCode/inference lab.
 - `examples/identity-mcp/`: disposable identity and MCP contract fixture.
+- `internal/identity/`: static/external identity resolution and verified Keycloak issuance.
 - `cmd/sandbox-controller`, `internal/service/`: persistent controller service.
 - `Dockerfile`, `compose.yaml`, `deploy/`: controller packaging/configuration.
 - `cmd/sandbox-probe`, `internal/`: test executor, controller and HTTP integration.

@@ -95,6 +95,9 @@ func call(ctx context.Context, bearer, workspace, resource string, want bool) er
 func scenario() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
+	if err := checkResolvers(ctx); err != nil {
+		return err
+	}
 	a, err := token(ctx)
 	if err != nil {
 		return err

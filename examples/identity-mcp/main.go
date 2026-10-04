@@ -58,7 +58,7 @@ func initialize() error {
 		return nil
 	}
 	secret, admin := randomSecret(), randomSecret()
-	realm := map[string]any{"realm": "sandbox-example", "enabled": true, "accessTokenLifespan": 120, "clients": []any{map[string]any{
+	realm := map[string]any{"realm": "sandbox-example", "enabled": true, "accessTokenLifespan": 120, "users": []any{map[string]any{"id": serviceSubject, "username": "service-account-example-agent", "enabled": true, "serviceAccountClientId": "example-agent"}}, "clients": []any{map[string]any{
 		"clientId": "example-agent", "secret": secret, "enabled": true, "publicClient": false, "serviceAccountsEnabled": true, "standardFlowEnabled": false, "directAccessGrantsEnabled": false,
 		"protocolMappers": []any{map[string]any{"name": "mcp-audience", "protocol": "openid-connect", "protocolMapper": "oidc-audience-mapper", "config": map[string]string{"included.custom.audience": "sandbox-mcp", "access.token.claim": "true", "id.token.claim": "false"}}},
 	}}}

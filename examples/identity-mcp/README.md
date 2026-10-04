@@ -3,6 +3,8 @@
 A disposable Keycloak + official MCP Go SDK example. Two attempts share one
 service client but receive distinct short-lived access tokens and resource grants.
 This is a protocol fixture, not an agent sandbox or production gateway.
+It also exercises static/external identity resolution against real Keycloak through
+[the controller identity module](../../internal/identity/README.md).
 
 ## Intended boundary
 

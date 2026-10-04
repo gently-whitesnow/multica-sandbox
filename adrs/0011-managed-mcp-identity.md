@@ -50,7 +50,8 @@ isolated MCP fixture, not a long-running real-Keycloak task.
 The native store is an OpenCode-specific internal format, not a portable runtime
 API. Its projection, version compatibility, real JWT renewal, issuer outages,
 tenant isolation and cancellation remain implementation and conformance work.
-Controller identity resolution and rotation are not implemented by this ADR.
+ADR 0013 implements resolution and verified issuance in a reusable module.
+Controller claim integration, projection and rotation remain pending.
 
 ## References
 
