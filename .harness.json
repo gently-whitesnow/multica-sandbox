@@ -1,0 +1,64 @@
+{
+  "version": "3.9.2",
+  "answers": {
+    "tests.unit": {
+      "applicable": false,
+      "reason": "Architecture-only scaffold; no runtime source code yet."
+    },
+    "tests.integration": {
+      "applicable": false,
+      "reason": "Architecture-only scaffold; no runtime source code yet."
+    },
+    "tests.architecture": {
+      "applicable": false,
+      "reason": "Architecture-only scaffold; no runtime source code yet."
+    },
+    "format": {
+      "applicable": false,
+      "reason": "No generated or language source files; documentation and shell are reviewed directly."
+    },
+    "lint": {
+      "present": true,
+      "reason": "verify.sh runs Harness, shell syntax checks and Git whitespace checks."
+    },
+    "build": {
+      "applicable": false,
+      "reason": "Architecture-only scaffold; no runtime source code yet."
+    },
+    "typecheck": {
+      "applicable": false,
+      "reason": "Architecture-only scaffold; no runtime source code yet."
+    },
+    "verify": {
+      "paths": [
+        "verify.sh"
+      ]
+    }
+  },
+  "settings": {
+    "adrs.shape": {
+      "wordLimit": 1000,
+      "fencedLineLimit": 10,
+      "tableRowLimit": 12
+    },
+    "commits": {
+      "language": "en",
+      "requireSetup": true
+    }
+  },
+  "policy": {
+    "harness.config": "required",
+    "harness.coverage": "required",
+    "docs.policy": "required",
+    "adrs.shape": "required",
+    "commits.setup": "required",
+    "frame.tests.unit": "required",
+    "frame.tests.integration": "required",
+    "frame.tests.architecture": "required",
+    "frame.format": "required",
+    "frame.lint": "required",
+    "frame.build": "required",
+    "frame.typecheck": "required",
+    "frame.verify": "required"
+  }
+}
