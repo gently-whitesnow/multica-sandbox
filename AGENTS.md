@@ -30,7 +30,8 @@ from verified behavior.
 - Require adversarial conformance checks before advertising backend or adapter
   support; a working happy path is insufficient.
 - Record architectural changes in numbered ADRs. Keep navigation here.
-- Add language checks and meaningful runtime tests when implementation starts.
+- On Harness upgrades, review new checks and require every applicable check.
+- Add language checks and meaningful runtime tests as the implementation grows.
 
 ## Verification
 
@@ -40,5 +41,7 @@ through the clone-local binary to investigate findings; fix their cause rather
 than weakening the frame. Inspect `git diff --check` before committing.
 Run `VERIFY_UPSTREAM=1 ./verify.sh` for lifecycle/client changes; Docker must be
 available. Never run the probe against production tasks. Keep fixture data generic.
+CI is paused; run verification locally. Do not re-enable CI without an explicit
+request. Use `VERIFY_COMMIT_RANGE=master..HEAD ./verify.sh` before publishing.
 Before starting an issue, inspect its ADRs and existing branches/PRs. Leave a concise
 handoff with commit, verified result, next action and blocker when interrupted.

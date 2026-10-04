@@ -88,6 +88,11 @@ Install the pinned
 
 `verify.sh` runs Harness, formatting, vet, race tests and build. Set
 `VERIFY_UPSTREAM=1` to include the disposable upstream suite.
+Set `VERIFY_COMMIT_RANGE=master..HEAD` to validate published commit messages.
+All available Harness checks for Go, YAML and repository documentation are required.
+Harness does not execute tests or toolchains; `verify.sh` runs those locally.
+CI is paused during development. The workflow supports manual dispatch only;
+enable it explicitly when ready.
 Harness reads Git-tracked files; stage new files before verification.
 The clone-local installation includes a commit-message hook. Run
 `.git/harness/bin/harness commit-message template` for the required format.
