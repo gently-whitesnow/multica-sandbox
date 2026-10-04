@@ -9,7 +9,7 @@ Multica's [security model](https://multica.ai/docs/security-model) states:
 multica-sandbox is being built to provide that boundary: disposable environments
 for running AI coding agents in your infrastructure.
 
-**Status:** architecture and repository setup only; no runnable sandbox yet.
+**Status:** experimental lifecycle probe; no agent sandbox or coding adapter yet.
 Docker/Sysbox first, Kubernetes next. Independent runtime, no Multica fork.
 
 ## Design
@@ -44,6 +44,38 @@ Image customization and tool delivery follow
 [ADR 0003](adrs/0003-identity-and-mcp-access.md); component selection and acceptance
 gates follow [ADR 0004](adrs/0004-reuse-and-security-gates.md).
 
+## Lifecycle probe
+
+The probe registers its own test runtime and processes one task with fixed output.
+It executes no agent code. Use only an isolated test workspace; see
+[ADR 0005](adrs/0005-upstream-lifecycle-probe.md) for scope and recovery limits.
+
+Run the reproducible upstream contract suite (Go 1.26.4+, Docker, Git, curl and
+OpenSSL; Go may download upstream's required toolchain):
+
+```sh
+./scripts/test-upstream.sh
+```
+
+This builds the pinned upstream revision, migrates a disposable PostgreSQL database,
+starts a loopback-only server, and tests lifecycle calls and process-crash recovery.
+Fixture users and queued tasks are SQL-seeded; this does not test UI task creation.
+Containers and generated fixture credentials are removed on exit.
+
+For manual use against your own isolated test server, put its controller token in
+`MULTICA_PROBE_TOKEN` and run:
+
+```sh
+go run ./cmd/sandbox-probe -server https://test.example.com \
+  -workspace WORKSPACE_UUID -daemon STABLE_DAEMON_UUID \
+  -lock /absolute/trusted/path/controller.lock
+```
+
+Reuse the daemon identity and lock path on restart. Never share that identity across
+hosts. `-recover-only` reconciles without claiming; `-duration 30s` leaves time to
+cancel; `-fail` reports a simulated failure. Transport uncertainty exits with an
+error; the next invocation recovers orphaned work through Multica. Linux/macOS only.
+
 ## Contributing
 
 Install the pinned
@@ -54,6 +86,8 @@ Install the pinned
 ./verify.sh
 ```
 
+`verify.sh` runs Harness, formatting, vet, race tests and build. Set
+`VERIFY_UPSTREAM=1` to include the disposable upstream suite.
 Harness reads Git-tracked files; stage new files before verification.
 The clone-local installation includes a commit-message hook. Run
 `.git/harness/bin/harness commit-message template` for the required format.

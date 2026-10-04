@@ -2,32 +2,34 @@
   "version": "3.9.2",
   "answers": {
     "tests.unit": {
-      "applicable": false,
-      "reason": "Architecture-only scaffold; no runtime source code yet."
+      "paths": [
+        "internal"
+      ]
     },
     "tests.integration": {
-      "applicable": false,
-      "reason": "Architecture-only scaffold; no runtime source code yet."
+      "paths": [
+        "integration"
+      ]
     },
     "tests.architecture": {
       "applicable": false,
-      "reason": "Architecture-only scaffold; no runtime source code yet."
+      "reason": "No enforced module topology beyond Go imports; protocol and failure boundaries are tested."
     },
     "format": {
-      "applicable": false,
-      "reason": "No generated or language source files; documentation and shell are reviewed directly."
+      "present": true,
+      "reason": "verify.sh checks gofmt."
     },
     "lint": {
       "present": true,
-      "reason": "verify.sh runs Harness, shell syntax checks and Git whitespace checks."
+      "reason": "verify.sh runs go vet, shell syntax, Harness and whitespace checks."
     },
     "build": {
-      "applicable": false,
-      "reason": "Architecture-only scaffold; no runtime source code yet."
+      "present": true,
+      "reason": "verify.sh runs go build ./..."
     },
     "typecheck": {
-      "applicable": false,
-      "reason": "Architecture-only scaffold; no runtime source code yet."
+      "present": true,
+      "reason": "Go compiler checks types during build and tests."
     },
     "verify": {
       "paths": [
@@ -44,6 +46,25 @@
     "commits": {
       "language": "en",
       "requireSetup": true
+    },
+    "complexity.go": {
+      "averageReachableFiles": 8.0,
+      "largestCyclicGroupSize": 0
+    },
+    "comments.go": {
+      "minimumCommentLines": 10,
+      "percentageLimit": 8
+    },
+    "duplication.go": {
+      "windowLines": 30,
+      "minimumTokens": 90
+    },
+    "functions.go": {
+      "ownLines": 80
+    },
+    "comments.yaml": {
+      "minimumCommentLines": 10,
+      "percentageLimit": 8
     }
   },
   "policy": {
@@ -59,6 +80,20 @@
     "frame.lint": "required",
     "frame.build": "required",
     "frame.typecheck": "required",
-    "frame.verify": "required"
+    "frame.verify": "required",
+    "complexity.go": "required",
+    "comments.go": "required",
+    "duplication.go": "required",
+    "functions.go": "required",
+    "lint-suppressions.go": "required",
+    "comments.yaml": "required"
+  },
+  "applicability": {
+    "go": {
+      "applicable": true
+    },
+    "yaml": {
+      "applicable": true
+    }
   }
 }
