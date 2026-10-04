@@ -1,0 +1,160 @@
+name: sandbox-e2e
+x-control: &control
+  image: sandbox-e2e-control:local
+  build:
+    context: ../..
+    dockerfile: examples/end-to-end/Dockerfile
+    target: control
+  volumes:
+    - config:/config
+services:
+  init:
+    <<: *control
+    command: [init]
+    volumes:
+      - config:/config
+      - realm:/realm
+    networks: [control]
+  postgres:
+    image: pgvector/pgvector@sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f
+    environment:
+      POSTGRES_DB: fixture
+      POSTGRES_USER: fixture
+      POSTGRES_PASSWORD: fixture
+    volumes: [database:/var/lib/postgresql/data]
+    networks: [control]
+    healthcheck:
+      test: [CMD, pg_isready, -U, fixture, -d, fixture]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  multica:
+    image: sandbox-e2e-multica:local
+    build:
+      context: ../..
+      dockerfile: examples/end-to-end/Multica.Dockerfile
+      additional_contexts:
+        multica: ${MULTICA_SOURCE:-https://github.com/multica-ai/multica.git#b4ca5b4a23e68b26292a680dca7689a952bb1cd5}
+    entrypoint: [/bin/sh, -c, 'set -a; . /config/multica.env; set +a; exec /app/entrypoint.sh']
+    environment:
+      APP_ENV: development
+      PORT: '8080'
+      FRONTEND_ORIGIN: http://localhost:3001
+      MULTICA_DEV_VERIFICATION_CODE: '222222'
+    ports: ['127.0.0.1:8081:8080']
+    volumes: [config:/config:ro]
+    networks: [control]
+    depends_on:
+      init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, 'http://127.0.0.1:8080/health']
+      interval: 3s
+      timeout: 2s
+      retries: 60
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.8.0@sha256:b0f60d489d51c5d113390bdf5461d4c06e6051be026c05549f2e1e10ec352bcc
+    command: [start-dev, --import-realm]
+    volumes: [realm:/opt/keycloak/data/import:ro]
+    networks: [control]
+    depends_on:
+      init:
+        condition: service_completed_successfully
+  mcp:
+    <<: *control
+    command: [mcp]
+    healthcheck:
+      test: [CMD, /e2e, health]
+      interval: 2s
+      timeout: 2s
+      retries: 60
+    networks: [control, sandbox]
+    depends_on:
+      multica:
+        condition: service_healthy
+      keycloak:
+        condition: service_started
+  cli-proxy:
+    image: eceasy/cli-proxy-api:v8.0.13@sha256:6ce96259e6a2fec3b1093301d2dc61989260a8d682465be53e8f70656c6b6784
+    entrypoint: [/CLIProxyAPI/CLIProxyAPI]
+    command: [-config, /config/cliproxy.yaml]
+    volumes:
+      - config:/config:ro
+      - subscription:/auth
+    networks: [inference]
+    depends_on:
+      init:
+        condition: service_completed_successfully
+  login:
+    image: eceasy/cli-proxy-api:v8.0.13@sha256:6ce96259e6a2fec3b1093301d2dc61989260a8d682465be53e8f70656c6b6784
+    entrypoint: [/CLIProxyAPI/CLIProxyAPI]
+    command: [-config, /config/cliproxy.yaml, -codex-device-login, -no-browser]
+    profiles: [login]
+    volumes:
+      - config:/config:ro
+      - subscription:/auth
+    networks: [inference]
+  litellm:
+    image: ghcr.io/berriai/litellm:v1.104.0@sha256:625981c83410a3ea68eb0697590a57ec1d764d634514d54fa5db0591077ee839
+    healthcheck:
+      test: [CMD, python3, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness', timeout=2)"]
+      interval: 3s
+      timeout: 3s
+      retries: 60
+    entrypoint: [/bin/sh, -c, 'set -a; . /config/litellm.env; set +a; exec litellm --config /fixture/litellm.yaml --port 4000']
+    environment:
+      UPSTREAM_MODEL: openai/${UPSTREAM_MODEL:-gpt-5.6-luna}
+      PYTHONPATH: /fixture
+    volumes:
+      - config:/config:ro
+      - ./litellm.yaml:/fixture/litellm.yaml:ro
+      - ./litellm_auth.py:/fixture/litellm_auth.py:ro
+    networks: [sandbox, inference]
+    depends_on:
+      init:
+        condition: service_completed_successfully
+      mcp:
+        condition: service_healthy
+  frontend:
+    image: ghcr.io/multica-ai/multica-web@sha256:cc8260b0371661896dce52f968c8822d8275e0b275a43484347e5a59efffbb7c
+    environment:
+      HOSTNAME: 0.0.0.0
+      REMOTE_API_URL: http://multica:8080
+    ports: ["127.0.0.1:3001:3000"]
+    networks: [control]
+    depends_on:
+      multica:
+        condition: service_healthy
+  controller:
+    <<: *control
+    command: [setup]
+    profiles: [run]
+    networks: [control, inference]
+    environment:
+      COMPOSE_PROJECT_NAME: sandbox-e2e
+      UPSTREAM_MODEL: ${UPSTREAM_MODEL:-gpt-5.6-luna}
+    volumes:
+      - config:/config
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      multica:
+        condition: service_healthy
+  agent-image:
+    image: sandbox-e2e-agent:local
+    build:
+      context: ../..
+      dockerfile: examples/end-to-end/Dockerfile
+      target: agent
+    profiles: [build]
+networks:
+  control: {}
+  sandbox:
+    internal: true
+  inference: {}
+volumes:
+  config:
+  realm:
+  database:
+  subscription:

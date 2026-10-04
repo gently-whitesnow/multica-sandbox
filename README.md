@@ -9,7 +9,7 @@ Multica's [security model](https://multica.ai/docs/security-model) states:
 multica-sandbox is being built to provide that boundary: disposable environments
 for running AI coding agents in your infrastructure.
 
-**Status:** experimental offline container executor; no coding agent adapter yet.
+**Status:** experimental offline controller; a separate real-agent lab exists.
 Docker/runc tested; Sysbox and Kubernetes remain planned. Independent runtime, no Multica fork.
 
 ## Design
@@ -119,8 +119,8 @@ Set `VERIFY_SERVICE=1` to build and test the actual controller image through Com
 The service fixture shares only the disposable server's network namespace to use
 loopback HTTP; deployment configuration requires HTTPS for non-loopback origins.
 
-[Identity/MCP example](examples/identity-mcp/README.md): Compose fixture and
-trust-boundary diagram; separate from the controller, no inference integration yet.
+[Identity/MCP](examples/identity-mcp/README.md) and [end-to-end lab](examples/end-to-end/README.md):
+Compose fixtures and trust-boundary diagrams; separate from the offline controller.
 
 ## Contributing
 

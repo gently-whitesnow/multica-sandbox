@@ -23,8 +23,8 @@ sessions. Advertise only capabilities supported by both the adapter and Multica;
 support for a tool in upstream does not automatically implement our adapter.
 
 Multica supplies runtime/model selection and task settings. Provider credentials
-remain outside agent environments under ADR 0003; inference transport is an open
-integration decision. Model serving, billing and provider account management
+remain outside agent environments under ADR 0003; ADR 0009 selects a protected OpenAI-compatible
+inference gateway. Model serving, billing and provider account management
 remain external. No particular CLI, model vendor or gateway is required.
 
 Start with Docker/Sysbox, then add a Kubernetes backend. Isolate preparation and
