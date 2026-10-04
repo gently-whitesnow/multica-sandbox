@@ -159,3 +159,15 @@ func (r *run) Wait(ctx context.Context) error {
 		}
 	}
 }
+
+func EngineID(ctx context.Context) (string, error) {
+	data, err := command(ctx, "info", "--format", "{{.ID}}")
+	if err != nil {
+		return "", err
+	}
+	id := strings.TrimSpace(string(data))
+	if id == "" {
+		return "", fmt.Errorf("Docker engine identity unavailable")
+	}
+	return id, nil
+}
