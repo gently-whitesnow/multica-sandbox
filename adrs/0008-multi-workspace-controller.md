@@ -24,14 +24,16 @@ These are source findings, not a new multi-workspace integration or load test:
 
 ## Decision
 
-Propose one controller process per worker, one stable daemon identity, and separate
+Propose one controller process per worker connected to one Multica server,
+one stable daemon identity, and separate
 runtime registrations for each authorized workspace and supported adapter.
 Keep runtime visibility independent from controller admission and inference policy.
 Public runtimes are optional sharing inside each workspace, never tenant isolation.
 
 Start with a dedicated service user using the existing PAT path, membership-based
-workspace discovery and an explicit operator allowlist. Do not silently opt into
-every workspace on the server. Membership is required even for the service user;
+workspace discovery. Configure either all accessible memberships explicitly or
+an operator allowlist. Serving the whole server requires provisioning membership
+for existing and newly created workspaces. Membership is required for the service user;
 this is not a new upstream service-account credential type. A shared PAT broadens
 controller compromise impact. Evaluate workspace-scoped token sets when separate
 revocation or smaller authority is required, without adding controller processes.
