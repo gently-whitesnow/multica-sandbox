@@ -17,7 +17,6 @@ var uuid = regexp.MustCompile(`^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-
 
 type Config struct {
 	Version   int             `json:"version"`
-	Server    string          `json:"server"`
 	AllowHTTP bool            `json:"allow_http,omitempty"`
 	Issuers   []IssuerConfig  `json:"issuers"`
 	Bindings  []Binding       `json:"bindings,omitempty"`

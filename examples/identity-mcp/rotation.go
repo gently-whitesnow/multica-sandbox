@@ -11,6 +11,7 @@ import (
 
 	"github.com/gently-whitesnow/multica-sandbox/internal/attempt"
 	"github.com/gently-whitesnow/multica-sandbox/internal/docker"
+	"github.com/gently-whitesnow/multica-sandbox/internal/execution"
 	"github.com/gently-whitesnow/multica-sandbox/internal/identity"
 	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
 	"github.com/gently-whitesnow/multica-sandbox/internal/opencode"
@@ -49,7 +50,7 @@ func (s *recordingIssuer) AcquireForMCP(ctx context.Context, ref identity.Ref, u
 
 type fixtureWorkloads struct{ *docker.Projected }
 
-func (w fixtureWorkloads) Start(ctx context.Context, key string) (docker.ProjectionRun, error) {
+func (w fixtureWorkloads) Start(ctx context.Context, key string) (execution.ProjectedRun, error) {
 	run, err := w.Projected.Start(ctx, key)
 	if err != nil {
 		return nil, err
@@ -57,7 +58,7 @@ func (w fixtureWorkloads) Start(ctx context.Context, key string) (docker.Project
 	return fixtureProjection{run}, nil
 }
 
-type fixtureProjection struct{ docker.ProjectionRun }
+type fixtureProjection struct{ execution.ProjectedRun }
 
 func (p fixtureProjection) Write(ctx context.Context, path string, data []byte) error {
 	if path == "/workspace/opencode.json" {
@@ -70,17 +71,17 @@ func (p fixtureProjection) Write(ctx context.Context, path string, data []byte) 
 		config["provider"] = map[string]any{"fixture": map[string]any{"npm": "@ai-sdk/openai-compatible", "name": "Credential-free deterministic fixture", "options": map[string]any{"baseURL": "http://gateway:8080/v1"}, "models": map[string]any{"fixture": map[string]any{"name": "Fixture", "limit": map[string]int{"context": 64000, "output": 4096}}}}}
 		data, _ = json.Marshal(config)
 	}
-	return p.ProjectionRun.Write(ctx, path, data)
+	return p.ProjectedRun.Write(ctx, path, data)
 }
 
-func rotation() error {
+func rotation(selectionsOnly bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
 	defer cancel()
 	config := resolverConfig()
 	second := config.Bindings[0]
 	second.WorkspaceID = "10000000-0000-4000-8000-000000000002"
 	config.Bindings = append(config.Bindings, second)
-	service, err := identity.New(config)
+	service, err := identity.New(config, fixtureServer)
 	if err != nil {
 		return err
 	}
@@ -104,7 +105,7 @@ func rotation() error {
 		return err
 	}
 	states := &rotationStatus{states: map[string]string{}}
-	adapter := &opencode.Adapter{Server: config.Server, Controller: controller, Issuer: issuer, Authority: authority, Status: states, Workloads: fixtureWorkloads{backend}}
+	adapter := &opencode.Adapter{Server: fixtureServer, Controller: controller, Issuer: issuer, Authority: authority, Status: states, Workloads: fixtureWorkloads{backend}}
 	var recordedInference *recordingInference
 	if os.Getenv("INFERENCE_FIXTURE") == "1" {
 		adapter.Workloads = backend
@@ -118,11 +119,18 @@ func rotation() error {
 	tasks := []multica.Task{}
 	for i, binding := range config.Bindings {
 		task := multica.Task{StartClaimSupported: true, WorkspaceID: binding.WorkspaceID, AgentID: binding.AgentID, ID: fmt.Sprintf("40000000-0000-4000-8000-%012d", i+1), RuntimeID: fmt.Sprintf("50000000-0000-4000-8000-%012d", i+1), DispatchedAt: time.Now().UTC().Format(time.RFC3339Nano), Agent: &multica.Agent{ID: binding.AgentID, Instructions: "Read document repeatedly using fixture MCP.", MCPConfig: json.RawMessage(`{"mcpServers":{"fixture":{"url":"http://gateway:8080/mcp"}}}`)}}
+		if recordedInference != nil && i == 0 {
+			task.Agent.Model = "managed-inference/fixture"
+			task.Agent.ThinkingLevel = "high"
+		}
 		if i == 1 {
 			task.Agent.Instructions += " workspace-two"
 		}
 		tasks = append(tasks, task)
 		states.set(task.ID, "running")
+	}
+	if selectionsOnly {
+		return inferenceSelections(ctx, adapter, states, tasks[0])
 	}
 	done := make(chan error, 2)
 	ready := make(chan error, 2)
@@ -185,6 +193,9 @@ func rotation() error {
 	}
 	if recordedInference != nil {
 		if err := checkInferenceEvidence(ctx, recordedInference, tasks, issuer); err != nil {
+			return err
+		}
+		if err := inferenceSelections(ctx, adapter, states, tasks[0]); err != nil {
 			return err
 		}
 		if err := inferenceFailures(ctx, adapter, states, tasks[0]); err != nil {

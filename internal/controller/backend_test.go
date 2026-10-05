@@ -13,9 +13,10 @@ import (
 
 type lifecycleAPI struct {
 	API
-	events  *[]string
-	status  string
-	failure string
+	events   *[]string
+	status   string
+	failure  string
+	reported *error
 }
 
 func (a lifecycleAPI) record(s string) error {
@@ -39,7 +40,12 @@ func (a lifecycleAPI) Status(context.Context, string) (string, error) {
 }
 func (a lifecycleAPI) Heartbeat(context.Context, string) error { return a.record("heartbeat") }
 func (a lifecycleAPI) Complete(context.Context, string) error  { return a.record("complete") }
-func (a lifecycleAPI) Fail(context.Context, string) error      { return a.record("fail") }
+func (a lifecycleAPI) Fail(_ context.Context, _ string, cause error) error {
+	if a.reported != nil {
+		*a.reported = cause
+	}
+	return a.record("fail")
+}
 func (a lifecycleAPI) CancelAck(context.Context, string) error { return a.record("ack") }
 
 type testBackend struct {
@@ -90,7 +96,8 @@ func TestCleanupPrecedesTerminalCallback(t *testing.T) {
 	for _, scenario := range []string{"success", "failure", "cancel", "timeout", "cleanup-failure", "status-failure", "start-failure", "heartbeat-failure", "shutdown"} {
 		t.Run(scenario, func(t *testing.T) {
 			events := []string{}
-			a := lifecycleAPI{events: &events, status: "running"}
+			var reported error
+			a := lifecycleAPI{events: &events, status: "running", reported: &reported}
 			b := &testBackend{events: &events}
 			terminal := "complete"
 			switch scenario {
@@ -133,6 +140,9 @@ func TestCleanupPrecedesTerminalCallback(t *testing.T) {
 			err := p.execute(ctx, multica.Task{ID: id}, ticks)
 			if (err != nil) != (terminal == "") {
 				t.Fatalf("error=%v events=%v", err, events)
+			}
+			if scenario == "failure" && reported != b.errorWaiting {
+				t.Fatal("execution cause lost")
 			}
 			removed := false
 			for _, event := range events {

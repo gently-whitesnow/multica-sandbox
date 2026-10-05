@@ -2,7 +2,19 @@ model_list:
   - model_name: fixture
     litellm_params:
       model: openai/fixture
-      api_base: http://gateway:8080/v1
+      api_base: http://fixture-provider:8080/v1
+      api_key: os.environ/FIXTURE_UPSTREAM_KEY
+      num_retries: 0
+  - model_name: fixture-new
+    litellm_params:
+      model: openai/fixture
+      api_base: http://fixture-provider:8080/v1
+      api_key: os.environ/FIXTURE_UPSTREAM_KEY
+      num_retries: 0
+  - model_name: fixture-limited
+    litellm_params:
+      model: openai/fixture
+      api_base: http://fixture-provider:8080/v1
       api_key: os.environ/FIXTURE_UPSTREAM_KEY
       num_retries: 0
 litellm_settings:

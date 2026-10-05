@@ -45,22 +45,25 @@ func inferenceIdentityConfig() identity.Config {
 	return c
 }
 func fixtureInferenceTarget() inference.Target {
-	return inference.Target{Gateway: inference.Gateway{URL: "http://litellm:4000/v1", Issuer: "fixture"}, Model: "fixture", Models: map[string]inference.Model{"fixture": {Context: 64000, Output: 4096}}}
+	return inference.Target{Gateway: inference.Gateway{URL: "http://litellm:4000/v1", Issuer: "fixture"}}
 }
 func configureRotationInference(ctx context.Context, adapter *opencode.Adapter) (*recordingInference, func(), error) {
-	issuer, err := identity.New(inferenceIdentityConfig())
+	issuer, err := identity.New(inferenceIdentityConfig(), adapter.Server)
 	if err != nil {
 		return nil, nil, err
 	}
-	c := inference.Config{Version: 1, Server: adapter.Server, AllowHTTP: true, Gateways: []inference.Gateway{fixtureInferenceTarget().Gateway}}
+	c := inference.Config{Version: 1, AllowHTTP: true, Gateways: []inference.Gateway{fixtureInferenceTarget().Gateway}}
 	for _, b := range inferenceIdentityConfig().Bindings {
 		c.Bindings = append(c.Bindings, inference.Binding{WorkspaceID: b.WorkspaceID, AgentID: b.AgentID, Target: fixtureInferenceTarget()})
 	}
-	static, err := inference.New(c, issuer)
+	for _, b := range c.Bindings {
+		c.Catalogs = append(c.Catalogs, inference.CatalogBinding{WorkspaceID: b.WorkspaceID, AgentID: b.AgentID, Catalog: fixtureInferenceCatalog()})
+	}
+	static, err := inference.New(c, adapter.Server, issuer)
 	if err != nil {
 		return nil, nil, err
 	}
-	ref := identity.Ref{Server: c.Server, WorkspaceID: c.Bindings[0].WorkspaceID, AgentID: c.Bindings[0].AgentID}
+	ref := identity.Ref{Server: fixtureServer, WorkspaceID: c.Bindings[0].WorkspaceID, AgentID: c.Bindings[0].AgentID}
 	if _, err := static.Acquire(ctx, ref); err != nil {
 		return nil, nil, fmt.Errorf("static inference issuance failed")
 	}
@@ -73,7 +76,7 @@ func configureRotationInference(ctx context.Context, adapter *opencode.Adapter) 
 			Version int          `json:"version"`
 			Agent   identity.Ref `json:"agent"`
 		}
-		if r.Header.Get("Authorization") != "Bearer "+string(secret) || json.NewDecoder(r.Body).Decode(&req) != nil || req.Version != 1 || req.Agent.Server != c.Server || req.Agent.AgentID != ref.AgentID || (req.Agent.WorkspaceID != ref.WorkspaceID && req.Agent.WorkspaceID != "10000000-0000-4000-8000-000000000002") {
+		if r.Header.Get("Authorization") != "Bearer "+string(secret) || json.NewDecoder(r.Body).Decode(&req) != nil || req.Version != 1 || req.Agent.Server != fixtureServer || req.Agent.AgentID != ref.AgentID || (req.Agent.WorkspaceID != ref.WorkspaceID && req.Agent.WorkspaceID != "10000000-0000-4000-8000-000000000002") {
 			w.WriteHeader(403)
 			return
 		}
@@ -81,7 +84,7 @@ func configureRotationInference(ctx context.Context, adapter *opencode.Adapter) 
 	}))
 	c.Bindings = nil
 	c.External = &identity.ExternalConfig{URL: resolver.URL, BearerFile: "/secrets/admin"}
-	service, err := inference.New(c, issuer)
+	service, err := inference.New(c, adapter.Server, issuer)
 	if err != nil {
 		resolver.Close()
 		return nil, nil, err
@@ -110,6 +113,13 @@ func checkInferenceEvidence(ctx context.Context, recorded *recordingInference, t
 		return fmt.Errorf("invalid inference evidence")
 	}
 	for _, task := range tasks {
+		effort := task.Agent.ThinkingLevel
+		if effort == "" {
+			effort = "medium"
+		}
+		if counts["selection:"+task.AttemptKey()+"|fixture|"+effort][0] < 25 {
+			return fmt.Errorf("explicit/default model reasoning did not reach gateway")
+		}
 		evidence := counts["inference:"+task.AttemptKey()]
 		recorded.Lock()
 		tokens := append([]identity.AccessToken(nil), recorded.issued[task.WorkspaceID]...)
@@ -178,4 +188,8 @@ func checkInferencePolicy(ctx context.Context, recorded *recordingInference, tas
 	}
 	fmt.Println("PASS LiteLLM enforces external model grants and denies caller routing/keys; responses expose no fixture credentials")
 	return nil
+}
+
+func fixtureInferenceCatalog() inference.Catalog {
+	return inference.Catalog{DefaultModel: "fixture", Models: map[string]inference.Model{"fixture": {Label: "Fixture", Context: 64000, Output: 4096, Thinking: &inference.Thinking{DefaultLevel: "medium", SupportedLevels: []inference.ThinkingLevel{{Value: "medium", Label: "Medium"}, {Value: "high", Label: "High"}}}}}}
 }

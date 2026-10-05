@@ -22,6 +22,9 @@ services:
       - realm:/opt/keycloak/data/import:ro
   gateway:
     <<: *example
+    networks:
+      fixture:
+        aliases: [fixture-provider]
     command: [gateway]
     restart: on-failure
     depends_on:

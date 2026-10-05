@@ -111,7 +111,7 @@ func (c *Client) Message(ctx context.Context, id string) error {
 func (c *Client) Complete(ctx context.Context, id string) error {
 	return c.taskPost(ctx, id, "complete", map[string]string{"output": "Test execution completed; this does not complete the requested agent work."})
 }
-func (c *Client) Fail(ctx context.Context, id string) error {
+func (c *Client) Fail(ctx context.Context, id string, _ error) error {
 	return c.taskPost(ctx, id, "fail", map[string]string{"error": "Lifecycle probe failure", "failure_reason": "execution_failed"})
 }
 func (c *Client) CancelAck(ctx context.Context, id string) error {
@@ -137,6 +137,10 @@ func (c *Client) AgentComplete(ctx context.Context, id string) error {
 	return c.taskPost(ctx, id, "complete", map[string]string{"output": "OpenCode process completed; detailed events, usage and artifacts are not yet reported by this experimental adapter."})
 }
 
-func (c *Client) AgentFail(ctx context.Context, id string) error {
-	return c.taskPost(ctx, id, "fail", map[string]string{"error": "OpenCode execution or identity delivery failed", "failure_reason": "execution_failed"})
+func (c *Client) AgentFail(ctx context.Context, id string, status int) error {
+	message := "OpenCode execution or identity delivery failed"
+	if status >= 400 && status <= 599 {
+		message = fmt.Sprintf("Inference gateway request failed (HTTP %d)", status)
+	}
+	return c.taskPost(ctx, id, "fail", map[string]string{"error": message, "failure_reason": "execution_failed"})
 }

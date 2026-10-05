@@ -12,6 +12,10 @@ network destinations or mix one workspace's identity with another's task.
 ## Decision
 
 Resolve an exact trusted reference: Multica origin, workspace UUID and agent UUID.
+One controller serves one installation. Its configuration supplies the origin to
+identity and inference constructors; their files have no redundant server field.
+External resolver requests and authority grants retain the derived installation
+namespace for shared services.
 Use either static bindings with absolute secret-file references or an authenticated
 HTTP resolver with a version-1 JSON contract. Do not fall back between sources.
 An external response must echo the reference and name a locally approved issuer.

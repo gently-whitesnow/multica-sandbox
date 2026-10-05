@@ -20,7 +20,10 @@ services:
   gateway:
     environment:
       INFERENCE_FIXTURE: "1"
-    networks: [fixture, execution]
+    networks:
+      fixture:
+        aliases: [fixture-provider]
+      execution: {}
   litellm:
     mem_limit: 768m
     cpus: 0.5
@@ -47,7 +50,7 @@ services:
       context: $ROOT
       dockerfile: examples/identity-mcp/Dockerfile
       target: rotation
-    command: [inference-rotation]
+    command: [${INFERENCE_SCENARIO:-inference-rotation}]
     networks: [fixture]
     environment:
       INFERENCE_FIXTURE: "1"
@@ -64,4 +67,9 @@ EOF_CONFIG
 docker pull ghcr.io/anomalyco/opencode:1.18.34@sha256:b34342987ca889fc2cc19cbc046eefc2418e5980a3d696e209fbb401a288f631 >/dev/null
 compose build
 compose up -d --wait --wait-timeout 180 litellm || { compose logs --no-color litellm 2>&1 | rg "Error:|ModuleNotFoundError|ImportError|SyntaxError|Exception:"; exit 1; }
-compose run --rm --no-deps rotation
+result=0
+compose run --rm --no-deps rotation || result=$?
+if [ "$result" -ne 0 ]; then
+ compose logs --no-color litellm 2>&1 | rg -o "ConnectTimeout|ReadTimeout|ConnectError|TimeoutError|APIConnectionError|RateLimitError|TPM limit|rate limit|429 Too Many Requests|403 Forbidden" || true
+fi
+exit "$result"

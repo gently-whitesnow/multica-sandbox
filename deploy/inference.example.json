@@ -1,14 +1,31 @@
 {
   "version": 1,
-  "server": "https://multica.example.invalid",
   "identity_file": "/etc/multica-sandbox/inference-identity.json",
-  "gateways": [{"url": "https://inference.example.invalid/v1", "issuer": "corporate"}],
-  "bindings": [{
-    "workspace_id": "10000000-0000-4000-8000-000000000001",
-    "agent_id": "20000000-0000-4000-8000-000000000001",
-    "url": "https://inference.example.invalid/v1",
-    "issuer": "corporate",
-    "model": "approved-model",
-    "models": {"approved-model": {"context": 64000, "output": 4096}}
-  }]
+  "gateways": [
+    {
+      "url": "https://inference.example.invalid/v1",
+      "issuer": "corporate"
+    }
+  ],
+  "bindings": [
+    {
+      "workspace_id": "10000000-0000-4000-8000-000000000001",
+      "agent_id": "20000000-0000-4000-8000-000000000001",
+      "url": "https://inference.example.invalid/v1",
+      "issuer": "corporate"
+    }
+  ],
+  "catalogs": [
+    {
+      "workspace_id": "10000000-0000-4000-8000-000000000001",
+      "agent_id": "20000000-0000-4000-8000-000000000001",
+      "default_model": "approved-model",
+      "models": {
+        "approved-model": {
+          "context": 64000,
+          "output": 4096
+        }
+      }
+    }
+  ]
 }

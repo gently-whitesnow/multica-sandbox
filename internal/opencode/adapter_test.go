@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/gently-whitesnow/multica-sandbox/internal/attempt"
-	"github.com/gently-whitesnow/multica-sandbox/internal/docker"
 	"github.com/gently-whitesnow/multica-sandbox/internal/execution"
 	"github.com/gently-whitesnow/multica-sandbox/internal/identity"
 )
@@ -54,8 +53,8 @@ type stubWorkload struct {
 	runs    int
 }
 
-func (s *stubWorkload) Start(context.Context, string) (docker.ProjectionRun, error) { return s, nil }
-func (s *stubWorkload) Write(context.Context, string, []byte) error                 { s.writes++; return nil }
+func (s *stubWorkload) Start(context.Context, string) (execution.ProjectedRun, error) { return s, nil }
+func (s *stubWorkload) Write(context.Context, string, []byte) error                   { s.writes++; return nil }
 func (s *stubWorkload) Execute(ctx context.Context, args []string) error {
 	s.runs++
 	if len(args) >= 3 && !strings.HasPrefix(args[2], "exec ") {

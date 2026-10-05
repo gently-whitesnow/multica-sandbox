@@ -18,7 +18,7 @@ func inferenceFixture(t *testing.T, services map[string]any) {
 	}
 	services["seed"] = map[string]any{"environment": map[string]string{"ROTATION_FIXTURE": "1", "INFERENCE_FIXTURE": "1"}}
 	services["keycloak"] = map[string]any{"mem_limit": "512m", "environment": map[string]string{"JAVA_OPTS_KC_HEAP": "-Xms64m -Xmx256m"}}
-	services["gateway"] = map[string]any{"networks": []string{"fixture", "execution"}, "environment": map[string]string{"INFERENCE_FIXTURE": "1"}}
+	services["gateway"] = map[string]any{"networks": map[string]any{"fixture": map[string]any{"aliases": []string{"fixture-provider"}}, "execution": map[string]any{}}, "environment": map[string]string{"INFERENCE_FIXTURE": "1"}}
 	services["litellm"] = map[string]any{
 		"mem_limit": "768m", "cpus": 0.5,
 		"image":    "ghcr.io/berriai/litellm:v1.104.0@sha256:625981c83410a3ea68eb0697590a57ec1d764d634514d54fa5db0591077ee839",
@@ -36,8 +36,8 @@ func configureServiceInference(t *testing.T, dir, project string, c *service.Con
 	binding.Bindings[0].Subject = "30000000-0000-4000-8000-000000000002"
 	binding.Bindings[0].SecretFile = "/identity-secrets/inference"
 	writeJSON(t, filepath.Join(dir, "inference-identity.json"), binding)
-	target := inference.Target{Gateway: inference.Gateway{URL: "http://litellm:4000/v1", Issuer: "fixture"}, Model: "fixture", Models: map[string]inference.Model{"fixture": {Context: 64000, Output: 4096}}}
-	writeJSON(t, filepath.Join(dir, "inference.json"), inference.Config{Version: 1, Server: c.Server, AllowHTTP: true, IdentityFile: "/etc/multica-sandbox/inference-identity.json", Gateways: []inference.Gateway{target.Gateway}, Bindings: []inference.Binding{{WorkspaceID: workspace, AgentID: binding.Bindings[0].AgentID, Target: target}}})
+	target := inference.Target{Gateway: inference.Gateway{URL: "http://litellm:4000/v1", Issuer: "fixture"}}
+	writeJSON(t, filepath.Join(dir, "inference.json"), inference.Config{Version: 1, AllowHTTP: true, IdentityFile: "/etc/multica-sandbox/inference-identity.json", Gateways: []inference.Gateway{target.Gateway}, Bindings: []inference.Binding{{WorkspaceID: workspace, AgentID: binding.Bindings[0].AgentID, Target: target}}, Catalogs: []inference.CatalogBinding{{WorkspaceID: workspace, AgentID: binding.Bindings[0].AgentID, Catalog: inference.Catalog{DefaultModel: "fixture", Models: map[string]inference.Model{"fixture": {Context: 64000, Output: 4096}}}}}})
 	c.Command = nil
 	c.OpenCode.InferenceFile = "/etc/multica-sandbox/inference.json"
 	c.OpenCode.Peers = append(c.OpenCode.Peers, project+"-litellm-1")

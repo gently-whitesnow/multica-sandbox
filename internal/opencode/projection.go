@@ -47,7 +47,7 @@ func Select(t multica.Task) (map[string]Remote, error) {
 	}
 	dec := json.NewDecoder(bytes.NewReader(t.Agent.MCPConfig))
 	dec.DisallowUnknownFields()
-	if dec.Decode(&document) != nil || len(document.Servers) == 0 || len(document.Servers) > 16 {
+	if dec.Decode(&document) != nil || len(document.Servers) > 16 {
 		return nil, ErrDenied
 	}
 	var extra any

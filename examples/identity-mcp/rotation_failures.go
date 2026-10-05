@@ -71,7 +71,7 @@ func rotationFailure(ctx context.Context, base *opencode.Adapter, states *rotati
 	} else {
 		config.Issuers[0].TokenURL = endpoint.URL
 	}
-	service, err := identity.New(config)
+	service, err := identity.New(config, fixtureServer)
 	if err != nil {
 		return err
 	}

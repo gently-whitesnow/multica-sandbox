@@ -21,7 +21,7 @@ type API interface {
 	Status(context.Context, string) (string, error)
 	Message(context.Context, string) error
 	Complete(context.Context, string) error
-	Fail(context.Context, string) error
+	Fail(context.Context, string, error) error
 	CancelAck(context.Context, string) error
 }
 
@@ -133,7 +133,7 @@ func (p *Probe) finish(ctx context.Context, id string, failure error, stop func(
 		return err
 	}
 	if failure != nil {
-		err = p.API.Fail(ctx, id)
+		err = p.API.Fail(ctx, id, failure)
 	} else {
 		err = p.API.Complete(ctx, id)
 	}

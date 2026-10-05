@@ -17,14 +17,17 @@ async def authorize(request: Request, api_key: str) -> UserAPIKeyAuth:
         raise HTTPException(403, "Unsupported parameter")
     async with httpx.AsyncClient(timeout=5, follow_redirects=False) as client:
         response = await client.post(
-            "http://gateway:8080/authorize-inference",
+            "http://fixture-provider:8080/authorize-inference",
             headers={"Authorization": f"Bearer {api_key}"},
+            json={"model": body.get("model"), "reasoning_effort": body.get("reasoning_effort", "")},
         )
     if response.status_code != 200:
         raise HTTPException(403, "Identity denied")
     binding = response.json()
     if body.get("model") not in binding["models"]:
         raise HTTPException(403, "Model denied")
+    if body.get("model") == "fixture-limited":
+        raise HTTPException(429, "Fixture model budget exhausted")
     return UserAPIKeyAuth(
         user_id=binding["agent"], team_id=binding["workspace"],
         models=binding["models"], rpm_limit=120, tpm_limit=1000000,

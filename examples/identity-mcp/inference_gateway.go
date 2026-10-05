@@ -5,10 +5,13 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 )
+
+var inferenceReplies atomic.Int64
 
 const inferenceSubject = "30000000-0000-4000-8000-000000000002"
 
@@ -39,13 +42,22 @@ func (g *registry) inferenceAuth(v *oidc.IDTokenVerifier) http.Handler {
 			w.WriteHeader(403)
 			return
 		}
+		var selection struct {
+			Model  string `json:"model"`
+			Effort string `json:"reasoning_effort"`
+		}
+		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&selection) != nil {
+			w.WriteHeader(400)
+			return
+		}
+		g.calls["selection:"+grant.Attempt+"|"+selection.Model+"|"+selection.Effort]++
 		key := "inference:" + grant.Attempt
 		g.calls[key]++
 		if g.hashes[key] == nil {
 			g.hashes[key] = map[string]bool{}
 		}
 		g.hashes[key][hash] = true
-		_ = json.NewEncoder(w).Encode(map[string]any{"workspace": grant.Workspace, "agent": grant.Agent, "models": []string{"fixture"}})
+		_ = json.NewEncoder(w).Encode(map[string]any{"workspace": grant.Workspace, "agent": grant.Agent, "models": []string{"fixture", "fixture-new", "fixture-limited"}})
 	})
 }
 func fixtureInference(w http.ResponseWriter, r *http.Request) {
@@ -57,4 +69,5 @@ func fixtureInference(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	mockInference(w, r)
+	inferenceReplies.Add(1)
 }

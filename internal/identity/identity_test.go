@@ -13,6 +13,8 @@ import (
 	"time"
 )
 
+const identityTestServer = "https://multica.example"
+
 const workspaceA = "10000000-0000-4000-8000-000000000001"
 const workspaceB = "10000000-0000-4000-8000-000000000002"
 const agentA = "20000000-0000-4000-8000-000000000001"
@@ -27,12 +29,12 @@ func secretFile(t *testing.T, value string) string {
 	return p
 }
 func config(t *testing.T) Config {
-	return Config{Version: 1, Server: "https://multica.example", AllowHTTP: true, Issuers: []IssuerConfig{{Name: "corp", URL: "https://issuer.example/realm", TokenURL: "https://issuer.example/token", JWKSURL: "https://issuer.example/keys", MaxTTLSeconds: 300}}, Bindings: []Binding{{WorkspaceID: workspaceA, AgentID: agentA, Principal: Principal{"corp", "client-a", "subject-a"}, SecretFile: secretFile(t, "private-sentinel")}}}
+	return Config{Version: 1, AllowHTTP: true, Issuers: []IssuerConfig{{Name: "corp", URL: "https://issuer.example/realm", TokenURL: "https://issuer.example/token", JWKSURL: "https://issuer.example/keys", MaxTTLSeconds: 300}}, Bindings: []Binding{{WorkspaceID: workspaceA, AgentID: agentA, Principal: Principal{"corp", "client-a", "subject-a"}, SecretFile: secretFile(t, "private-sentinel")}}}
 }
-func ref(c Config) Ref { return Ref{c.Server, workspaceA, agentA} }
+func ref(c Config) Ref { return Ref{identityTestServer, workspaceA, agentA} }
 func TestStaticBindingIsolationAndRotation(t *testing.T) {
 	c := config(t)
-	s, err := New(c)
+	s, err := New(c, identityTestServer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +42,7 @@ func TestStaticBindingIsolationAndRotation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, r := range []Ref{{c.Server, workspaceB, agentA}, {c.Server, workspaceA, agentB}, {"https://other.example", workspaceA, agentA}} {
+	for _, r := range []Ref{{identityTestServer, workspaceB, agentA}, {identityTestServer, workspaceA, agentB}, {"https://other.example", workspaceA, agentA}} {
 		if _, err = s.Resolve(context.Background(), r); err == nil {
 			t.Fatal("cross-binding resolution allowed")
 		}
@@ -91,7 +93,6 @@ func TestInvalidConfiguration(t *testing.T) {
 		"invalid scope":          func(c *Config) { c.Bindings[0].Token.Scopes = []string{"bad scope"} },
 		"invalid OAuth resource": func(c *Config) { c.Bindings[0].Token.Resource = "https://user:secret@tools.example" },
 		"unbounded ttl":          func(c *Config) { c.Issuers[0].MaxTTLSeconds = 99999 },
-		"invalid server":         func(c *Config) { c.Server = "https://multica.example/path" },
 		"url credentials":        func(c *Config) { c.Issuers[0].TokenURL = "https://secret@issuer.example/token" },
 		"insecure endpoint":      func(c *Config) { c.AllowHTTP = false; c.Issuers[0].JWKSURL = "http://issuer.example/keys" },
 	}
@@ -99,7 +100,7 @@ func TestInvalidConfiguration(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			c := config(t)
 			change(&c)
-			if _, err := New(c); err == nil {
+			if _, err := New(c, identityTestServer); err == nil {
 				t.Fatal("accepted invalid config")
 			}
 		})
@@ -122,7 +123,7 @@ func TestRemoteResolverContract(t *testing.T) {
 	defer server.Close()
 	c.Bindings = nil
 	c.External = &ExternalConfig{server.URL, bearer}
-	s, err := New(c)
+	s, err := New(c, identityTestServer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +166,7 @@ func TestResolverFailuresDoNotLeak(t *testing.T) {
 		c := config(t)
 		c.Bindings = nil
 		c.External = &ExternalConfig{server.URL, secretFile(t, "bearer")}
-		s, err := New(c)
+		s, err := New(c, identityTestServer)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -182,7 +183,7 @@ func TestResolverFailuresDoNotLeak(t *testing.T) {
 	c := config(t)
 	c.Bindings = nil
 	c.External = &ExternalConfig{redirect.URL, secretFile(t, "bearer")}
-	s, _ := New(c)
+	s, _ := New(c, identityTestServer)
 	if _, err := s.Resolve(context.Background(), ref(c)); err != ErrDenied || hits != 0 {
 		t.Fatal("redirect followed")
 	}
@@ -225,7 +226,7 @@ func TestRemoteContextCancellation(t *testing.T) {
 	c := config(t)
 	c.Bindings = nil
 	c.External = &ExternalConfig{server.URL, secretFile(t, "private-sentinel")}
-	s, err := New(c)
+	s, err := New(c, identityTestServer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,5 +243,20 @@ func TestRemoteContextCancellation(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("request did not honor cancellation")
+	}
+}
+
+func TestServerIsSuppliedByController(t *testing.T) {
+	for _, server := range []string{"", "https://multica.example/path"} {
+		if _, err := New(config(t), server); err == nil {
+			t.Fatal("invalid controller origin accepted")
+		}
+	}
+	p := filepath.Join(t.TempDir(), "identity.json")
+	if err := os.WriteFile(p, []byte(`{"version":1,"server":"https://override.invalid"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadConfig(p); err == nil {
+		t.Fatal("redundant server override accepted")
 	}
 }
