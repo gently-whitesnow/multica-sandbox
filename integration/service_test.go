@@ -40,7 +40,7 @@ func dockerTest(t *testing.T, args ...string) string {
 }
 func prepareService(t *testing.T) serviceFixture {
 	t.Helper()
-	c := service.Config{Server: "http://127.0.0.1:8080", Workspace: workspace, Daemon: daemon, Image: image, Command: []string{"/bin/sh", "-c", "sleep 3"}, Timeout: "30s"}
+	c := service.Config{Server: "http://127.0.0.1:8080", Daemon: daemon, Image: image, Command: []string{"/bin/sh", "-c", "sleep 3"}, Timeout: "30s"}
 	return prepareServiceConfig(t, c)
 }
 func prepareServiceConfig(t *testing.T, c service.Config) serviceFixture {
@@ -98,7 +98,7 @@ func containerService(t *testing.T, api *multica.Client, rt multica.Runtime) {
 	}
 	f := prepareService(t)
 	cid := f.compose("ps", "-q", "controller")
-	eventually(t, "controller ready", func() bool { return strings.Contains(dockerTest(t, "logs", cid), "ready runtime=") })
+	eventually(t, "controller ready", func() bool { return strings.Contains(dockerTest(t, "logs", cid), "ready workspaces=") })
 	started := dockerTest(t, "inspect", "--format", "{{.State.StartedAt}}", cid)
 	first, second := enqueue(t, rt, 30), enqueue(t, rt, 31)
 	firstContainer := waitServiceExecution(t, cid, first)

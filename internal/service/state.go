@@ -1,13 +1,15 @@
 package service
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 )
 
-type identity struct{ Server, Workspace, Daemon, Engine string }
+type identity struct{ Server, Daemon, Engine string }
 
 // bindState runs under the shared instance lock, before recovery or task claims.
 func bindState(dir string, want identity) error {
@@ -15,7 +17,10 @@ func bindState(dir string, want identity) error {
 	data, err := os.ReadFile(path)
 	if err == nil {
 		var existing identity
-		if json.Unmarshal(data, &existing) != nil || existing != want {
+		dec := json.NewDecoder(bytes.NewReader(data))
+		dec.DisallowUnknownFields()
+		var extra any
+		if dec.Decode(&existing) != nil || dec.Decode(&extra) != io.EOF || existing != want {
 			return fmt.Errorf("state belongs to a different controller scope or Docker engine")
 		}
 		return nil

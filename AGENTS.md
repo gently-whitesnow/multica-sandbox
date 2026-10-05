@@ -29,6 +29,7 @@ from verified behavior.
 ## Rules
 
 - Keep code and documentation concise.
+- Remove superseded prototype paths unless a deployed consumer requires compatibility.
 - Separate sandbox backends, agent adapters and inference configuration.
 - Keep custom images and declarative tool sets first-class configuration.
 - Keep Multica as the task authority; do not introduce a second task queue.
@@ -39,6 +40,7 @@ from verified behavior.
 - Prefer maintained components. Document a concrete gap before replacing one.
 - Require adversarial conformance checks before advertising backend or adapter
   support; a working happy path is insufficient.
+- Keep ADRs focused on distinct decisions; update existing ones for prototype refinements.
 - Record architectural changes in numbered ADRs. Keep navigation here.
 - On Harness upgrades, review new checks and require every applicable check.
 - Add language checks and meaningful runtime tests as the implementation grows.

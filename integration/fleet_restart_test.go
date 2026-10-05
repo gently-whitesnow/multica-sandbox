@@ -16,7 +16,7 @@ func fleetRestart(t *testing.T) {
 	if os.Getenv("VERIFY_SERVICE") != "1" {
 		t.Skip("set VERIFY_SERVICE=1")
 	}
-	c := service.Config{Server: "http://127.0.0.1:8080", Workspaces: "all-accessible", Concurrency: 2, Daemon: daemon, Image: image, Command: []string{"/bin/sh", "-c", "sleep 12"}, Timeout: "30s"}
+	c := service.Config{Server: "http://127.0.0.1:8080", Concurrency: 2, Daemon: daemon, Image: image, Command: []string{"/bin/sh", "-c", "sleep 12"}, Timeout: "30s"}
 	f := prepareServiceConfig(t, c)
 	cid := f.compose("ps", "-q", "controller")
 	eventually(t, "fleet ready", func() bool { return strings.Contains(dockerTest(t, "logs", cid), "ready workspaces=") })

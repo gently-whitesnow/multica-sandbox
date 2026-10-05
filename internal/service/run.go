@@ -45,11 +45,7 @@ func Run(ctx context.Context, c Config, stateDir, tokenPath string, out io.Write
 	if err != nil {
 		return err
 	}
-	scope := c.Workspace
-	if c.Workspaces == "all-accessible" {
-		scope = "*"
-	}
-	if err = bindState(stateDir, identity{strings.TrimRight(c.Server, "/"), scope, c.Daemon, engine}); err != nil {
+	if err = bindState(stateDir, identity{strings.TrimRight(c.Server, "/"), c.Daemon, engine}); err != nil {
 		return err
 	}
 	backend := &docker.Backend{Image: c.Image, Owner: c.Daemon, Command: c.Command}
@@ -59,23 +55,12 @@ func Run(ctx context.Context, c Config, stateDir, tokenPath string, out io.Write
 	}
 	p := controller.Probe{API: api, Backend: backend, Duration: duration, Interval: time.Second,
 		Observe: func(event, id string) { fmt.Fprintf(out, "%s task=%s\n", event, id) }}
-	if c.Workspaces == "all-accessible" {
-		if err = backend.Reconcile(ctx); err != nil {
-			return err
-		}
-		if err = backend.Validate(ctx); err != nil {
-			return err
-		}
-		return serveFleet(ctx, c, stateDir, api, &p, out)
-	}
-	rt, recovered, err := p.Connect(ctx, c.Workspace, c.Daemon)
-	if err != nil {
+	// Reconcile before validation so a missing image cannot strand old executions.
+	if err = backend.Reconcile(ctx); err != nil {
 		return err
 	}
-	// Validate after reconciliation so a missing image cannot strand old executions.
 	if err = backend.Validate(ctx); err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "ready runtime=%s orphaned=%d retried=%d\n", rt.ID, recovered.Orphaned, recovered.Retried)
-	return p.Serve(ctx, rt.ID)
+	return serveFleet(ctx, c, stateDir, api, &p, out)
 }

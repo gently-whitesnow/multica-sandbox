@@ -77,7 +77,7 @@ func multiWorkspace(t *testing.T) {
 	if err := os.WriteFile(tokenPath, []byte(pat), 0600); err != nil {
 		t.Fatal(err)
 	}
-	c := service.Config{Server: server.URL, Workspaces: "all-accessible", Concurrency: 2, Daemon: daemon, Image: image, Command: []string{"/bin/sh", "-c", "sleep 12"}, Timeout: "30s"}
+	c := service.Config{Server: server.URL, Concurrency: 2, Daemon: daemon, Image: image, Command: []string{"/bin/sh", "-c", "sleep 12"}, Timeout: "30s"}
 	logs := &fleetLog{}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
