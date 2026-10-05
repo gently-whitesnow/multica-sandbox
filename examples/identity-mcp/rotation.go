@@ -163,9 +163,6 @@ func rotation() error {
 			return fmt.Errorf("ended attempt retained access: %w", err)
 		}
 	}
-	if err := rotationRedirect(ctx, adapter, states, tasks[0]); err != nil {
-		return err
-	}
 	if err := rotationFailures(ctx, adapter, states, tasks); err != nil {
 		return err
 	}

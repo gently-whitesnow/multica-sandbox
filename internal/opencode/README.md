@@ -30,7 +30,7 @@ named `peers`. Each attempt gets a new internal network with only those peers an
 its own container. Template peer aliases preserve the selected MCP hostname. Place
 Multica, IAM, resolver and credential stores on a separate control network. Only
 approved MCP/gateway services may be peers. Enforce host/metadata and destination
-policy outside Docker; internal bridges and the adapter plugin do not establish a
+policy outside Docker; internal bridges do not establish a
 production adversarial egress boundary. Do not attach untrusted workloads/services
 to the template. Concurrent attempt containers never share a network.
 
@@ -69,10 +69,9 @@ trusted test configuration solely to exercise tool turns without a subscription.
    controller; downstream leases bound crash/outage admission. Startup removes
    owned resources and invokes authority recovery before accepting claims.
 
-The local dependency-free plugin refuses redirects and bearer delivery outside
-selected URLs. The global config directory is read-only, avoiding OpenCode's startup
-package install. Native OAuth reads the replacement file in the running process.
-The plugin is not enforcement against an agent that deliberately exfiltrates its JWT.
+OpenCode uses its native MCP transport. Native OAuth reads the replacement file
+in the running process. The global config directory is read-only, avoiding
+OpenCode's startup package install.
 
 ## External authority adapter
 
@@ -97,7 +96,7 @@ is outside this contract. A stopped renewal loop alone does not revoke a JWT.
 
 `VERIFY_OPENCODE=1 ./verify.sh` runs real Keycloak and MCP with two native OpenCode
 tasks across multiple JWT expiries, separate workspaces/networks and successful
-calls under at least three token versions. It covers redirect refusal, real issuance
+calls under at least three token versions. It covers real issuance
 and resolver outages, cancellation, still-unexpired ended-token denial and cleanup.
 Add `VERIFY_SERVICE=1` for a real Multica claim through the actual Compose controller.
 `VERIFY_CONTAINERS=1` checks projection/network isolation and startup cleanup.

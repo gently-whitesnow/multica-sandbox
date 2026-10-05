@@ -79,7 +79,7 @@ Duplicate rules are rejected. No rules means no approved MCP delivery.
 The caller must supply a connection selected by trusted Multica task data. Rules
 approve identity delivery; they do not add MCP connections, connect to servers or
 set tool permissions. The OpenCode adapter applies these rules to trusted claim selections and rejects
-conflicting credentials and redirects.
+conflicting credentials.
 `Acquire(ref)` obtains identity without selecting a destination; adapters must use
 `AcquireForMCP(ref, selectedURL)` for MCP delivery.
 

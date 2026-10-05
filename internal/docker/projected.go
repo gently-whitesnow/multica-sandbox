@@ -15,7 +15,7 @@ import (
 )
 
 var networkPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
-var projectionPaths = map[string]bool{"/workspace/opencode.json": true, "/workspace/prompt.txt": true, "/workspace/guard.js": true, "/workspace/data/opencode/mcp-auth.json": true}
+var projectionPaths = map[string]bool{"/workspace/opencode.json": true, "/workspace/prompt.txt": true, "/workspace/data/opencode/mcp-auth.json": true}
 
 type Projected struct {
 	Backend

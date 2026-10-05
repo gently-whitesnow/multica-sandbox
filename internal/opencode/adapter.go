@@ -89,11 +89,7 @@ func (r *running) initialize(ctx context.Context, prompt []byte) error {
 	if err != nil {
 		return err
 	}
-	guard, err := Guard(r.connections)
-	if err != nil {
-		return err
-	}
-	for path, data := range map[string][]byte{"/workspace/opencode.json": config, "/workspace/prompt.txt": prompt, "/workspace/guard.js": guard} {
+	for path, data := range map[string][]byte{"/workspace/opencode.json": config, "/workspace/prompt.txt": prompt} {
 		if err := r.workload.Write(ctx, path, data); err != nil {
 			return err
 		}

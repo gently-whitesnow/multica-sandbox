@@ -56,14 +56,13 @@ cleanup revokes all fingerprints for that attempt. See ADR 0009.
 
 The Docker path creates an internal network per attempt and attaches only operator
 approved MCP/gateway peers from a validated template. Issuers, resolvers and Multica
-stay outside those networks. A dependency-free local OpenCode plugin refuses redirects
-and unauthorized bearer recipients; it is adapter behavior, not an adversarial egress
-boundary. External deployment policy remains required. The global config directory
+stay outside those networks. OpenCode uses its native MCP transport and OAuth store.
+External deployment policy remains required. The global config directory
 is read-only to avoid startup package installation; images may provide their own tools.
 
 Maintained tests run two native OpenCode tasks with real Keycloak JWTs across
 multiple expiries, using a credential-free deterministic model fixture. They assert
-successful MCP calls, distinct token versions, workspace separation, redirects,
+successful MCP calls, distinct token versions, workspace separation,
 issuer/resolver outages, cancellation and denial of still-unexpired ended tokens.
 The upstream fixture also exercises a real claim through the Compose controller.
 Inference identity and complete events/usage/session/repository behavior remain

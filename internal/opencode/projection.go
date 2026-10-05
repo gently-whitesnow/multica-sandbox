@@ -70,7 +70,7 @@ func Config(connections map[string]Remote) ([]byte, error) {
 	for name := range connections {
 		permissions[name+"_*"] = "allow"
 	}
-	return json.Marshal(map[string]any{"mcp": connections, "plugin": []string{"file:///workspace/guard.js"}, "autoupdate": false, "share": "disabled", "permission": permissions})
+	return json.Marshal(map[string]any{"mcp": connections, "autoupdate": false, "share": "disabled", "permission": permissions})
 }
 
 func Prompt(t multica.Task) ([]byte, error) {
@@ -79,27 +79,4 @@ func Prompt(t multica.Task) ([]byte, error) {
 		return nil, ErrDenied
 	}
 	return []byte(prompt), nil
-}
-
-func Guard(connections map[string]Remote) ([]byte, error) {
-	urls := []string{}
-	for _, c := range connections {
-		urls = append(urls, c.URL)
-	}
-	data, err := json.Marshal(urls)
-	if err != nil {
-		return nil, err
-	}
-	return []byte(`export const Guard = async () => {
- const allowed = new Set(` + string(data) + `);
- const original = globalThis.fetch;
- globalThis.fetch = (input, init) => {
-  const url = typeof input === "string" ? input : input.url ?? input.href;
-  const headers = new Headers(input instanceof Request ? input.headers : undefined);
-  new Headers(init?.headers).forEach((value, key) => headers.set(key, value));
-  if (headers.has("authorization") && !allowed.has(url)) throw new Error("Unapproved bearer recipient");
-  return original(input, {...init, redirect: "error"});
- };
- return {};
-};`), nil
 }

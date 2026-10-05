@@ -89,7 +89,7 @@ Revocation applies to new calls, not cancellation of already running operations.
 This fixture does not run Multica, a coding agent, LiteLLM or inference, and does
 not prove egress isolation, token-delivery security or production HA. The OpenCode variant uses two isolated task containers, 20-second real JWTs and
 24 MCP tool turns per task; inference responses are deterministic and use no account.
-It verifies at least three successfully used JWTs, multiple expiries, redirects,
+It verifies at least three successfully used JWTs, multiple expiries,
 issuer/resolver outages and cancellation, then denies ended tokens before their expiry.
 It exposes no host ports. Only its trusted scenario mounts the Docker socket.
 `VERIFY_SERVICE=1 VERIFY_OPENCODE=1 ./verify.sh` also tests a real Multica claim

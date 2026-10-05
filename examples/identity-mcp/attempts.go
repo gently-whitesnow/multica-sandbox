@@ -38,7 +38,7 @@ func (g *registry) attempts(secret []byte) http.Handler {
 			}
 		case "renew":
 			existing, exists := g.grants[request.TokenHash]
-			if g.ended[request.Attempt] || (request.URL != "http://gateway:8080/mcp" && request.URL != "http://gateway:8080/redirect") || len(request.TokenHash) != 64 || request.Agent != "20000000-0000-4000-8000-000000000001" || request.Attempt == "" || request.Task == "" || request.ExpiresAt <= time.Now().Unix() || request.ExpiresAt > time.Now().Add(15*time.Second).Unix() || (exists && existing.Attempt != request.Attempt) {
+			if g.ended[request.Attempt] || request.URL != "http://gateway:8080/mcp" || len(request.TokenHash) != 64 || request.Agent != "20000000-0000-4000-8000-000000000001" || request.Attempt == "" || request.Task == "" || request.ExpiresAt <= time.Now().Unix() || request.ExpiresAt > time.Now().Add(15*time.Second).Unix() || (exists && existing.Attempt != request.Attempt) {
 				w.WriteHeader(403)
 				return
 			}
@@ -59,7 +59,7 @@ func (g *registry) evidence(secret []byte) http.Handler {
 		}
 		g.RLock()
 		defer g.RUnlock()
-		out := map[string][2]int{"redirects": {g.redirects, g.captures}}
+		out := map[string][2]int{}
 		for key, calls := range g.calls {
 			out[key] = [2]int{calls, len(g.hashes[key])}
 		}

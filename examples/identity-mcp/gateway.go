@@ -27,11 +27,10 @@ type grant struct {
 }
 type registry struct {
 	sync.RWMutex
-	grants              map[string]grant
-	ended               map[string]bool
-	calls               map[string]int
-	hashes              map[string]map[string]bool
-	redirects, captures int
+	grants map[string]grant
+	ended  map[string]bool
+	calls  map[string]int
+	hashes map[string]map[string]bool
 }
 
 func fingerprint(token string) string {
@@ -113,20 +112,6 @@ func gateway() error {
 	mux.Handle("/attempts", grants.attempts(secret))
 	mux.Handle("/evidence", grants.evidence(secret))
 	mux.HandleFunc("/v1/chat/completions", mockInference)
-	mux.HandleFunc("/redirect", func(w http.ResponseWriter, r *http.Request) {
-		grants.Lock()
-		grants.redirects++
-		grants.Unlock()
-		http.Redirect(w, r, "http://gateway:8080/capture", 307)
-	})
-	mux.HandleFunc("/capture", func(w http.ResponseWriter, r *http.Request) {
-		grants.Lock()
-		if r.Header.Get("Authorization") != "" {
-			grants.captures++
-		}
-		grants.Unlock()
-		w.WriteHeader(403)
-	})
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(204) })
 	return serve(":8080", mux)
 }
