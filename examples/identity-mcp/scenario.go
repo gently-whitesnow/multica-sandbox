@@ -113,8 +113,8 @@ func scenario() error {
 	if a == b {
 		return fmt.Errorf("attempt tokens are identical")
 	}
-	runA := grant{"grant-a", "workspace-a", "agent-1", "task-a", "attempt-a", "document-a", fingerprint(a), true, "", 0}
-	runB := grant{"grant-b", "workspace-a", "agent-1", "task-b", "attempt-b", "document-b", fingerprint(b), true, "", 0}
+	runA := grant{"grant-a", "workspace-a", "agent-1", "task-a", "attempt-a", "document-a", fingerprint(a), true, "", "", 0}
+	runB := grant{"grant-b", "workspace-a", "agent-1", "task-b", "attempt-b", "document-b", fingerprint(b), true, "", "", 0}
 	for _, run := range []grant{runA, runB} {
 		if err := enroll(ctx, run); err != nil {
 			return err

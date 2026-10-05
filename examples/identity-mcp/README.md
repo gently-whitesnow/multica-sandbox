@@ -93,4 +93,10 @@ It verifies at least three successfully used JWTs, multiple expiries,
 issuer/resolver outages and cancellation, then denies ended tokens before their expiry.
 It exposes no host ports. Only its trusted scenario mounts the Docker socket.
 `VERIFY_SERVICE=1 VERIFY_OPENCODE=1 ./verify.sh` also tests a real Multica claim
-through the persistent Compose controller. Inference identity remains #22. See [ADR 0009](../../adrs/0009-attempt-authorization.md).
+through the persistent Compose controller. Optional inference identity follows ADR 0012. See [ADR 0009](../../adrs/0009-attempt-authorization.md).
+
+`VERIFY_INFERENCE=1 ./verify.sh` adds pinned LiteLLM with a gateway-only fixture
+key and independent inference JWTs. The same native OpenCode process rotates MCP
+and inference identity across real expiries. Static/external bindings, external
+model grants, streaming, outages, cancellation and invalid-token behavior are
+checked without contacting a real provider or requiring a subscription.

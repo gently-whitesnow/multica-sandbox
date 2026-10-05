@@ -60,10 +60,17 @@ options.apiKey, a file substitution or provider auth.json kept the old bearer.
 A missing projected token produced no upstream request. Tests used synthetic
 tokens and an OpenAI-compatible SSE fixture, not real JWT renewal or LiteLLM.
 
-Renewal, dynamic bindings and the embedded relay are not implemented. Require
-maintained adapter tests, real issuer/gateway checks, streaming/cancellation,
-tenant isolation, credential-leakage tests and safe offline plugin packaging
-before advertising either path as production support.
+The experimental external-gateway adapter resolves inference endpoint/model
+bindings separately from identity credentials. Static bindings and authenticated
+external sources use trusted server/workspace/agent references. Operator-approved
+URL/issuer pairs bound delivery; changed bindings stop the running attempt.
+Fingerprint leases use `inference_url`, distinct from `mcp_url`, and share attempt
+revocation/recovery. The dependency-free provider hook replaces authorization
+from an atomic token file and leaves global fetch untouched.
+
+The embedded relay is not implemented. Require maintained real issuer/gateway
+checks, streaming/cancellation, tenant isolation, credential-leakage tests and
+safe offline plugin packaging before advertising production support.
 
 ## References
 

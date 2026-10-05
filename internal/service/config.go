@@ -57,8 +57,9 @@ func ReadConfig(path string) (Config, error) {
 }
 
 type OpenCodeConfig struct {
-	IdentityFile string         `json:"identity_file"`
-	Authority    attempt.Config `json:"authority"`
-	Network      string         `json:"network"`
-	Peers        []string       `json:"peers"`
+	InferenceFile string         `json:"inference_file,omitempty"`
+	IdentityFile  string         `json:"identity_file"`
+	Authority     attempt.Config `json:"authority"`
+	Network       string         `json:"network"`
+	Peers         []string       `json:"peers"`
 }

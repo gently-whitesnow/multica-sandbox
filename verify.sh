@@ -27,3 +27,5 @@ if [ "${VERIFY_IDENTITY:-0}" = 1 ]; then ./scripts/test-identity.sh; fi
 if [ "${VERIFY_OPENCODE:-0}" = 1 ]; then ./scripts/test-opencode.sh; fi
 git diff --check
 git diff --cached --check
+
+if [ "${VERIFY_INFERENCE:-0}" = 1 ]; then ./scripts/test-inference.sh; fi

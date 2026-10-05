@@ -37,12 +37,16 @@ func (g *registry) attempts(secret []byte) http.Handler {
 				}
 			}
 		case "renew":
+			recipient := request.URL
+			if request.InferenceURL != "" {
+				recipient = request.InferenceURL
+			}
 			existing, exists := g.grants[request.TokenHash]
-			if g.ended[request.Attempt] || request.URL != "http://gateway:8080/mcp" || len(request.TokenHash) != 64 || request.Agent != "20000000-0000-4000-8000-000000000001" || request.Attempt == "" || request.Task == "" || request.ExpiresAt <= time.Now().Unix() || request.ExpiresAt > time.Now().Add(15*time.Second).Unix() || (exists && existing.Attempt != request.Attempt) {
+			if g.ended[request.Attempt] || ((request.URL == "") == (request.InferenceURL == "")) || (recipient != "http://gateway:8080/mcp" && recipient != "http://litellm:4000/v1") || len(request.TokenHash) != 64 || request.Agent != "20000000-0000-4000-8000-000000000001" || request.Attempt == "" || request.Task == "" || request.ExpiresAt <= time.Now().Unix() || request.ExpiresAt > time.Now().Add(15*time.Second).Unix() || (exists && (existing.Attempt != request.Attempt || existing.URL != recipient)) {
 				w.WriteHeader(403)
 				return
 			}
-			g.grants[request.TokenHash] = grant{ID: request.Attempt, Controller: request.Controller, Workspace: request.Workspace, Agent: "agent-1", Task: request.Task, Attempt: request.Attempt, Resource: "document", TokenHash: request.TokenHash, Active: true, Until: request.ExpiresAt}
+			g.grants[request.TokenHash] = grant{ID: request.Attempt, URL: recipient, Controller: request.Controller, Workspace: request.Workspace, Agent: "agent-1", Task: request.Task, Attempt: request.Attempt, Resource: "document", TokenHash: request.TokenHash, Active: true, Until: request.ExpiresAt}
 		default:
 			w.WriteHeader(400)
 			return
@@ -59,7 +63,7 @@ func (g *registry) evidence(secret []byte) http.Handler {
 		}
 		g.RLock()
 		defer g.RUnlock()
-		out := map[string][2]int{}
+		out := map[string][2]int{"inference-requests": {g.inferenceRequests, 0}}
 		for key, calls := range g.calls {
 			out[key] = [2]int{calls, len(g.hashes[key])}
 		}

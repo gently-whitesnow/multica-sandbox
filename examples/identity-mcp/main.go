@@ -33,6 +33,8 @@ func main() {
 		err = gateway()
 	case "evidence":
 		err = printEvidence()
+	case "inference-rotation":
+		err = rotation()
 	case "rotation":
 		err = rotation()
 	case "scenario":
@@ -66,6 +68,17 @@ func initialize() error {
 		"clientId": "example-agent", "secret": secret, "enabled": true, "publicClient": false, "serviceAccountsEnabled": true, "standardFlowEnabled": false, "directAccessGrantsEnabled": false,
 		"protocolMappers": []any{map[string]any{"name": "mcp-audience", "protocol": "openid-connect", "protocolMapper": "oidc-audience-mapper", "config": map[string]string{"included.custom.audience": "sandbox-mcp", "access.token.claim": "true", "id.token.claim": "false"}}},
 	}}}
+	if os.Getenv("INFERENCE_FIXTURE") == "1" {
+		infSecret := randomSecret()
+		realm["users"] = append(realm["users"].([]any), map[string]any{"id": inferenceSubject, "username": "service-account-example-inference", "enabled": true, "serviceAccountClientId": "example-inference"})
+		realm["clients"] = append(realm["clients"].([]any), map[string]any{"clientId": "example-inference", "secret": infSecret, "enabled": true, "publicClient": false, "serviceAccountsEnabled": true, "standardFlowEnabled": false, "directAccessGrantsEnabled": false, "protocolMappers": []any{map[string]any{"name": "inference-audience", "protocol": "openid-connect", "protocolMapper": "oidc-audience-mapper", "config": map[string]string{"included.custom.audience": "sandbox-inference", "access.token.claim": "true", "id.token.claim": "false"}}}})
+		if err := os.WriteFile("/secrets/inference", []byte(infSecret), 0600); err != nil {
+			return err
+		}
+		if err := os.WriteFile("/secrets/upstream", []byte(randomSecret()), 0600); err != nil {
+			return err
+		}
+	}
 	data, _ := json.Marshal(realm)
 	if err := os.WriteFile("/realm/realm.json", data, 0644); err != nil {
 		return err

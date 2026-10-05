@@ -31,17 +31,15 @@ Multica owns tasks and retries. The controller manages execution environments;
 the runner executes one task through a supported agent adapter.
 
 Execution backends, agent adapters and inference connections are separate.
-Multica selects the runtime and model; provider credentials stay outside the sandbox.
-ADR 0009 selects a protected inference gateway. Full task/event/session adapters
-and renewable inference identity remain separate verification work.
+Multica selects the runtime; trusted bindings select inference gateway/model.
+Provider credentials stay outside the sandbox. Full task/event/session adapters
+remain separate verification work.
 
 Containers share the host kernel; isolation depends on policy and granted credentials.
 
-See [ADR 0001](adrs/0001-isolated-task-runtime.md) for the architecture and scope.
-Image customization and tool delivery follow
-[ADR 0002](adrs/0002-custom-images-and-tools.md). Access boundaries follow
-[ADR 0003](adrs/0003-identity-and-mcp-access.md); component selection and acceptance
-gates follow [ADR 0004](adrs/0004-reuse-and-security-gates.md).
+Architecture: [ADR 0001](adrs/0001-isolated-task-runtime.md). Images/tools:
+[ADR 0002](adrs/0002-custom-images-and-tools.md). Access boundaries: [ADR 0003](adrs/0003-identity-and-mcp-access.md); component selection and acceptance
+gates: [ADR 0004](adrs/0004-reuse-and-security-gates.md).
 
 ## Controller service
 
@@ -74,8 +72,9 @@ networkless container with bounded resources and temporary storage. Custom image
 need no inheritance; image-declared volumes are rejected. No service tokens or
 host mounts enter execution. Workload output/files are discarded; completion is a
 fixed test result. The opt-in OpenCode path uses per-attempt internal networks, native MCP OAuth
-rotation and external attempt leases. Detailed events, usage, repositories, retained
-sessions and inference identity remain unimplemented.
+rotation and external attempt leases. Optional [inference identity](internal/inference/README.md)
+uses a separate JWT and provider auth hook. Events, usage, repositories and
+retained sessions remain unimplemented.
 
 Docker restarts a crashed controller. On startup it removes its old executions
 before asking Multica to recover tasks. Persistent state binds the shared lock to
@@ -86,7 +85,7 @@ Never remove the state volume while the controller is active.
 Use a dedicated user PAT. Add that user to each workspace; the controller discovers
 membership every 10 seconds and registers a runtime. The runtime owner manually
 sets public visibility in Multica. Public does not share across workspaces.
-An mdt_ token discovers only its bound workspace. Inference identity remains separate work (#22). New workspace registration never sweeps active containers.
+An mdt_ token discovers only its bound workspace; registration never sweeps active containers.
 
 Workspace discovery is always enabled. A single accessible workspace uses the same
 execution path as many workspaces; `concurrency: 1` limits global execution to one
@@ -120,7 +119,8 @@ loopback HTTP; deployment configuration requires HTTPS for non-loopback origins.
 
 [Identity/MCP](examples/identity-mcp/README.md) and [end-to-end lab](examples/end-to-end/README.md):
 Compose fixtures and trust-boundary diagrams. The identity fixture also verifies
-the controller OpenCode path with deterministic, credential-free inference.
+the controller OpenCode path with deterministic inference. `VERIFY_INFERENCE=1`
+adds Keycloak/LiteLLM rotation; combine all three flags for controller inference.
 
 ## Contributing
 

@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -26,17 +27,18 @@ type Config struct {
 }
 
 type Grant struct {
-	Version    int    `json:"version"`
-	Controller string `json:"controller"`
-	Attempt    string `json:"attempt,omitempty"`
-	Server     string `json:"server,omitempty"`
-	Workspace  string `json:"workspace_id,omitempty"`
-	Agent      string `json:"agent_id,omitempty"`
-	Task       string `json:"task_id,omitempty"`
-	URL        string `json:"mcp_url,omitempty"`
-	TokenHash  string `json:"token_hash,omitempty"`
-	ExpiresAt  int64  `json:"expires_at,omitempty"`
-	Action     string `json:"action"`
+	Version      int    `json:"version"`
+	Controller   string `json:"controller"`
+	Attempt      string `json:"attempt,omitempty"`
+	Server       string `json:"server,omitempty"`
+	Workspace    string `json:"workspace_id,omitempty"`
+	Agent        string `json:"agent_id,omitempty"`
+	Task         string `json:"task_id,omitempty"`
+	URL          string `json:"mcp_url,omitempty"`
+	InferenceURL string `json:"inference_url,omitempty"`
+	TokenHash    string `json:"token_hash,omitempty"`
+	ExpiresAt    int64  `json:"expires_at,omitempty"`
+	Action       string `json:"action"`
 }
 
 type Authority struct {
@@ -85,11 +87,11 @@ func (a *Authority) Apply(ctx context.Context, grant Grant) error {
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := a.client.Do(req)
 	if err != nil {
-		return ErrDenied
+		return fmt.Errorf("authority request unavailable: %w", ErrDenied)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent {
-		return ErrDenied
+		return fmt.Errorf("authority HTTP %d: %w", resp.StatusCode, ErrDenied)
 	}
 	return nil
 }

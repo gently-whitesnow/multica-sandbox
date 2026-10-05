@@ -15,6 +15,7 @@ from verified behavior.
   identity resolution contract (0013).
 - `examples/end-to-end/`: opt-in real Multica/OpenCode/inference lab.
 - `examples/identity-mcp/`: disposable identity and MCP contract fixture.
+- `internal/inference/`: trusted gateway/model bindings and renewable inference identity.
 - `internal/identity/`: static/external identity resolution and verified Keycloak issuance.
 - `cmd/sandbox-controller`, `internal/service/`: persistent controller service.
 - `Dockerfile`, `compose.yaml`, `deploy/`: controller packaging/configuration.
@@ -56,6 +57,8 @@ available. Run `VERIFY_CONTAINERS=1 ./verify.sh` for backend changes and
 `VERIFY_SERVICE=1 ./verify.sh` for service/packaging changes. Never run test commands
 against production tasks. Keep fixture data generic.
 Run `VERIFY_IDENTITY=1 ./verify.sh` for identity/MCP fixture changes.
+Run `VERIFY_INFERENCE=1 ./verify.sh` for native OpenCode/Keycloak/LiteLLM checks;
+add `VERIFY_SERVICE=1 VERIFY_OPENCODE=1` for real controller inference.
 The end-to-end lab uses `scripts/e2e.sh`; real inference requires explicit local
 subscription login. Never copy account data into documentation or test reports.
 CI is paused; run verification locally. Do not re-enable CI without an explicit
