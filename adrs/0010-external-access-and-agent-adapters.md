@@ -40,8 +40,9 @@ This demonstrates an OSS integration route, not a production authorization SDK.
 MCP does not have to transport inference requests.
 
 The lab's single-task envelope and OpenCode JSON interpretation are experimental.
-Keep it separate from the offline controller until context, cancellation, leases,
-event/usage mapping and adversarial network/identity checks support integration.
+The persistent controller now has an experimental OpenCode MCP integration with
+safe context, cancellation, leases and identity checks. Full event/usage mapping,
+inference and production conformance remain #22/#24.
 Do not silently advertise missing Multica features or copy credential-bearing
 claim fields, arbitrary environment or untrusted endpoint configuration.
 

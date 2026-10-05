@@ -2,6 +2,7 @@ package multica
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
@@ -14,11 +15,17 @@ type Runtime struct {
 
 // Task deliberately excludes credentials and arbitrary claim payloads.
 type Task struct {
-	WorkspaceID         string `json:"workspace_id"`
-	ID                  string `json:"id"`
-	RuntimeID           string `json:"runtime_id"`
-	DispatchedAt        string `json:"dispatched_at"`
-	StartClaimSupported bool   `json:"start_claim_supported"`
+	AgentID               string            `json:"agent_id"`
+	Agent                 *Agent            `json:"agent"`
+	IssueID               string            `json:"issue_id"`
+	WorkspaceContext      string            `json:"workspace_context"`
+	TriggerCommentContent string            `json:"trigger_comment_content"`
+	RemoteMCPConnections  []json.RawMessage `json:"remote_mcp_connections"`
+	WorkspaceID           string            `json:"workspace_id"`
+	ID                    string            `json:"id"`
+	RuntimeID             string            `json:"runtime_id"`
+	DispatchedAt          string            `json:"dispatched_at"`
+	StartClaimSupported   bool              `json:"start_claim_supported"`
 }
 
 type Recovery struct {
@@ -30,17 +37,24 @@ func (c *Client) Register(ctx context.Context, workspace, daemon string) (Runtim
 	if !validID(workspace) || !validID(daemon) {
 		return Runtime{}, fmt.Errorf("workspace and daemon must be UUIDs")
 	}
+	return c.RegisterProvider(ctx, workspace, daemon, ProbeProvider)
+}
+
+func (c *Client) RegisterProvider(ctx context.Context, workspace, daemon, provider string) (Runtime, error) {
+	if !validID(workspace) || !validID(daemon) || (provider != ProbeProvider && provider != "opencode") {
+		return Runtime{}, fmt.Errorf("invalid runtime registration")
+	}
 	var out struct {
 		Runtimes []Runtime `json:"runtimes"`
 	}
 	err := c.call(ctx, http.MethodPost, "/api/daemon/register", map[string]any{
-		"workspace_id": workspace, "daemon_id": daemon, "device_name": "sandbox-probe",
-		"runtimes": []map[string]string{{"name": "Sandbox lifecycle probe (not an agent)", "type": ProbeProvider, "version": "experimental", "status": "online"}},
+		"workspace_id": workspace, "daemon_id": daemon, "device_name": "multica-sandbox",
+		"runtimes": []map[string]string{{"name": "Sandbox experimental " + provider, "type": provider, "version": "experimental", "status": "online"}},
 	}, &out)
 	if err != nil {
 		return Runtime{}, err
 	}
-	if len(out.Runtimes) != 1 || !validID(out.Runtimes[0].ID) || out.Runtimes[0].Provider != ProbeProvider {
+	if len(out.Runtimes) != 1 || !validID(out.Runtimes[0].ID) || out.Runtimes[0].Provider != provider {
 		return Runtime{}, fmt.Errorf("unexpected runtime registration")
 	}
 	return out.Runtimes[0], nil
@@ -114,4 +128,15 @@ func (c *Client) taskPost(ctx context.Context, id, action string, body any) erro
 		return fmt.Errorf("invalid task ID")
 	}
 	return c.call(ctx, http.MethodPost, "/api/daemon/tasks/"+id+"/"+action, body, nil)
+}
+
+func (c *Client) AgentMessage(ctx context.Context, id string) error {
+	return c.taskPost(ctx, id, "messages", map[string]any{"messages": []map[string]any{{"seq": 1, "type": "text", "content": "Experimental OpenCode attempt started.", "created_at": time.Now().UTC()}}})
+}
+func (c *Client) AgentComplete(ctx context.Context, id string) error {
+	return c.taskPost(ctx, id, "complete", map[string]string{"output": "OpenCode process completed; detailed events, usage and artifacts are not yet reported by this experimental adapter."})
+}
+
+func (c *Client) AgentFail(ctx context.Context, id string) error {
+	return c.taskPost(ctx, id, "fail", map[string]string{"error": "OpenCode execution or identity delivery failed", "failure_reason": "execution_failed"})
 }

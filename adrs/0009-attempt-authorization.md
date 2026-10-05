@@ -49,8 +49,16 @@ cancellation requires a separate integration contract.
 
 Production integration must verify identity bootstrap, tenant/resource isolation,
 wrong-audience/expired-token rejection, lifecycle revocation and external egress
-policy before advertising support. Controller hooks and deployment adapters remain
-future work; no security capability is inferred from protocol compatibility.
+policy before advertising support. The experimental OpenCode path integrates an authenticated deployment-owned
+authority through `internal/attempt`. Renewals register JWT fingerprints with an
+exact MCP recipient and a maximum 15-second lease, checked every second. Completion,
+cancellation and failed renewal revoke the attempt before terminal reporting; startup
+recovers the controller namespace before claims. An authority outage still removes
+the container and stops the controller; downstream access ends when its lease expires.
+The authority must reject ended-attempt re-enrollment and fingerprint reassignment,
+check leases on every operation and fail closed after restart. Its wire adapter is
+experimental integration plumbing, not a runtime-owned IAM service.
+No security capability is inferred from protocol compatibility.
 
 ## References
 

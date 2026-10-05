@@ -2,6 +2,7 @@ x-example: &example
   build:
     context: ../..
     dockerfile: examples/identity-mcp/Dockerfile
+    target: fixture
   networks: [fixture]
 services:
   seed:

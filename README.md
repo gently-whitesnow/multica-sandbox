@@ -9,7 +9,8 @@ Multica's [security model](https://multica.ai/docs/security-model) states:
 multica-sandbox is being built to provide that boundary: disposable environments
 for running AI coding agents in your infrastructure.
 
-**Status:** experimental offline controller; a separate real-agent lab exists.
+**Status:** experimental controller with offline probes and opt-in OpenCode MCP
+identity rotation; a separate subscription-backed lab exists.
 Docker/runc tested; Sysbox and Kubernetes remain planned. Independent runtime, no Multica fork.
 
 ## Design
@@ -30,13 +31,11 @@ Multica owns tasks and retries. The controller manages execution environments;
 the runner executes one task through a supported agent adapter.
 
 Execution backends, agent adapters and inference connections are separate.
-Multica selects the runtime and model. Planned adapters translate task context,
-events and sessions without coupling sandbox policy to a model vendor. Provider
-credentials stay outside the sandbox. ADR 0009 selects a protected OpenAI-compatible
-inference gateway; adapters must demonstrate compatibility before being advertised.
+Multica selects the runtime and model; provider credentials stay outside the sandbox.
+ADR 0009 selects a protected inference gateway. Full task/event/session adapters
+and renewable inference identity remain separate verification work.
 
-Containers share the host kernel: isolation depends on the runtime, policy and
-granted credentials.
+Containers share the host kernel; isolation depends on policy and granted credentials.
 
 See [ADR 0001](adrs/0001-isolated-task-runtime.md) for the architecture and scope.
 Image customization and tool delivery follow
@@ -46,10 +45,11 @@ gates follow [ADR 0004](adrs/0004-reuse-and-security-gates.md).
 
 ## Controller service
 
-Use isolated test workspaces: the current runtime executes configured test
-commands, not the task's agent instructions. Requires Linux Docker with cgroup v2,
+Use isolated test workspaces. The default runtime executes configured test
+commands; the opt-in [OpenCode path](internal/opencode/README.md) projects agent
+instructions and selected remote MCP connections. Requires Linux Docker with cgroup v2,
 builtin seccomp and resource controllers; Docker Desktop is tested for development.
-The controller uses the host socket and creates sibling workload containers.
+The controller creates sibling workloads through the host socket.
 Socket access is host-administrative authority; prefer a dedicated worker host.
 
 ```sh
@@ -73,7 +73,9 @@ One controller serves all accessible workspaces with a shared `concurrency` limi
 networkless container with bounded resources and temporary storage. Custom images
 need no inheritance; image-declared volumes are rejected. No service tokens or
 host mounts enter execution. Workload output/files are discarded; completion is a
-fixed test result. No agent adapter, MCP or checkpoint recovery is implemented.
+fixed test result. The opt-in OpenCode path uses per-attempt internal networks, native MCP OAuth
+rotation and external attempt leases. Detailed events, usage, repositories, retained
+sessions and inference identity remain unimplemented.
 
 Docker restarts a crashed controller. On startup it removes its old executions
 before asking Multica to recover tasks. Persistent state binds the shared lock to
@@ -84,8 +86,7 @@ Never remove the state volume while the controller is active.
 Use a dedicated user PAT. Add that user to each workspace; the controller discovers
 membership every 10 seconds and registers a runtime. The runtime owner manually
 sets public visibility in Multica. Public does not share across workspaces.
-An mdt_ token discovers only its bound workspace. Inference credentials remain
-separate and unsupported. New workspace registration never sweeps active containers.
+An mdt_ token discovers only its bound workspace. Inference identity remains separate work (#22). New workspace registration never sweeps active containers.
 
 Workspace discovery is always enabled. A single accessible workspace uses the same
 execution path as many workspaces; `concurrency: 1` limits global execution to one
@@ -118,7 +119,8 @@ The service fixture shares only the disposable server's network namespace to use
 loopback HTTP; deployment configuration requires HTTPS for non-loopback origins.
 
 [Identity/MCP](examples/identity-mcp/README.md) and [end-to-end lab](examples/end-to-end/README.md):
-Compose fixtures and trust-boundary diagrams; separate from the offline controller.
+Compose fixtures and trust-boundary diagrams. The identity fixture also verifies
+the controller OpenCode path with deterministic, credential-free inference.
 
 ## Contributing
 
@@ -134,14 +136,14 @@ Install the pinned [Harness CLI](https://github.com/gently-whitesnow/harness-cli
 to also build and test the Compose controller. Set
 `VERIFY_CONTAINERS=1` for hostile-container conformance (preload the image above).
 Set `VERIFY_IDENTITY=1` for the disposable identity/MCP fixture.
+Set `VERIFY_OPENCODE=1` for native OpenCode/JWT rotation and failure tests; combine
+with `VERIFY_SERVICE=1` for the real Multica → Compose controller task.
 Set `VERIFY_COMMIT_RANGE=master..HEAD` to validate published commit messages.
 All available Harness checks for Go, YAML and repository documentation are required.
 Harness does not execute tests or toolchains; `verify.sh` runs those locally.
 CI is paused during development. The workflow supports manual dispatch only;
-enable it explicitly when ready.
-Harness reads Git-tracked files; stage new files before verification.
-The clone-local installation includes a commit-message hook. Run
-`.git/harness/bin/harness commit-message template` for the required format.
+enable it explicitly when ready; stage new files before verification.
+Run `.git/harness/bin/harness commit-message template` for the required format.
 
 ## License
 

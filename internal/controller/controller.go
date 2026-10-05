@@ -32,6 +32,7 @@ type Probe struct {
 	Duration time.Duration
 	Fail     bool
 	Observe  func(string, string)
+	Launch   func(context.Context, multica.Task) (execution.Run, error)
 }
 
 func (p *Probe) Connect(ctx context.Context, workspace, daemon string) (multica.Runtime, multica.Recovery, error) {
@@ -86,6 +87,10 @@ func (p *Probe) execute(ctx context.Context, t multica.Task, ticks <-chan time.T
 	}
 	done, stop, err := p.launch(ctx, t)
 	if err != nil {
+		var rejected *execution.RejectedError
+		if errors.As(err, &rejected) {
+			return p.finish(ctx, t.ID, err, func() error { return nil })
+		}
 		return err
 	}
 	defer func() {

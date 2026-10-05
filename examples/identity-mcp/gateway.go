@@ -22,10 +22,16 @@ const issuer = "http://keycloak:8080/realms/sandbox-example"
 type grant struct {
 	ID, Workspace, Agent, Task, Attempt, Resource, TokenHash string
 	Active                                                   bool
+	Controller                                               string
+	Until                                                    int64
 }
 type registry struct {
 	sync.RWMutex
-	grants map[string]grant
+	grants              map[string]grant
+	ended               map[string]bool
+	calls               map[string]int
+	hashes              map[string]map[string]bool
+	redirects, captures int
 }
 
 func fingerprint(token string) string {
@@ -49,7 +55,7 @@ func (g *registry) verifier(v *oidc.IDTokenVerifier) auth.TokenVerifier {
 		g.RLock()
 		defer g.RUnlock()
 		run, ok := g.grants[fingerprint(token)]
-		if !ok || !run.Active {
+		if !ok || !run.Active || (run.Until != 0 && run.Until <= time.Now().Unix()) {
 			return nil, auth.ErrInvalidToken
 		}
 		return &auth.TokenInfo{UserID: parsed.Subject, Expiration: parsed.Expiry, Extra: map[string]any{"grant": run}}, nil
@@ -97,13 +103,30 @@ func gateway() error {
 	if err != nil {
 		return err
 	}
-	grants := &registry{grants: map[string]grant{}}
+	grants := &registry{grants: map[string]grant{}, ended: map[string]bool{}, calls: map[string]int{}, hashes: map[string]map[string]bool{}}
 	server := mcp.NewServer(&mcp.Implementation{Name: "identity-contract-fixture", Version: "1"}, nil)
 	mcp.AddTool(server, &mcp.Tool{Name: "read_fixture", Description: "Read one granted fixture resource"}, grants.read)
 	handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true})
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", auth.RequireBearerToken(grants.verifier(provider.Verifier(&oidc.Config{ClientID: "sandbox-mcp", SupportedSigningAlgs: []string{"RS256"}})), nil)(handler))
 	mux.Handle("/grants", grants.admin(secret))
+	mux.Handle("/attempts", grants.attempts(secret))
+	mux.Handle("/evidence", grants.evidence(secret))
+	mux.HandleFunc("/v1/chat/completions", mockInference)
+	mux.HandleFunc("/redirect", func(w http.ResponseWriter, r *http.Request) {
+		grants.Lock()
+		grants.redirects++
+		grants.Unlock()
+		http.Redirect(w, r, "http://gateway:8080/capture", 307)
+	})
+	mux.HandleFunc("/capture", func(w http.ResponseWriter, r *http.Request) {
+		grants.Lock()
+		if r.Header.Get("Authorization") != "" {
+			grants.captures++
+		}
+		grants.Unlock()
+		w.WriteHeader(403)
+	})
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(204) })
 	return serve(":8080", mux)
 }
@@ -118,11 +141,16 @@ func (g *registry) read(_ context.Context, r *mcp.CallToolRequest, args readArgs
 		return nil, nil, fmt.Errorf("denied")
 	}
 	run, ok := r.Extra.TokenInfo.Extra["grant"].(grant)
-	g.RLock()
-	defer g.RUnlock()
+	g.Lock()
+	defer g.Unlock()
 	current := g.grants[run.TokenHash]
-	if !ok || !current.Active || current.ID != run.ID || current.Workspace != args.Workspace || current.Resource != args.Resource {
+	if !ok || !current.Active || (current.Until != 0 && current.Until <= time.Now().Unix()) || current.ID != run.ID || current.Workspace != args.Workspace || current.Resource != args.Resource {
 		return nil, nil, fmt.Errorf("denied")
 	}
+	g.calls[run.Attempt]++
+	if g.hashes[run.Attempt] == nil {
+		g.hashes[run.Attempt] = map[string]bool{}
+	}
+	g.hashes[run.Attempt][run.TokenHash] = true
 	return nil, map[string]string{"value": "fixture content", "attempt": run.Attempt}, nil
 }

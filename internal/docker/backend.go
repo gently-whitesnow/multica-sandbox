@@ -70,7 +70,7 @@ func (b *Backend) Reconcile(ctx context.Context) error {
 			return err
 		}
 	}
-	return nil
+	return reconcileNetworks(ctx, b.Owner)
 }
 func (b *Backend) name(attempt string) string {
 	sum := sha256.Sum256([]byte(b.Owner + ":" + attempt))

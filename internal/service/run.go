@@ -9,10 +9,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gently-whitesnow/multica-sandbox/internal/attempt"
 	"github.com/gently-whitesnow/multica-sandbox/internal/controller"
 	"github.com/gently-whitesnow/multica-sandbox/internal/docker"
+	agentidentity "github.com/gently-whitesnow/multica-sandbox/internal/identity"
 	"github.com/gently-whitesnow/multica-sandbox/internal/instance"
 	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
+	"github.com/gently-whitesnow/multica-sandbox/internal/opencode"
 )
 
 func Run(ctx context.Context, c Config, stateDir, tokenPath string, out io.Writer) error {
@@ -48,6 +51,10 @@ func Run(ctx context.Context, c Config, stateDir, tokenPath string, out io.Write
 	if err = bindState(stateDir, identity{strings.TrimRight(c.Server, "/"), c.Daemon, engine}); err != nil {
 		return err
 	}
+	command := c.Command
+	if c.OpenCode != nil {
+		c.Command = []string{"/bin/sh"}
+	}
 	backend := &docker.Backend{Image: c.Image, Owner: c.Daemon, Command: c.Command}
 	duration, err := time.ParseDuration(c.Timeout)
 	if err != nil || duration <= 0 {
@@ -62,5 +69,51 @@ func Run(ctx context.Context, c Config, stateDir, tokenPath string, out io.Write
 	if err = backend.Validate(ctx); err != nil {
 		return err
 	}
+	if c.OpenCode != nil {
+		c.Command = command
+		launch, err := openCodeAdapter(ctx, c, api, backend)
+		if err != nil {
+			return err
+		}
+		p.Launch = launch.Start
+		p.API = agentFleetAPI{api}
+		return serveFleet(ctx, c, stateDir, agentFleetAPI{api}, &p, out)
+	}
 	return serveFleet(ctx, c, stateDir, api, &p, out)
 }
+
+type agentFleetAPI struct{ *multica.Client }
+
+func (a agentFleetAPI) Register(ctx context.Context, ws, daemon string) (multica.Runtime, error) {
+	return a.RegisterProvider(ctx, ws, daemon, "opencode")
+}
+
+func openCodeAdapter(ctx context.Context, c Config, api *multica.Client, backend *docker.Backend) (*opencode.Adapter, error) {
+	config, err := agentidentity.ReadConfig(c.OpenCode.IdentityFile)
+	if err != nil || config.Server != strings.TrimRight(c.Server, "/") {
+		return nil, agentidentity.ErrDenied
+	}
+	issuer, err := agentidentity.New(config)
+	if err != nil {
+		return nil, err
+	}
+	authority, err := attempt.New(c.OpenCode.Authority)
+	if err != nil {
+		return nil, err
+	}
+	if err = authority.Apply(ctx, attempt.Grant{Controller: c.Daemon, Action: "recover"}); err != nil {
+		return nil, err
+	}
+	workloads := &docker.Projected{Backend: *backend, Network: c.OpenCode.Network, Peers: c.OpenCode.Peers}
+	if err = workloads.ValidateNetwork(ctx); err != nil {
+		return nil, err
+	}
+	return &opencode.Adapter{Server: config.Server, Controller: c.Daemon, Issuer: issuer, Authority: authority, Status: api, Workloads: workloads, Command: c.Command}, nil
+}
+
+func (a agentFleetAPI) Message(ctx context.Context, id string) error { return a.AgentMessage(ctx, id) }
+func (a agentFleetAPI) Complete(ctx context.Context, id string) error {
+	return a.AgentComplete(ctx, id)
+}
+
+func (a agentFleetAPI) Fail(ctx context.Context, id string) error { return a.AgentFail(ctx, id) }
