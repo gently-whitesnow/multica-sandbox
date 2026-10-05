@@ -42,16 +42,31 @@ a refresh mechanism. No additional renewal process is required.
 
 ## Consequences
 
-A disposable experiment with OpenCode 1.18.34 confirmed that one running process
-uses a replacement access token from `mcp-auth.json`; changing a static header
-configuration retained the old token. It used synthetic bearer tokens and an
-isolated MCP fixture, not a long-running real-Keycloak task.
+The experimental persistent controller registers OpenCode 1.18.34 and consumes
+its effective remote `mcpServers` claim selection. It rejects unsupported broker
+connections, local commands, supplied headers/OAuth credentials and mismatched
+agent identity. Arbitrary claim environment and host paths are excluded.
 
-The native store is an OpenCode-specific internal format, not a portable runtime
-API. Its projection, version compatibility, real JWT renewal, issuer outages,
-tenant isolation and cancellation remain implementation and conformance work.
-ADR 0013 implements resolution and verified issuance in a reusable module.
-Controller claim integration, projection and rotation remain pending.
+The controller uses `docker exec` stdin to atomically replace the store in each
+container's tmpfs; no host token directory or credential mount is needed. It renews
+inside the running attempt, checks Multica status every second, and stops on any
+issuer, resolver, authority or projection failure. A separate external attempt
+integration registers fingerprints before projection and enforces a 15-second lease;
+cleanup revokes all fingerprints for that attempt. See ADR 0009.
+
+The Docker path creates an internal network per attempt and attaches only operator
+approved MCP/gateway peers from a validated template. Issuers, resolvers and Multica
+stay outside those networks. OpenCode uses its native MCP transport and OAuth store.
+External deployment policy remains required. The global config directory
+is read-only to avoid startup package installation; images may provide their own tools.
+
+Maintained tests run two native OpenCode tasks with real Keycloak JWTs across
+multiple expiries, using a credential-free deterministic model fixture. They assert
+successful MCP calls, distinct token versions, workspace separation,
+issuer/resolver outages, cancellation and denial of still-unexpired ended tokens.
+The upstream fixture also exercises a real claim through the Compose controller.
+Inference identity and complete events/usage/session/repository behavior remain
+#22 and #24; this is not production adapter certification.
 
 ## References
 

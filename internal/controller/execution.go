@@ -5,15 +5,22 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gently-whitesnow/multica-sandbox/internal/execution"
 	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
 )
 
 func (p *Probe) launch(ctx context.Context, t multica.Task) (<-chan error, func() error, error) {
-	if p.Backend == nil {
+	if p.Backend == nil && p.Launch == nil {
 		return nil, func() error { return nil }, nil
 	}
 	waitCtx, cancel := context.WithTimeout(ctx, p.Duration)
-	run, err := p.Backend.Start(waitCtx, t.WorkspaceID+":"+t.RuntimeID+":"+t.ID+":"+t.DispatchedAt)
+	var run execution.Run
+	var err error
+	if p.Launch != nil {
+		run, err = p.Launch(waitCtx, t)
+	} else {
+		run, err = p.Backend.Start(waitCtx, t.AttemptKey())
+	}
 	if err != nil {
 		cancel()
 		return nil, nil, err

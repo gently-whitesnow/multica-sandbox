@@ -24,5 +24,6 @@ if [ "${VERIFY_CONTAINERS:-0}" = 1 ]; then
 fi
 if [ "${VERIFY_UPSTREAM:-0}" = 1 ] || [ "${VERIFY_SERVICE:-0}" = 1 ]; then ./scripts/test-upstream.sh; fi
 if [ "${VERIFY_IDENTITY:-0}" = 1 ]; then ./scripts/test-identity.sh; fi
+if [ "${VERIFY_OPENCODE:-0}" = 1 ]; then ./scripts/test-opencode.sh; fi
 git diff --check
 git diff --cached --check

@@ -155,3 +155,16 @@ func TestCleanupPrecedesTerminalCallback(t *testing.T) {
 		})
 	}
 }
+
+func TestRejectedAgentDoesNotStopController(t *testing.T) {
+	events := []string{}
+	p := Probe{API: lifecycleAPI{events: &events, status: "running"}, Duration: time.Second, Interval: time.Millisecond, Launch: func(context.Context, multica.Task) (execution.Run, error) {
+		return nil, &execution.RejectedError{Err: errors.New("conflicting authorization")}
+	}}
+	if err := p.Execute(context.Background(), multica.Task{ID: id}); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"lease", "start", "message", "status", "fail"}; !reflect.DeepEqual(events, want) {
+		t.Fatalf("callbacks=%v", events)
+	}
+}

@@ -31,6 +31,10 @@ func main() {
 		err = initialize()
 	case "gateway":
 		err = gateway()
+	case "evidence":
+		err = printEvidence()
+	case "rotation":
+		err = rotation()
 	case "scenario":
 		err = scenario()
 	default:
@@ -58,7 +62,7 @@ func initialize() error {
 		return nil
 	}
 	secret, admin := randomSecret(), randomSecret()
-	realm := map[string]any{"realm": "sandbox-example", "enabled": true, "accessTokenLifespan": 120, "users": []any{map[string]any{"id": serviceSubject, "username": "service-account-example-agent", "enabled": true, "serviceAccountClientId": "example-agent"}}, "clients": []any{map[string]any{
+	realm := map[string]any{"realm": "sandbox-example", "enabled": true, "accessTokenLifespan": fixtureTTL(), "users": []any{map[string]any{"id": serviceSubject, "username": "service-account-example-agent", "enabled": true, "serviceAccountClientId": "example-agent"}}, "clients": []any{map[string]any{
 		"clientId": "example-agent", "secret": secret, "enabled": true, "publicClient": false, "serviceAccountsEnabled": true, "standardFlowEnabled": false, "directAccessGrantsEnabled": false,
 		"protocolMappers": []any{map[string]any{"name": "mcp-audience", "protocol": "openid-connect", "protocolMapper": "oidc-audience-mapper", "config": map[string]string{"included.custom.audience": "sandbox-mcp", "access.token.claim": "true", "id.token.claim": "false"}}},
 	}}}
@@ -74,4 +78,11 @@ func initialize() error {
 func serve(address string, h http.Handler) error {
 	server := &http.Server{Addr: address, Handler: h, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 15 * time.Second, MaxHeaderBytes: 16 << 10}
 	return server.ListenAndServe()
+}
+
+func fixtureTTL() int {
+	if os.Getenv("ROTATION_FIXTURE") == "1" {
+		return 20
+	}
+	return 120
 }

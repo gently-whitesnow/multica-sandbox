@@ -38,11 +38,11 @@ Do not implement an issuer or assume that ID tokens and access tokens interchang
 
 ## Consequences
 
-The module includes an issuance guard for approved MCP delivery targets but is not
-yet wired into task claims or an agent adapter. Delivery rules do not add connections
-to the set selected by Multica.
-Trusted input provenance, attempt grants, delivery, renewal and cancellation remain
-#19/#22 integration work. A reference alone is not workload attestation.
+The OpenCode controller adapter uses the issuance guard for approved MCP delivery
+targets from trusted claims. Delivery rules never add connections to the set selected
+by Multica. Separate attempt grants, atomic projection, renewal and cancellation
+follow ADRs 0009 and 0011. A reference alone is not workload attestation.
+Inference integration remains #22.
 
 The existing identity/MCP fixture now exercises both resolution paths against
 real Keycloak. Local tests cover protocol/tenant failures, credential changes and

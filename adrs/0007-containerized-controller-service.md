@@ -52,8 +52,9 @@ Compose file-backed secrets are host files, not an encrypted secret manager.
 
 Pin the build and Docker CLI base images by digest. Build the controller locally;
 registry publishing is separate work. Preserve the existing probe for explicit
-one-attempt experiments. Both entry points still execute operator-configured test
-commands and fixed task results, not agent instructions or a coding adapter.
+one-attempt experiments. The default service and standalone probe execute offline test commands. An explicit
+OpenCode configuration enables the experimental agent/identity path under ADR 0011;
+its inference and full event/session conformance remain separate work.
 
 ## Consequences
 

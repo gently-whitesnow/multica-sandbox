@@ -192,5 +192,6 @@ func TestUpstreamLifecycle(t *testing.T) {
 	t.Run("server-owned-retry", func(t *testing.T) { serverRetry(t, api, rt) })
 	t.Run("multi-workspace", func(t *testing.T) { multiWorkspace(t) })
 	t.Run("multi-workspace-restart", func(t *testing.T) { fleetRestart(t) })
+	t.Run("managed-mcp-service", func(t *testing.T) { managedMCPService(t, api) })
 	t.Run("controller-service", func(t *testing.T) { containerService(t, api, rt) })
 }

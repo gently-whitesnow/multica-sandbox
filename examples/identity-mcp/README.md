@@ -2,7 +2,9 @@
 
 A disposable Keycloak + official MCP Go SDK example. Two attempts share one
 service client but receive distinct short-lived access tokens and resource grants.
-This is a protocol fixture, not an agent sandbox or production gateway.
+The base scenario is a protocol fixture. `./scripts/test-opencode.sh` adds native
+OpenCode 1.18.34 task containers and real JWT renewal through the controller adapter.
+Neither fixture is a production gateway.
 It also exercises static/external identity resolution against real Keycloak through
 [the controller identity module](../../internal/identity/README.md).
 
@@ -85,5 +87,10 @@ Revocation applies to new calls, not cancellation of already running operations.
   state before claiming production support. Provider credentials stay external.
 
 This fixture does not run Multica, a coding agent, LiteLLM or inference, and does
-not prove egress isolation, token-delivery security or production HA. Existing
-controller behavior is unchanged. See [ADR 0009](../../adrs/0009-attempt-authorization.md).
+not prove egress isolation, token-delivery security or production HA. The OpenCode variant uses two isolated task containers, 20-second real JWTs and
+24 MCP tool turns per task; inference responses are deterministic and use no account.
+It verifies at least three successfully used JWTs, multiple expiries,
+issuer/resolver outages and cancellation, then denies ended tokens before their expiry.
+It exposes no host ports. Only its trusted scenario mounts the Docker socket.
+`VERIFY_SERVICE=1 VERIFY_OPENCODE=1 ./verify.sh` also tests a real Multica claim
+through the persistent Compose controller. Inference identity remains #22. See [ADR 0009](../../adrs/0009-attempt-authorization.md).

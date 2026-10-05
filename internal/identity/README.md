@@ -1,9 +1,9 @@
 # Identity resolution
 
 Controller-side module for issue #21. It resolves trusted Multica agent references,
-reads credentials and verifies a Keycloak service-account access token. It has no
-background renewal loop and is not yet connected to controller task claims or
-workload delivery (#19).
+reads credentials and verifies a Keycloak service-account access token. It has no background renewal loop. The
+[OpenCode adapter](../opencode/README.md) calls it during persistent-controller
+attempts for initial delivery and renewal.
 
 ```mermaid
 flowchart LR
@@ -78,8 +78,8 @@ Duplicate rules are rejected. No rules means no approved MCP delivery.
 
 The caller must supply a connection selected by trusted Multica task data. Rules
 approve identity delivery; they do not add MCP connections, connect to servers or
-set tool permissions. Agent adapters will apply these rules during #19 integration
-and must reject conflicting user-supplied authorization and unsafe redirects.
+set tool permissions. The OpenCode adapter applies these rules to trusted claim selections and rejects
+conflicting credentials.
 `Acquire(ref)` obtains identity without selecting a destination; adapters must use
 `AcquireForMCP(ref, selectedURL)` for MCP delivery.
 
@@ -137,4 +137,5 @@ serialization and redact formatting; delivery uses the explicit `Bearer()` metho
 
 Run `go test -race ./internal/identity` for contract/adversarial tests and
 `./scripts/test-identity.sh` for both resolver paths against real Keycloak.
-These tests do not establish task attestation, resource grants or ongoing renewal.
+Attempt grants and ongoing renewal are exercised separately by
+`VERIFY_OPENCODE=1 ./verify.sh`.

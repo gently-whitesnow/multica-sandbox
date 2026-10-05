@@ -16,6 +16,14 @@ func (r *run) check(ctx context.Context) error {
 }
 
 func checkPolicy(data []byte) error {
+	return checkExpectedPolicy(data, "none", 128*1024*1024, 64, "rw,nosuid,nodev,size=67108864,mode=1777")
+}
+
+func checkProjectedPolicy(data []byte, network string) error {
+	return checkExpectedPolicy(data, network, 1024*1024*1024, 256, "rw,nosuid,nodev,size=268435456,mode=1777")
+}
+
+func checkExpectedPolicy(data []byte, network string, memory int64, pids int, workspace string) error {
 	var containers []struct {
 		Config struct {
 			User, WorkingDir string
@@ -45,12 +53,12 @@ func checkPolicy(data []byte) error {
 	h := c.HostConfig
 	if c.Config.User != "65532:65532" || c.Config.WorkingDir != "/workspace" || len(c.Config.Volumes) != 0 ||
 		!reflect.DeepEqual(c.Config.Healthcheck.Test, []string{"NONE"}) ||
-		h.NetworkMode != "none" || h.Runtime != "runc" || h.PidMode != "" || h.IpcMode != "private" || h.CgroupnsMode != "private" ||
+		h.NetworkMode != network || h.Runtime != "runc" || h.PidMode != "" || h.IpcMode != "private" || h.CgroupnsMode != "private" ||
 		!h.ReadonlyRootfs || h.Privileged || h.PublishAllPorts || len(h.CapAdd) != 0 || !reflect.DeepEqual(h.CapDrop, []string{"ALL"}) ||
 		!reflect.DeepEqual(h.SecurityOpt, []string{"no-new-privileges=true"}) || len(h.Binds) != 0 || len(h.VolumesFrom) != 0 || len(h.Devices) != 0 || len(h.DeviceRequests) != 0 || len(c.Mounts) != 0 ||
-		h.Memory != 128*1024*1024 || h.MemorySwap != h.Memory || h.NanoCpus != 500000000 || h.PidsLimit != 64 || h.ShmSize != 8*1024*1024 ||
+		h.Memory != memory || h.MemorySwap != h.Memory || h.NanoCpus != 500000000 || h.PidsLimit != pids || h.ShmSize != 8*1024*1024 ||
 		h.RestartPolicy.Name != "no" || h.LogConfig.Type != "none" ||
-		!reflect.DeepEqual(h.Tmpfs, map[string]string{"/workspace": "rw,nosuid,nodev,size=67108864,mode=1777", "/tmp": "rw,noexec,nosuid,nodev,size=16777216,mode=1777"}) {
+		!reflect.DeepEqual(h.Tmpfs, map[string]string{"/workspace": workspace, "/tmp": "rw,noexec,nosuid,nodev,size=16777216,mode=1777"}) {
 		return fmt.Errorf("created container does not satisfy offline policy")
 	}
 	return nil

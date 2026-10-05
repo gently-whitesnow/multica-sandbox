@@ -1,0 +1,9 @@
+{
+  "identity_file": "/etc/multica-sandbox/identity.json",
+  "authority": {
+    "url": "https://attempts.example.com/v1/attempts",
+    "bearer_file": "/run/secrets/attempt-authority"
+  },
+  "network": "approved-mcp-template",
+  "peers": ["corporate-mcp", "inference-gateway"]
+}
