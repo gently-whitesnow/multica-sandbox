@@ -15,8 +15,10 @@ Resolve an exact trusted reference: Multica origin, workspace UUID and agent UUI
 Use either static bindings with absolute secret-file references or an authenticated
 HTTP resolver with a version-1 JSON contract. Do not fall back between sources.
 An external response must echo the reference and name a locally approved issuer.
-Keep issuer/token/JWKS endpoints and resource audience/lifetime settings in operator
-configuration. The external resolver is trusted to assign principals to agents;
+Keep issuer/token/JWKS endpoints and a bounded token lifetime in operator
+configuration. Bindings carry optional OAuth issuance parameters; there is no
+resource catalog. Separate delivery rules map exact selected MCP URLs to approved
+issuer names. Missing rules, duplicate URLs and issuer mismatches deny delivery. The external resolver is trusted to assign principals to agents;
 MCP and inference remain responsible for authorizing attempts and resources.
 
 Resolve credentials afresh on issuance, allowing secret and binding changes without
@@ -29,12 +31,16 @@ and unavailable through ordinary JSON or formatting.
 
 Reuse OAuth2 client credentials and go-oidc verification. The first issuer adapter
 supports Keycloak RS256 access tokens with typ=Bearer and azp. Verify the expected
-issuer, subject, client, recipient and bounded lifetime before exposing the bearer.
+issuer, subject, client and bounded lifetime before exposing the bearer. IAM owns
+audience, roles and groups; receiving MCP services validate audience and permissions.
+Controller verification establishes identity, not recipient authorization.
 Do not implement an issuer or assume that ID tokens and access tokens interchange.
 
 ## Consequences
 
-The module is reusable by the controller but is not yet wired into task claims.
+The module includes an issuance guard for approved MCP delivery targets but is not
+yet wired into task claims or an agent adapter. Delivery rules do not add connections
+to the set selected by Multica.
 Trusted input provenance, attempt grants, delivery, renewal and cancellation remain
 #19/#22 integration work. A reference alone is not workload attestation.
 

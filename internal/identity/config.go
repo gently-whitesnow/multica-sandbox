@@ -22,25 +22,33 @@ type Config struct {
 	Issuers   []IssuerConfig  `json:"issuers"`
 	Bindings  []Binding       `json:"bindings,omitempty"`
 	External  *ExternalConfig `json:"external,omitempty"`
+	MCP       []MCPRule       `json:"mcp,omitempty"`
 }
 type IssuerConfig struct {
-	Name      string              `json:"name"`
-	URL       string              `json:"url"`
-	TokenURL  string              `json:"token_url"`
-	JWKSURL   string              `json:"jwks_url"`
-	Resources map[string]Resource `json:"resources"`
+	Name          string `json:"name"`
+	URL           string `json:"url"`
+	TokenURL      string `json:"token_url"`
+	JWKSURL       string `json:"jwks_url"`
+	MaxTTLSeconds int    `json:"max_ttl_seconds,omitempty"`
 }
-type Resource struct {
-	Audience      string   `json:"audience"`
-	Scopes        []string `json:"scopes,omitempty"`
-	Resource      string   `json:"resource,omitempty"`
-	MaxTTLSeconds int      `json:"max_ttl_seconds"`
+
+// TokenRequest contains OAuth issuance parameters, not tool permissions.
+type TokenRequest struct {
+	Scopes   []string `json:"scopes,omitempty"`
+	Resource string   `json:"resource,omitempty"`
+}
+
+// MCPRule approves delivery of an issuer's identity to one exact selected URL.
+type MCPRule struct {
+	URL    string `json:"url"`
+	Issuer string `json:"issuer"`
 }
 type Binding struct {
 	WorkspaceID string `json:"workspace_id"`
 	AgentID     string `json:"agent_id"`
 	Principal
-	SecretFile string `json:"secret_file"`
+	SecretFile string       `json:"secret_file"`
+	Token      TokenRequest `json:"token,omitempty"`
 }
 type ExternalConfig struct {
 	URL        string `json:"url"`
@@ -106,4 +114,20 @@ func endpoint(s string, allowHTTP bool) bool {
 }
 func validRef(r Ref, server string) bool {
 	return r.Server == server && uuid.MatchString(r.WorkspaceID) && uuid.MatchString(r.AgentID)
+}
+
+func validTokenRequest(r TokenRequest) bool {
+	if len(r.Scopes) > 64 || (r.Resource != "" && (!text(r.Resource, 1024) || !endpoint(r.Resource, true))) {
+		return false
+	}
+	for _, scope := range r.Scopes {
+		if !text(scope, 256) || strings.ContainsAny(scope, " \t") {
+			return false
+		}
+	}
+	return true
+}
+func copyTokenRequest(r TokenRequest) TokenRequest {
+	r.Scopes = append([]string(nil), r.Scopes...)
+	return r
 }

@@ -7,7 +7,8 @@ workload delivery (#19).
 
 ```mermaid
 flowchart LR
-    T[Trusted Multica agent reference] --> S[Service.Acquire]
+    T[Trusted Multica agent reference and selected MCP URL] --> P[Exact URL and issuer delivery rule]
+    P --> S[Service.AcquireForMCP]
     S --> R[Service.Resolve]
     R --> F[Static binding and secret file]
     R --> H[Authenticated external resolver]
@@ -34,10 +35,7 @@ is available in multiple workspaces. Different agents cannot share that identity
     "name": "corporate",
     "url": "https://sso.example.com/realms/agents",
     "token_url": "https://sso.example.com/realms/agents/protocol/openid-connect/token",
-    "jwks_url": "https://sso.example.com/realms/agents/protocol/openid-connect/certs",
-    "resources": {
-      "mcp": {"audience": "corporate-tools", "max_ttl_seconds": 300}
-    }
+    "jwks_url": "https://sso.example.com/realms/agents/protocol/openid-connect/certs"
   }],
   "bindings": [{
     "workspace_id": "10000000-0000-4000-8000-000000000001",
@@ -46,7 +44,8 @@ is available in multiple workspaces. Different agents cannot share that identity
     "client_id": "agent-builder",
     "subject": "expected-service-account-subject",
     "secret_file": "/run/secrets/agent-builder"
-  }]
+  }],
+  "mcp": [{"url": "https://tools.example.com/mcp", "issuer": "corporate"}]
 }
 ```
 
@@ -56,12 +55,33 @@ mount. Files are bounded, read on each issuance and may be atomically replaced;
 projected-secret symlinks are supported. A trailing newline is stripped. Only
 regular, absolute-path files are accepted.
 
+The binding may optionally include `"token": {"scopes": ["profile"],
+"resource": "https://tools.example.com"}` when IAM needs those OAuth request
+parameters. Omit it otherwise. This is an issuance request, not a resource catalog
+or a tool permission list. Realm/client configuration controls the JWT's audience,
+roles and groups. MCP validates audience, roles and access to each tool/resource.
+
 The first issuer adapter supports Keycloak-style RS256 JWT access tokens with
-`typ=Bearer` and the expected `azp`. It verifies signature, issuer, audience,
-subject, client, issuance time and expiry. Maximum lifetime is configured per
-resource and cannot exceed one hour. `scopes` and `resource` are optional token
-request parameters; tool permissions remain the MCP service's responsibility.
-Opaque tokens and other issuer claim conventions require another adapter.
+`typ=Bearer` and the expected `azp`. It verifies signature, issuer, subject, client,
+issuance time and expiry. The controller deliberately does not validate audience
+or roles: it verifies identity for delivery, not access to the recipient. Optional
+issuer `max_ttl_seconds` defaults to 300 and cannot exceed 3600; it rejects long
+JWTs, without changing IAM's token lifespan. Opaque tokens and other issuer claim
+conventions require another adapter.
+
+## MCP delivery rules
+
+`mcp` maps an exact approved URL to an issuer name. `AcquireForMCP` rejects
+unlisted URLs and bindings from another issuer before contacting the token
+endpoint. Matching does not use prefixes, connection names or wildcard domains.
+Duplicate rules are rejected. No rules means no approved MCP delivery.
+
+The caller must supply a connection selected by trusted Multica task data. Rules
+approve identity delivery; they do not add MCP connections, connect to servers or
+set tool permissions. Agent adapters will apply these rules during #19 integration
+and must reject conflicting user-supplied authorization and unsafe redirects.
+`Acquire(ref)` obtains identity without selecting a destination; adapters must use
+`AcquireForMCP(ref, selectedURL)` for MCP delivery.
 
 ## External configuration and wire contract
 
@@ -76,10 +96,12 @@ Replace `bindings` with the following block; there is no fallback between source
 }
 ```
 
-Keep the `issuers` policy locally. The service must authenticate the controller
+Keep the `issuers` and `mcp` delivery rules locally. The service must authenticate the controller
 and authorize its binding access. Its reply references an approved issuer name;
 it cannot supply token/JWKS URLs. The resolver owns consistency of external
-agent-to-principal bindings, including the one-agent-per-client rule.
+agent-to-principal bindings, including the one-agent-per-client rule. It may return
+the same optional `token` issuance parameters as a static binding; malformed
+parameters are rejected and cannot change the token/JWKS endpoints.
 
 The controller sends POST with its own Bearer credential and this JSON:
 
@@ -108,8 +130,10 @@ serialization and redact formatting; delivery uses the explicit `Bearer()` metho
    the next issuance reads the replacement.
 2. External binding: `remoteResolver.Resolve` authenticates and checks the echoed
    reference; `Service.Resolve` rejects an unapproved issuer before token issuance.
-3. Wrong principal: `issuer.issue` rejects a correctly signed token for another
-   subject/client/audience. No token is returned to a delivery adapter.
+3. MCP delivery: `Service.AcquireForMCP` checks the exact selected URL and bound
+   issuer before issuance. Unapproved URLs never reach the token endpoint.
+4. Wrong principal: `issuer.issue` rejects a correctly signed token for another
+   subject/client. Audience and role authorization stay with MCP. No token is returned to a delivery adapter.
 
 Run `go test -race ./internal/identity` for contract/adversarial tests and
 `./scripts/test-identity.sh` for both resolver paths against real Keycloak.

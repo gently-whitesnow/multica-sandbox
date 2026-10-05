@@ -14,7 +14,7 @@ import (
 const serviceSubject = "30000000-0000-4000-8000-000000000001"
 
 func resolverConfig() identity.Config {
-	return identity.Config{Version: 1, Server: "https://multica.example.invalid", AllowHTTP: true, Issuers: []identity.IssuerConfig{{Name: "fixture", URL: issuer, TokenURL: issuer + "/protocol/openid-connect/token", JWKSURL: issuer + "/protocol/openid-connect/certs", Resources: map[string]identity.Resource{"mcp": {Audience: "sandbox-mcp", MaxTTLSeconds: 180}}}}, Bindings: []identity.Binding{{WorkspaceID: "10000000-0000-4000-8000-000000000001", AgentID: "20000000-0000-4000-8000-000000000001", Principal: identity.Principal{Issuer: "fixture", ClientID: "example-agent", Subject: serviceSubject}, SecretFile: "/secrets/client"}}}
+	return identity.Config{Version: 1, Server: "https://multica.example.invalid", AllowHTTP: true, Issuers: []identity.IssuerConfig{{Name: "fixture", URL: issuer, TokenURL: issuer + "/protocol/openid-connect/token", JWKSURL: issuer + "/protocol/openid-connect/certs", MaxTTLSeconds: 180}}, MCP: []identity.MCPRule{{URL: "http://gateway:8080/mcp", Issuer: "fixture"}}, Bindings: []identity.Binding{{WorkspaceID: "10000000-0000-4000-8000-000000000001", AgentID: "20000000-0000-4000-8000-000000000001", Principal: identity.Principal{Issuer: "fixture", ClientID: "example-agent", Subject: serviceSubject}, SecretFile: "/secrets/client"}}}
 }
 
 // Both resolution sources must obtain and verify the same real Keycloak principal.
@@ -25,7 +25,7 @@ func checkResolvers(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if _, err = static.Acquire(ctx, ref, "mcp"); err != nil {
+	if _, err = static.AcquireForMCP(ctx, ref, "http://gateway:8080/mcp"); err != nil {
 		return fmt.Errorf("static identity issuance failed")
 	}
 	secret, err := os.ReadFile("/secrets/client")
@@ -55,8 +55,11 @@ func checkResolvers(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if _, err = external.Acquire(ctx, ref, "mcp"); err != nil {
+	if _, err = external.AcquireForMCP(ctx, ref, "http://gateway:8080/mcp"); err != nil {
 		return fmt.Errorf("external identity issuance failed")
+	}
+	if _, err = external.AcquireForMCP(ctx, ref, "http://unapproved:8080/mcp"); err != identity.ErrDenied {
+		return fmt.Errorf("unapproved MCP delivery accepted")
 	}
 	bad := resolverConfig()
 	bad.Bindings[0].Subject = "unrelated-principal"
@@ -64,9 +67,9 @@ func checkResolvers(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if _, err = wrong.Acquire(ctx, ref, "mcp"); err == nil {
+	if _, err = wrong.AcquireForMCP(ctx, ref, "http://gateway:8080/mcp"); err == nil {
 		return fmt.Errorf("wrong Keycloak subject accepted")
 	}
-	fmt.Println("PASS static/external resolvers verified real Keycloak identity; wrong subject denied")
+	fmt.Println("PASS static/external resolvers verified real Keycloak identity; wrong subject and unapproved MCP denied")
 	return nil
 }

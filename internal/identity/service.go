@@ -11,6 +11,7 @@ type Service struct {
 	server   string
 	resolver Resolver
 	issuers  map[string]*issuer
+	mcp      map[string]string
 }
 
 func New(c Config) (*Service, error) {
@@ -46,6 +47,9 @@ func New(c Config) (*Service, error) {
 		}
 		s.resolver = resolver
 	}
+	if err := s.configureMCP(c.MCP, c.AllowHTTP); err != nil {
+		return nil, err
+	}
 	return s, nil
 }
 func (s *Service) static(bindings []Binding) (Resolver, error) {
@@ -54,7 +58,7 @@ func (s *Service) static(bindings []Binding) (Resolver, error) {
 	agents := map[string]Principal{}
 	for _, b := range bindings {
 		ref := Ref{s.server, b.WorkspaceID, b.AgentID}
-		if !validRef(ref, s.server) || !s.validPrincipal(b.Principal) || !filepath.IsAbs(b.SecretFile) {
+		if !validRef(ref, s.server) || !s.validPrincipal(b.Principal) || !filepath.IsAbs(b.SecretFile) || !validTokenRequest(b.Token) {
 			return nil, ErrDenied
 		}
 		if _, exists := r.bindings[ref]; exists {
@@ -69,6 +73,7 @@ func (s *Service) static(bindings []Binding) (Resolver, error) {
 			return nil, ErrDenied
 		}
 		principals[pk], clients[ck] = b.AgentID, b.AgentID
+		b.Token = copyTokenRequest(b.Token)
 		r.bindings[ref] = b
 	}
 	return r, nil
@@ -81,17 +86,17 @@ func (s *Service) Resolve(ctx context.Context, r Ref) (Credentials, error) {
 		return Credentials{}, ErrDenied
 	}
 	credentials, err := s.resolver.Resolve(ctx, r)
-	if err != nil || !s.validPrincipal(credentials.Principal) {
+	if err != nil || !s.validPrincipal(credentials.Principal) || !validTokenRequest(credentials.request) {
 		return Credentials{}, ErrDenied
 	}
 	return credentials, nil
 }
 
 // Acquire re-resolves credentials on every issuance, allowing external key rotation.
-func (s *Service) Acquire(ctx context.Context, r Ref, resource string) (AccessToken, error) {
+func (s *Service) Acquire(ctx context.Context, r Ref) (AccessToken, error) {
 	c, err := s.Resolve(ctx, r)
 	if err != nil {
 		return AccessToken{}, ErrDenied
 	}
-	return s.issuers[c.Issuer].issue(ctx, c, resource)
+	return s.issuers[c.Issuer].issue(ctx, c)
 }

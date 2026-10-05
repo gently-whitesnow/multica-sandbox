@@ -27,7 +27,8 @@ type Principal struct {
 // Credentials cannot be serialized or formatted with their client secret.
 type Credentials struct {
 	Principal
-	secret string
+	secret  string
+	request TokenRequest
 }
 
 func (Credentials) Format(s fmt.State, _ rune)   { fmt.Fprint(s, "<identity credentials>") }
@@ -56,5 +57,6 @@ type resolveResponse struct {
 	Version int `json:"version"`
 	Agent   Ref `json:"agent"`
 	Principal
-	ClientSecret string `json:"client_secret"`
+	ClientSecret string       `json:"client_secret"`
+	Token        TokenRequest `json:"token,omitempty"`
 }

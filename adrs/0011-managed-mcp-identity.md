@@ -20,12 +20,12 @@ service implementation. Static bindings reference controller-only secret files;
 external resolution can obtain credentials from deployment-owned secret storage.
 Keep client secrets outside the workload and out of logs and persisted task state.
 
-Define an MCP authorization policy resolver, initially static, with an interface
-for future external resolution. Match approved server URLs, not user-selected
-connection names. Each rule selects trusted token issuance parameters for that
-resource. Do not require placeholder headers or per-tool scopes in Multica.
-Scopes/resource parameters remain optional issuer-specific settings; tokens must
-be intended for their recipient. Never send corporate tokens to arbitrary URLs.
+Define MCP identity delivery rules, initially static, with an interface for future
+external resolution. Match exact approved server URLs to issuer names, not
+user-selected connection names. IAM bindings carry optional OAuth issuance
+parameters. Do not require placeholder headers or per-tool scopes in Multica.
+IAM owns token audiences, roles and groups; MCP validates its intended audience
+and permissions. The controller has no corporate resource catalog. Never send corporate tokens to arbitrary URLs.
 Reject conflicting supplied authorization rather than silently overwriting it.
 
 IAM supplies identity roles/groups. MCP services filter `tools/list` and authorize

@@ -16,10 +16,12 @@ import (
 )
 
 type tokenFixture struct {
-	server    *httptest.Server
-	key       *rsa.PrivateKey
-	claims    map[string]any
-	gotSecret string
+	server      *httptest.Server
+	key         *rsa.PrivateKey
+	claims      map[string]any
+	gotSecret   string
+	gotScope    string
+	gotResource string
 }
 
 func newTokenFixture(t *testing.T) *tokenFixture {
@@ -37,6 +39,8 @@ func newTokenFixture(t *testing.T) *tokenFixture {
 		}
 		_ = r.ParseForm()
 		f.gotSecret = r.Form.Get("client_secret")
+		f.gotScope = r.Form.Get("scope")
+		f.gotResource = r.Form.Get("resource")
 		signer, e := jose.NewSigner(jose.SigningKey{Algorithm: jose.RS256, Key: f.key}, (&jose.SignerOptions{}).WithType("JWT").WithHeader("kid", "test"))
 		if e != nil {
 			t.Error(e)
@@ -79,26 +83,26 @@ func TestVerifiedIssuanceAndCredentialRotation(t *testing.T) {
 		if err = os.WriteFile(c.Bindings[0].SecretFile, []byte(secret), 0600); err != nil {
 			t.Fatal(err)
 		}
-		token, err := s.Acquire(context.Background(), ref(c), "mcp")
+		token, err := s.Acquire(context.Background(), ref(c))
 		if err != nil || token.Bearer() == "" || !token.ExpiresAt.After(time.Now()) || f.gotSecret != secret {
 			t.Fatal("issuance or rotation failed", err)
 		}
 	}
 	f.gotSecret = ""
-	if _, err = s.Acquire(context.Background(), ref(c), "unknown"); err != ErrDenied || f.gotSecret != "" {
-		t.Fatal("unapproved resource contacted issuer")
+	if _, err = s.AcquireForMCP(context.Background(), ref(c), "https://unapproved.example/mcp"); err != ErrDenied || f.gotSecret != "" {
+		t.Fatal("unapproved MCP contacted issuer")
 	}
 }
 func TestRejectInvalidAccessTokens(t *testing.T) {
 	f := newTokenFixture(t)
 	c := f.config(t)
 	s, _ := New(c)
-	changes := map[string]any{"sub": "other", "aud": "other", "iss": "https://other.example", "azp": "other", "typ": "ID", "exp": time.Now().Unix() - 10, "iat": time.Now().Unix() + 60}
+	changes := map[string]any{"sub": "other", "iss": "https://other.example", "azp": "other", "typ": "ID", "exp": time.Now().Unix() - 10, "iat": time.Now().Unix() + 60}
 	for field, value := range changes {
 		t.Run(field, func(t *testing.T) {
 			f.reset()
 			f.claims[field] = value
-			if _, err := s.Acquire(context.Background(), ref(c), "mcp"); err != ErrDenied {
+			if _, err := s.Acquire(context.Background(), ref(c)); err != ErrDenied {
 				t.Fatal("invalid claim accepted")
 			}
 		})
@@ -106,12 +110,12 @@ func TestRejectInvalidAccessTokens(t *testing.T) {
 	f.reset()
 	f.claims["iat"] = time.Now().Unix() + 20
 	f.claims["exp"] = time.Now().Unix() + 10
-	if _, err := s.Acquire(context.Background(), ref(c), "mcp"); err != ErrDenied {
+	if _, err := s.Acquire(context.Background(), ref(c)); err != ErrDenied {
 		t.Fatal("negative token lifetime accepted")
 	}
 	f.reset()
 	f.claims["exp"] = time.Now().Unix() + 3600
-	if _, err := s.Acquire(context.Background(), ref(c), "mcp"); err != ErrDenied {
+	if _, err := s.Acquire(context.Background(), ref(c)); err != ErrDenied {
 		t.Fatal("excessive lifetime accepted")
 	}
 	f.reset()
@@ -120,7 +124,7 @@ func TestRejectInvalidAccessTokens(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.key = other
-	if _, err = s.Acquire(context.Background(), ref(c), "mcp"); err != ErrDenied {
+	if _, err = s.Acquire(context.Background(), ref(c)); err != ErrDenied {
 		t.Fatal("forged signature accepted")
 	}
 }
@@ -149,4 +153,46 @@ func TestConcurrentWorkspaceBindings(t *testing.T) {
 		}
 	}
 	wg.Wait()
+}
+
+func TestMCPDeliveryAndIAMParameters(t *testing.T) {
+	f := newTokenFixture(t)
+	c := f.config(t)
+	c.MCP = []MCPRule{{URL: "https://tools.example/mcp", Issuer: "corp"}}
+	c.Bindings[0].Token = TokenRequest{Scopes: []string{"profile"}, Resource: "https://tools.example"}
+	s, err := New(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range []string{"https://other.example/mcp", "https://tools.example/mcp/", "https://tools.example/mcp?next=other", "https://tools.example/mcp/extra"} {
+		if _, err = s.AcquireForMCP(context.Background(), ref(c), target); err != ErrDenied || f.gotSecret != "" {
+			t.Fatal("unapproved destination contacted issuer")
+		}
+	}
+	c.Bindings[0].Token.Scopes[0] = "mutated"
+	for _, aud := range []any{"another-recipient", nil} {
+		f.reset()
+		if aud == nil {
+			delete(f.claims, "aud")
+		} else {
+			f.claims["aud"] = aud
+		}
+		f.claims["realm_access"] = map[string]any{"roles": []string{"arbitrary-role"}}
+		if _, err = s.AcquireForMCP(context.Background(), ref(c), "https://tools.example/mcp"); err != nil || f.gotScope != "profile" || f.gotResource != "https://tools.example" {
+			t.Fatal("delivery depends on recipient permissions or lost IAM parameters", err)
+		}
+	}
+	other := c.Issuers[0]
+	other.Name = "other"
+	other.URL = "https://other.example/realm"
+	c.Issuers = append(c.Issuers, other)
+	c.MCP[0].Issuer = "other"
+	s, err = New(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.gotSecret = ""
+	if _, err = s.AcquireForMCP(context.Background(), ref(c), "https://tools.example/mcp"); err != ErrDenied || f.gotSecret != "" {
+		t.Fatal("wrong realm delivered")
+	}
 }

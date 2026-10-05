@@ -27,7 +27,7 @@ func secretFile(t *testing.T, value string) string {
 	return p
 }
 func config(t *testing.T) Config {
-	return Config{Version: 1, Server: "https://multica.example", AllowHTTP: true, Issuers: []IssuerConfig{{Name: "corp", URL: "https://issuer.example/realm", TokenURL: "https://issuer.example/token", JWKSURL: "https://issuer.example/keys", Resources: map[string]Resource{"mcp": {Audience: "tools", MaxTTLSeconds: 300}}}}, Bindings: []Binding{{WorkspaceID: workspaceA, AgentID: agentA, Principal: Principal{"corp", "client-a", "subject-a"}, SecretFile: secretFile(t, "private-sentinel")}}}
+	return Config{Version: 1, Server: "https://multica.example", AllowHTTP: true, Issuers: []IssuerConfig{{Name: "corp", URL: "https://issuer.example/realm", TokenURL: "https://issuer.example/token", JWKSURL: "https://issuer.example/keys", MaxTTLSeconds: 300}}, Bindings: []Binding{{WorkspaceID: workspaceA, AgentID: agentA, Principal: Principal{"corp", "client-a", "subject-a"}, SecretFile: secretFile(t, "private-sentinel")}}}
 }
 func ref(c Config) Ref { return Ref{c.Server, workspaceA, agentA} }
 func TestStaticBindingIsolationAndRotation(t *testing.T) {
@@ -62,7 +62,7 @@ func TestStaticBindingIsolationAndRotation(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err = s.Acquire(ctx, ref(c), "mcp"); err == nil {
+	if _, err = s.Acquire(ctx, ref(c)); err == nil {
 		t.Fatal("cancel ignored")
 	}
 }
@@ -78,15 +78,22 @@ func TestInvalidConfiguration(t *testing.T) {
 			b.Subject = "other-subject"
 			c.Bindings = append(c.Bindings, b)
 		},
-		"missing source":    func(c *Config) { c.Bindings = nil },
-		"two sources":       func(c *Config) { c.External = &ExternalConfig{URL: "https://resolver.example", BearerFile: "/key"} },
-		"unknown issuer":    func(c *Config) { c.Bindings[0].Issuer = "unknown" },
-		"relative secret":   func(c *Config) { c.Bindings[0].SecretFile = "secret" },
-		"shared client":     func(c *Config) { b := c.Bindings[0]; b.AgentID = agentB; c.Bindings = append(c.Bindings, b) },
-		"unbounded ttl":     func(c *Config) { c.Issuers[0].Resources["mcp"] = Resource{Audience: "tools", MaxTTLSeconds: 99999} },
-		"invalid server":    func(c *Config) { c.Server = "https://multica.example/path" },
-		"url credentials":   func(c *Config) { c.Issuers[0].TokenURL = "https://secret@issuer.example/token" },
-		"insecure endpoint": func(c *Config) { c.AllowHTTP = false; c.Issuers[0].JWKSURL = "http://issuer.example/keys" },
+		"missing source":  func(c *Config) { c.Bindings = nil },
+		"two sources":     func(c *Config) { c.External = &ExternalConfig{URL: "https://resolver.example", BearerFile: "/key"} },
+		"unknown issuer":  func(c *Config) { c.Bindings[0].Issuer = "unknown" },
+		"relative secret": func(c *Config) { c.Bindings[0].SecretFile = "secret" },
+		"shared client":   func(c *Config) { b := c.Bindings[0]; b.AgentID = agentB; c.Bindings = append(c.Bindings, b) },
+		"duplicate MCP": func(c *Config) {
+			c.MCP = []MCPRule{{"https://tools.example/mcp", "corp"}, {"https://tools.example/mcp", "corp"}}
+		},
+		"unknown MCP issuer":     func(c *Config) { c.MCP = []MCPRule{{"https://tools.example/mcp", "unknown"}} },
+		"insecure MCP":           func(c *Config) { c.AllowHTTP = false; c.MCP = []MCPRule{{"http://tools.example/mcp", "corp"}} },
+		"invalid scope":          func(c *Config) { c.Bindings[0].Token.Scopes = []string{"bad scope"} },
+		"invalid OAuth resource": func(c *Config) { c.Bindings[0].Token.Resource = "https://user:secret@tools.example" },
+		"unbounded ttl":          func(c *Config) { c.Issuers[0].MaxTTLSeconds = 99999 },
+		"invalid server":         func(c *Config) { c.Server = "https://multica.example/path" },
+		"url credentials":        func(c *Config) { c.Issuers[0].TokenURL = "https://secret@issuer.example/token" },
+		"insecure endpoint":      func(c *Config) { c.AllowHTTP = false; c.Issuers[0].JWKSURL = "http://issuer.example/keys" },
 	}
 	for name, change := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -101,7 +108,7 @@ func TestInvalidConfiguration(t *testing.T) {
 func TestRemoteResolverContract(t *testing.T) {
 	c := config(t)
 	r := ref(c)
-	response := resolveResponse{1, r, c.Bindings[0].Principal, "private-sentinel"}
+	response := resolveResponse{Version: 1, Agent: r, Principal: c.Bindings[0].Principal, ClientSecret: "private-sentinel"}
 	bearer := secretFile(t, "resolver-a")
 	expectedBearer := "resolver-a"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, q *http.Request) {
@@ -138,6 +145,15 @@ func TestRemoteResolverContract(t *testing.T) {
 		t.Fatal("mismatched binding accepted")
 	}
 	response.Agent = r
+	response.Token.Scopes = []string{"bad scope"}
+	if _, err = s.Resolve(context.Background(), r); err != ErrDenied {
+		t.Fatal("malformed IAM parameters accepted")
+	}
+	response.Token.Scopes = []string{"profile"}
+	got, err := s.Resolve(context.Background(), r)
+	if err != nil || len(got.request.Scopes) != 1 || got.request.Scopes[0] != "profile" {
+		t.Fatal("external IAM parameters lost")
+	}
 	response.Issuer = "unapproved"
 	if _, err = s.Resolve(context.Background(), r); err == nil {
 		t.Fatal("unapproved issuer accepted")
