@@ -47,11 +47,11 @@ func managedMCPService(t *testing.T, api *multica.Client) {
 	id := "70000000-0000-4000-8000-000000000001"
 	issue := "80000000-0000-4000-8000-000000000001"
 	issuer := "http://keycloak:8080/realms/sandbox-example"
-	binding := identity.Config{Version: 1, Server: "http://127.0.0.1:8080", AllowHTTP: true, Issuers: []identity.IssuerConfig{{Name: "fixture", URL: issuer, TokenURL: issuer + "/protocol/openid-connect/token", JWKSURL: issuer + "/protocol/openid-connect/certs", MaxTTLSeconds: 30}}, Bindings: []identity.Binding{{WorkspaceID: workspace, AgentID: agent, Principal: identity.Principal{Issuer: "fixture", ClientID: "example-agent", Subject: "30000000-0000-4000-8000-000000000001"}, SecretFile: "/identity-secrets/client"}}, MCP: []identity.MCPRule{{URL: "http://gateway:8080/mcp", Issuer: "fixture"}}}
+	binding := identity.Config{Version: 1, AllowHTTP: true, Issuers: []identity.IssuerConfig{{Name: "fixture", URL: issuer, TokenURL: issuer + "/protocol/openid-connect/token", JWKSURL: issuer + "/protocol/openid-connect/certs", MaxTTLSeconds: 30}}, Bindings: []identity.Binding{{WorkspaceID: workspace, AgentID: agent, Principal: identity.Principal{Issuer: "fixture", ClientID: "example-agent", Subject: "30000000-0000-4000-8000-000000000001"}, SecretFile: "/identity-secrets/client"}}, MCP: []identity.MCPRule{{URL: "http://gateway:8080/mcp", Issuer: "fixture"}}}
 	writeJSON(t, filepath.Join(dir, "identity.json"), binding)
 	// This credential-free mock model is trusted fixture configuration, outside claim data.
 	command := `OPENCODE_CONFIG_CONTENT='{"model":"fixture/fixture","enabled_providers":["fixture"],"provider":{"fixture":{"npm":"@ai-sdk/openai-compatible","name":"Fixture","options":{"baseURL":"http://gateway:8080/v1"},"models":{"fixture":{"name":"Fixture","limit":{"context":64000,"output":4096}}}}}}' exec opencode run --format json "$(cat /workspace/prompt.txt)"`
-	c := service.Config{Server: binding.Server, Daemon: controller, Image: "ghcr.io/anomalyco/opencode:1.18.34@sha256:b34342987ca889fc2cc19cbc046eefc2418e5980a3d696e209fbb401a288f631", Command: []string{"/bin/sh", "-c", command}, Timeout: "180s", OpenCode: &service.OpenCodeConfig{IdentityFile: "/etc/multica-sandbox/identity.json", Authority: attempt.Config{URL: "http://gateway:8080/attempts", BearerFile: "/identity-secrets/admin", AllowHTTP: true}, Network: project + "_execution", Peers: []string{project + "-gateway-1"}}}
+	c := service.Config{Server: "http://127.0.0.1:8080", Daemon: controller, Image: "ghcr.io/anomalyco/opencode:1.18.34@sha256:b34342987ca889fc2cc19cbc046eefc2418e5980a3d696e209fbb401a288f631", Command: []string{"/bin/sh", "-c", command}, Timeout: "180s", OpenCode: &service.OpenCodeConfig{IdentityFile: "/etc/multica-sandbox/identity.json", Authority: attempt.Config{URL: "http://gateway:8080/attempts", BearerFile: "/identity-secrets/admin", AllowHTTP: true}, Network: project + "_execution", Peers: []string{project + "-gateway-1"}}}
 	if os.Getenv("VERIFY_INFERENCE") == "1" {
 		configureServiceInference(t, dir, project, &c, binding)
 	}
@@ -105,6 +105,7 @@ func managedMCPService(t *testing.T, api *multica.Client) {
 			t.Fatal("real controller did not rotate inference JWTs through LiteLLM")
 		}
 		t.Log("same native OpenCode process used independent MCP and inference JWTs through real LiteLLM")
+		controllerModelSelections(t, api, runtime, agent, project)
 	}
 	if dockerTest(t, "inspect", "--format", "{{.State.StartedAt}}", cid) != started {
 		t.Fatal("controller restarted during task")

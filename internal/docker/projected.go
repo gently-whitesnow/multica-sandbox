@@ -137,16 +137,12 @@ func (r *projectedRun) Execute(ctx context.Context, args []string) error {
 	cmd := exec.CommandContext(ctx, "docker", append([]string{"exec", r.name}, args...)...)
 	var out limitedOutput
 	cmd.Stdout = &out
-	if cmd.Run() != nil {
-		return fmt.Errorf("agent execution failed; output withheld")
+	err := cmd.Run()
+	if failure := agentFailure(out.Bytes()); failure != nil {
+		return failure
 	}
-	for _, line := range bytes.Split(out.Bytes(), []byte("\n")) {
-		var event struct {
-			Type string `json:"type"`
-		}
-		if json.Unmarshal(line, &event) == nil && event.Type == "error" {
-			return fmt.Errorf("agent reported failure; output withheld")
-		}
+	if err != nil {
+		return fmt.Errorf("agent execution failed; output withheld")
 	}
 	return nil
 }

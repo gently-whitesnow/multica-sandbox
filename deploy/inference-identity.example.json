@@ -1,19 +1,22 @@
 {
   "version": 1,
-  "server": "https://multica.example.invalid",
-  "issuers": [{
-    "name": "corporate",
-    "url": "https://iam.example.invalid/realms/agents",
-    "token_url": "https://iam.example.invalid/realms/agents/protocol/openid-connect/token",
-    "jwks_url": "https://iam.example.invalid/realms/agents/protocol/openid-connect/certs",
-    "max_ttl_seconds": 300
-  }],
-  "bindings": [{
-    "workspace_id": "10000000-0000-4000-8000-000000000001",
-    "agent_id": "20000000-0000-4000-8000-000000000001",
-    "issuer": "corporate",
-    "client_id": "agent-inference",
-    "subject": "30000000-0000-4000-8000-000000000001",
-    "secret_file": "/identity-secrets/agent-inference"
-  }]
+  "issuers": [
+    {
+      "name": "corporate",
+      "url": "https://iam.example.invalid/realms/agents",
+      "token_url": "https://iam.example.invalid/realms/agents/protocol/openid-connect/token",
+      "jwks_url": "https://iam.example.invalid/realms/agents/protocol/openid-connect/certs",
+      "max_ttl_seconds": 300
+    }
+  ],
+  "bindings": [
+    {
+      "workspace_id": "10000000-0000-4000-8000-000000000001",
+      "agent_id": "20000000-0000-4000-8000-000000000001",
+      "issuer": "corporate",
+      "client_id": "agent-inference",
+      "subject": "30000000-0000-4000-8000-000000000001",
+      "secret_file": "/identity-secrets/agent-inference"
+    }
+  ]
 }

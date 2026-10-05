@@ -6,9 +6,11 @@ import (
 )
 
 type Agent struct {
-	ID           string          `json:"id"`
-	Instructions string          `json:"instructions"`
-	MCPConfig    json.RawMessage `json:"mcp_config"`
+	Model         string          `json:"model"`
+	ThinkingLevel string          `json:"thinking_level"`
+	ID            string          `json:"id"`
+	Instructions  string          `json:"instructions"`
+	MCPConfig     json.RawMessage `json:"mcp_config"`
 }
 
 func (t Task) AttemptKey() string {

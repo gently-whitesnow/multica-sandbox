@@ -62,17 +62,18 @@ func failureInferenceSource(mode, server string) (*recordingInference, *atomic.B
 	if mode == "issuer" {
 		c.Issuers[0].TokenURL = endpoint.URL
 	}
-	source, err := identity.New(c)
+	source, err := identity.New(c, server)
 	if err != nil {
 		endpoint.Close()
 		return nil, nil, nil, err
 	}
-	cfg := inference.Config{Version: 1, Server: server, AllowHTTP: true, Gateways: []inference.Gateway{fixtureInferenceTarget().Gateway}, Bindings: []inference.Binding{{WorkspaceID: c.Bindings[0].WorkspaceID, AgentID: c.Bindings[0].AgentID, Target: fixtureInferenceTarget()}}}
+	cfg := inference.Config{Version: 1, AllowHTTP: true, Gateways: []inference.Gateway{fixtureInferenceTarget().Gateway}, Bindings: []inference.Binding{{WorkspaceID: c.Bindings[0].WorkspaceID, AgentID: c.Bindings[0].AgentID, Target: fixtureInferenceTarget()}}}
+	cfg.Catalogs = []inference.CatalogBinding{{WorkspaceID: c.Bindings[0].WorkspaceID, AgentID: c.Bindings[0].AgentID, Catalog: fixtureInferenceCatalog()}}
 	if mode == "resolver" {
 		cfg.Bindings = nil
 		cfg.External = &identity.ExternalConfig{URL: endpoint.URL, BearerFile: "/secrets/admin"}
 	}
-	service, err := inference.New(cfg, source)
+	service, err := inference.New(cfg, server, source)
 	if err != nil {
 		endpoint.Close()
 		return nil, nil, nil, err

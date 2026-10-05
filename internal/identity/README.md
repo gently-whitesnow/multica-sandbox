@@ -20,8 +20,8 @@ flowchart LR
 
 ## Static configuration
 
-`ReadConfig` parses strict JSON; `New` validates policy and creates the service.
-Paths are absolute. `server` is the canonical Multica origin without a trailing
+`ReadConfig` parses strict JSON; `New(config, controllerServer)` validates policy and creates the service.
+Paths are absolute. The controller supplies the canonical Multica origin without a trailing
 slash. Only the operator/controller supplies the reference to `Acquire`; workload
 input is not authoritative. Missing bindings fail closed.
 Static bindings enforce one principal/client per agent, including when an agent
@@ -30,7 +30,6 @@ is available in multiple workspaces. Different agents cannot share that identity
 ```json
 {
   "version": 1,
-  "server": "https://multica.example.com",
   "issuers": [{
     "name": "corporate",
     "url": "https://sso.example.com/realms/agents",

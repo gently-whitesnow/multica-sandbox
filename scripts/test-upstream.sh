@@ -48,5 +48,5 @@ until curl -fsS "$MULTICA_TEST_URL/health" >/dev/null 2>&1; do
  sleep 1
 done
 if [ "${VERIFY_SERVICE:-0}" = 1 ]; then docker build -t multica-sandbox-controller:local .; fi
-MULTICA_TEST_SERVER_CONTAINER="$SERVER" MULTICA_TEST_DB_CONTAINER="$DB" go test -tags=upstream -count=1 -v ./integration
+MULTICA_TEST_SERVER_CONTAINER="$SERVER" MULTICA_TEST_DB_CONTAINER="$DB" go test -tags=upstream -run "${UPSTREAM_TEST_FILTER:-.}" -count=1 -v ./integration
 printf 'Verified upstream %s\n' "$REV"

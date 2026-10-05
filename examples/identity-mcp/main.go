@@ -34,9 +34,11 @@ func main() {
 	case "evidence":
 		err = printEvidence()
 	case "inference-rotation":
-		err = rotation()
+		err = rotation(false)
+	case "inference-selections":
+		err = rotation(true)
 	case "rotation":
-		err = rotation()
+		err = rotation(false)
 	case "scenario":
 		err = scenario()
 	default:

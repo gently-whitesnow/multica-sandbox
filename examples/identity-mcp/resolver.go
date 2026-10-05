@@ -11,17 +11,19 @@ import (
 	"github.com/gently-whitesnow/multica-sandbox/internal/identity"
 )
 
+const fixtureServer = "https://multica.example.invalid"
+
 const serviceSubject = "30000000-0000-4000-8000-000000000001"
 
 func resolverConfig() identity.Config {
-	return identity.Config{Version: 1, Server: "https://multica.example.invalid", AllowHTTP: true, Issuers: []identity.IssuerConfig{{Name: "fixture", URL: issuer, TokenURL: issuer + "/protocol/openid-connect/token", JWKSURL: issuer + "/protocol/openid-connect/certs", MaxTTLSeconds: 180}}, MCP: []identity.MCPRule{{URL: "http://gateway:8080/mcp", Issuer: "fixture"}}, Bindings: []identity.Binding{{WorkspaceID: "10000000-0000-4000-8000-000000000001", AgentID: "20000000-0000-4000-8000-000000000001", Principal: identity.Principal{Issuer: "fixture", ClientID: "example-agent", Subject: serviceSubject}, SecretFile: "/secrets/client"}}}
+	return identity.Config{Version: 1, AllowHTTP: true, Issuers: []identity.IssuerConfig{{Name: "fixture", URL: issuer, TokenURL: issuer + "/protocol/openid-connect/token", JWKSURL: issuer + "/protocol/openid-connect/certs", MaxTTLSeconds: 180}}, MCP: []identity.MCPRule{{URL: "http://gateway:8080/mcp", Issuer: "fixture"}}, Bindings: []identity.Binding{{WorkspaceID: "10000000-0000-4000-8000-000000000001", AgentID: "20000000-0000-4000-8000-000000000001", Principal: identity.Principal{Issuer: "fixture", ClientID: "example-agent", Subject: serviceSubject}, SecretFile: "/secrets/client"}}}
 }
 
 // Both resolution sources must obtain and verify the same real Keycloak principal.
 func checkResolvers(ctx context.Context) error {
 	c := resolverConfig()
-	ref := identity.Ref{Server: c.Server, WorkspaceID: c.Bindings[0].WorkspaceID, AgentID: c.Bindings[0].AgentID}
-	static, err := identity.New(c)
+	ref := identity.Ref{Server: fixtureServer, WorkspaceID: c.Bindings[0].WorkspaceID, AgentID: c.Bindings[0].AgentID}
+	static, err := identity.New(c, fixtureServer)
 	if err != nil {
 		return err
 	}
@@ -51,7 +53,7 @@ func checkResolvers(ctx context.Context) error {
 	defer remote.Close()
 	c.Bindings = nil
 	c.External = &identity.ExternalConfig{URL: remote.URL, BearerFile: "/secrets/admin"}
-	external, err := identity.New(c)
+	external, err := identity.New(c, fixtureServer)
 	if err != nil {
 		return err
 	}
@@ -63,7 +65,7 @@ func checkResolvers(ctx context.Context) error {
 	}
 	bad := resolverConfig()
 	bad.Bindings[0].Subject = "unrelated-principal"
-	wrong, err := identity.New(bad)
+	wrong, err := identity.New(bad, fixtureServer)
 	if err != nil {
 		return err
 	}

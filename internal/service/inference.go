@@ -13,16 +13,16 @@ func openCodeInference(c Config) (opencode.Inference, error) {
 		return nil, nil
 	}
 	config, err := inference.ReadConfig(c.OpenCode.InferenceFile)
-	if err != nil || config.Server != strings.TrimRight(c.Server, "/") {
+	if err != nil {
 		return nil, inference.ErrDenied
 	}
 	credentials, err := agentidentity.ReadConfig(config.IdentityFile)
-	if err != nil || credentials.Server != config.Server {
+	if err != nil {
 		return nil, inference.ErrDenied
 	}
-	issuer, err := agentidentity.New(credentials)
+	issuer, err := agentidentity.New(credentials, strings.TrimRight(c.Server, "/"))
 	if err != nil {
 		return nil, err
 	}
-	return inference.New(config, issuer)
+	return inference.New(config, strings.TrimRight(c.Server, "/"), issuer)
 }

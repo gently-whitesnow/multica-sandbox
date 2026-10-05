@@ -19,27 +19,43 @@ var ErrDenied = errors.New("inference identity unavailable or denied")
 var uuid = regexp.MustCompile(`^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`)
 
 type Config struct {
-	Version      int                      `json:"version"`
-	Server       string                   `json:"server"`
-	IdentityFile string                   `json:"identity_file"`
-	AllowHTTP    bool                     `json:"allow_http,omitempty"`
-	Gateways     []Gateway                `json:"gateways"`
-	Bindings     []Binding                `json:"bindings,omitempty"`
-	External     *identity.ExternalConfig `json:"external,omitempty"`
+	Version         int                      `json:"version"`
+	IdentityFile    string                   `json:"identity_file"`
+	AllowHTTP       bool                     `json:"allow_http,omitempty"`
+	Gateways        []Gateway                `json:"gateways"`
+	Bindings        []Binding                `json:"bindings,omitempty"`
+	External        *identity.ExternalConfig `json:"external,omitempty"`
+	Catalogs        []CatalogBinding         `json:"catalogs,omitempty"`
+	CatalogExternal *identity.ExternalConfig `json:"catalog_external,omitempty"`
 }
 type Gateway struct {
 	URL    string `json:"url"`
 	Issuer string `json:"issuer"`
 }
 type Model struct {
-	Context int `json:"context"`
-	Output  int `json:"output"`
+	Label    string    `json:"label,omitempty"`
+	Context  int       `json:"context"`
+	Output   int       `json:"output"`
+	Thinking *Thinking `json:"thinking,omitempty"`
 }
-type Target struct {
-	Gateway
-	Model  string           `json:"model"`
-	Models map[string]Model `json:"models"`
+type Thinking struct {
+	SupportedLevels []ThinkingLevel `json:"supported_levels"`
+	DefaultLevel    string          `json:"default_level,omitempty"`
 }
+type ThinkingLevel struct {
+	Value string `json:"value"`
+	Label string `json:"label"`
+}
+type Catalog struct {
+	DefaultModel string           `json:"default_model,omitempty"`
+	Models       map[string]Model `json:"models"`
+}
+type CatalogBinding struct {
+	WorkspaceID string `json:"workspace_id"`
+	AgentID     string `json:"agent_id"`
+	Catalog
+}
+type Target struct{ Gateway }
 type Binding struct {
 	WorkspaceID string `json:"workspace_id"`
 	AgentID     string `json:"agent_id"`

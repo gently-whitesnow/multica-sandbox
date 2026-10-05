@@ -75,7 +75,7 @@ func (f *tokenFixture) config(t *testing.T) Config {
 func TestVerifiedIssuanceAndCredentialRotation(t *testing.T) {
 	f := newTokenFixture(t)
 	c := f.config(t)
-	s, err := New(c)
+	s, err := New(c, identityTestServer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestVerifiedIssuanceAndCredentialRotation(t *testing.T) {
 func TestRejectInvalidAccessTokens(t *testing.T) {
 	f := newTokenFixture(t)
 	c := f.config(t)
-	s, _ := New(c)
+	s, _ := New(c, identityTestServer)
 	changes := map[string]any{"sub": "other", "iss": "https://other.example", "azp": "other", "typ": "ID", "exp": time.Now().Unix() - 10, "iat": time.Now().Unix() + 60}
 	for field, value := range changes {
 		t.Run(field, func(t *testing.T) {
@@ -137,7 +137,7 @@ func TestConcurrentWorkspaceBindings(t *testing.T) {
 	b.Subject = "subject-b"
 	b.SecretFile = secretFile(t, "second-secret")
 	c.Bindings = append(c.Bindings, b)
-	s, err := New(c)
+	s, err := New(c, identityTestServer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +145,7 @@ func TestConcurrentWorkspaceBindings(t *testing.T) {
 	for range 20 {
 		for _, b := range c.Bindings {
 			wg.Go(func() {
-				v, e := s.Resolve(context.Background(), Ref{c.Server, b.WorkspaceID, b.AgentID})
+				v, e := s.Resolve(context.Background(), Ref{identityTestServer, b.WorkspaceID, b.AgentID})
 				if e != nil || v.Subject != b.Subject {
 					t.Error("cross-workspace identity")
 				}
@@ -160,7 +160,7 @@ func TestMCPDeliveryAndIAMParameters(t *testing.T) {
 	c := f.config(t)
 	c.MCP = []MCPRule{{URL: "https://tools.example/mcp", Issuer: "corp"}}
 	c.Bindings[0].Token = TokenRequest{Scopes: []string{"profile"}, Resource: "https://tools.example"}
-	s, err := New(c)
+	s, err := New(c, identityTestServer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +187,7 @@ func TestMCPDeliveryAndIAMParameters(t *testing.T) {
 	other.URL = "https://other.example/realm"
 	c.Issuers = append(c.Issuers, other)
 	c.MCP[0].Issuer = "other"
-	s, err = New(c)
+	s, err = New(c, identityTestServer)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -48,3 +48,12 @@ func TestNativeStoreContract(t *testing.T) {
 		t.Fatal("native store contract changed")
 	}
 }
+
+func TestInferenceTaskCanHaveNoMCP(t *testing.T) {
+	task := safeTask()
+	task.Agent.MCPConfig = json.RawMessage(`{}`)
+	selected, err := Select(task)
+	if err != nil || len(selected) != 0 {
+		t.Fatal("inference task required an MCP connection", err)
+	}
+}

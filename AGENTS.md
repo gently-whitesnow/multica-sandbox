@@ -15,7 +15,7 @@ from verified behavior.
   identity resolution contract (0013).
 - `examples/end-to-end/`: opt-in real Multica/OpenCode/inference lab.
 - `examples/identity-mcp/`: disposable identity and MCP contract fixture.
-- `internal/inference/`: trusted gateway/model bindings and renewable inference identity.
+- `internal/inference/`: trusted recipients, advisory model catalogs and renewable inference identity.
 - `internal/identity/`: static/external identity resolution and verified Keycloak issuance.
 - `cmd/sandbox-controller`, `internal/service/`: persistent controller service.
 - `Dockerfile`, `compose.yaml`, `deploy/`: controller packaging/configuration.

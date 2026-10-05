@@ -20,13 +20,13 @@ func (s *changingInference) Acquire(context.Context, identity.Ref) (inference.Se
 	if s.mode == "denied" {
 		return inference.Session{}, inference.ErrDenied
 	}
-	target := inference.Target{Gateway: inference.Gateway{URL: "https://inference.example.invalid/v1", Issuer: "inference"}, Model: "demo", Models: map[string]inference.Model{"demo": {Context: 64000, Output: 4096}}}
+	target := inference.Target{Gateway: inference.Gateway{URL: "https://inference.example.invalid/v1", Issuer: "inference"}}
 	if s.calls > 1 {
 		switch s.mode {
 		case "outage":
 			return inference.Session{}, inference.ErrDenied
 		case "changed":
-			target.Models["demo"] = inference.Model{Context: 64000, Output: 1024}
+			target.URL = "https://other.example.invalid/v1"
 		}
 	}
 	return inference.Session{Target: target, Token: identity.AccessToken{ExpiresAt: time.Now().Add(11 * time.Second)}}, nil
@@ -65,4 +65,8 @@ func TestInferenceOutageAndChangedGrantStopAttempt(t *testing.T) {
 			}
 		})
 	}
+}
+
+func (s *changingInference) Catalog(context.Context, identity.Ref) (inference.Catalog, error) {
+	return inference.Catalog{DefaultModel: "demo", Models: map[string]inference.Model{"demo": {Context: 64000, Output: 4096}}}, nil
 }

@@ -1,46 +1,67 @@
-# Managed inference identity
+# Managed inference identity and model selection
 
-The persistent OpenCode adapter optionally uses an external OpenAI-compatible
-inference gateway. MCP selection stays in Multica's effective `mcp_config`.
-Inference endpoint/model bindings have a separate controller-owned configuration;
-claims cannot supply endpoints, model grants or credentials.
+The optional external OpenAI-compatible gateway owns model access, quotas, budgets
+and provider routing. The controller delivers short-lived identity and maps trusted
+Multica `agent.model` / `agent.thinking_level` from the claim into native OpenCode.
+Those fields express selection, not permission. MCP uses its separate OAuth store.
+Migration: remove `server` from identity/inference files and move binding `model` /
+`models` into a separate catalog/default entry; recipient bindings keep URL/issuer.
 
-Set `opencode.inference_file` to an absolute configuration file. It names a separate
-`identity_file` using the shared identity resolver contract, approved `gateways`
-(URL/issuer pairs), and either static `bindings` or one authenticated `external`
-resolver. Each binding uses the trusted server/workspace/agent reference, one
-selected model and a model-to-context/output-limits map. These limits describe
-OpenCode models; the external gateway owns actual model grants and budgets.
+Set `opencode.inference_file` to an absolute configuration path. It names an
+`identity_file`, approved `gateways` (URL/issuer pairs), and either static `bindings`
+or an authenticated `external` recipient resolver. Bindings contain only
+workspace/agent IDs, URL and issuer. The controller's `server` supplies the Multica
+origin to both services; identity/inference files cannot override it.
 
-External resolution POSTs `{version: 1, agent: {server, workspace_id, agent_id}}`.
-The response must echo version and the exact agent, with `target` containing
-`url`, `issuer`, `model`, and `models`. Unknown fields, unapproved URL/issuer pairs,
-ungranted selected models, oversized responses, redirects and outages are denied
-before issuance. Static bindings and returned model maps are copied. Credentials
-are resolved separately through `identity_file`; changing an endpoint or model
-binding during an attempt stops it instead of silently reconfiguring the provider.
+Catalog/default data is separate: use static `catalogs` (a service catalog snapshot)
+or `catalog_external`. Entries include `default_model` and a model map with
+context/output preparation metadata and optional `thinking.supported_levels`
+(value/label pairs) and `default_level`. These values are capabilities, not budgets
+or a controller permission list. Catalog lookup neither issues JWTs nor grants
+access, and catalog changes do not interrupt identity renewal.
 
-The native OpenCode provider auth-loader hook reads the mode-0600 atomically
-replaced `/workspace/inference-token.json` before each request. The adapter writes
-a dependency-free local module, with no global fetch patch. It uses the bundled
-`@ai-sdk/openai-compatible` provider, permits the configured chat-completions route,
-replaces authorization, refuses redirects and rejects missing/malformed/expired
-identity. The native provider auth store contains only a non-secret loader marker;
-it cannot serve as a fallback credential. OpenCode's global config directory stays
-read-only for offline startup.
+External sources receive `{version: 1, agent: {server, workspace_id, agent_id}}`.
+Recipient resolution returns the exact echoed reference and `target: {url, issuer}`.
+Catalog resolution independently returns the echoed reference and `catalog`.
+Unknown fields, credentials, mismatched references, oversized responses and
+redirects fail the relevant resolution. The approved URL/issuer boundary remains
+mandatory for identity delivery; the catalog is advisory.
 
-Inference leases use `inference_url` in the external authority protocol, separately
-from `mcp_url`. Register each fingerprint before projection, renew each second,
-and bound the lease by JWT expiry and 15 seconds. Completion, cancellation or
-renewal failure revokes every fingerprint for the attempt and removes its workload.
-The gateway must validate JWT recipient and active attempt admission for every
-request. Ending admission does not by itself promise cancellation of upstream
-work already in flight. Provider keys and gateway administration credentials stay
-outside workloads; provider routing stays in the gateway. No embedded relay is
-part of this implementation.
+An explicit model is passed through the managed provider, even if absent from the
+catalog or catalog lookup fails. `managed-inference/` qualification is stripped
+before gateway delivery; otherwise the model name is the gateway alias verbatim.
+For unknown models, zero metadata uses native OpenCode unknown-context and
+output defaults; the controller invents no capability limit. An omitted model requires a
+catalog default; absence fails visibly without another provider/model fallback.
 
-`VERIFY_INFERENCE=1 ./verify.sh` runs native OpenCode with real Keycloak and pinned
-LiteLLM. The provider behind LiteLLM is deterministic and checks a gateway-only
-key, so the test needs no subscription. Add `VERIFY_SERVICE=1 VERIFY_OPENCODE=1`
-for the real Multica claim through the Compose controller. Full events/usage/session
-and production adversarial conformance remain #24.
+A safe explicit thinking token is mapped to a native variant with `reasoningEffort`
+and preserved even when not listed in discovery. Omission uses the selected
+model's advertised thinking default, or sends no effort for models without a
+control. The gateway decides whether an explicit effort is acceptable. The adapter
+never silently drops it. Only token syntax is checked locally.
+
+Discovery reuses Multica heartbeat pending requests and model result reports.
+Catalog IDs are `managed-inference/<gateway-model>`, with the same provider ID,
+metadata and thinking options/defaults. Agent scope must come from the pending
+request; workspace scope comes from the registered runtime. Current upstream
+`b4ca5b4` supplies only request ID and caches by runtime, so the controller reports
+an explicit discovery failure rather than publishing a union of agent catalogs.
+Agent-scoped request/cache/UI metadata support is still required upstream; the
+scoped response contract is tested locally, not claimed as real UI integration.
+
+The native provider auth hook reads atomically replaced mode-0600
+`/workspace/inference-token.json` before each request. It replaces authorization,
+refuses redirects and rejects missing/malformed/expired identity. The native auth
+store contains only a non-secret loader marker. Global fetch remains unchanged.
+Identity refresh pins only the URL/issuer; model selection is fixed for each task.
+
+Fingerprint leases use `inference_url`, separately from `mcp_url`; renewal is
+bounded by JWT expiry and 15 seconds. End/cancellation/failure revokes the attempt
+and removes the workload. Already admitted upstream work may continue. Native
+provider retries remain native. Gateway failure events expose only a numeric HTTP
+status in Multica; bodies, headers and credentials remain withheld.
+
+`VERIFY_INFERENCE=1 ./verify.sh` runs OpenCode, Keycloak and LiteLLM with a
+deterministic provider; no subscription is needed. Add `VERIFY_SERVICE=1
+VERIFY_OPENCODE=1` for actual Multica claims through the Compose controller.
+Full event/usage/session reporting and production conformance remain #24.

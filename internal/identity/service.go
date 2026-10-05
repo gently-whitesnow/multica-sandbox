@@ -14,12 +14,12 @@ type Service struct {
 	mcp      map[string]string
 }
 
-func New(c Config) (*Service, error) {
-	parsed, _ := url.Parse(c.Server)
-	if c.Version != 1 || !endpoint(c.Server, c.AllowHTTP) || parsed.Path != "" || (len(c.Bindings) > 0) == (c.External != nil) || len(c.Issuers) == 0 {
+func New(c Config, server string) (*Service, error) {
+	parsed, _ := url.Parse(server)
+	if c.Version != 1 || !endpoint(server, c.AllowHTTP) || parsed.Path != "" || (len(c.Bindings) > 0) == (c.External != nil) || len(c.Issuers) == 0 {
 		return nil, ErrDenied
 	}
-	s := &Service{server: c.Server, issuers: map[string]*issuer{}}
+	s := &Service{server: server, issuers: map[string]*issuer{}}
 	issuerURLs := map[string]bool{}
 	for _, entry := range c.Issuers {
 		if issuerURLs[entry.URL] {
@@ -39,7 +39,7 @@ func New(c Config) (*Service, error) {
 		if !endpoint(c.External.URL, c.AllowHTTP) || !filepath.IsAbs(c.External.BearerFile) {
 			return nil, ErrDenied
 		}
-		s.resolver = &remoteResolver{*c.External, c.Server, httpClient(c.External.URL)}
+		s.resolver = &remoteResolver{*c.External, server, httpClient(c.External.URL)}
 	} else {
 		resolver, err := s.static(c.Bindings)
 		if err != nil {

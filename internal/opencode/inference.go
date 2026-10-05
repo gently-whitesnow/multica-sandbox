@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"reflect"
 	"time"
 
 	"github.com/gently-whitesnow/multica-sandbox/internal/attempt"
@@ -19,6 +18,7 @@ const inferenceProvider = "managed-inference"
 
 type Inference interface {
 	Acquire(context.Context, identity.Ref) (inference.Session, error)
+	Catalog(context.Context, identity.Ref) (inference.Catalog, error)
 }
 
 func (r *running) refreshInference(ctx context.Context, ref identity.Ref) (bool, error) {
@@ -32,8 +32,8 @@ func (r *running) refreshInference(ctx context.Context, ref identity.Ref) (bool,
 		if err != nil || time.Until(next.Token.ExpiresAt) <= 10*time.Second {
 			return false, fmt.Errorf("inference issuance: %w", ErrDenied)
 		}
-		// Native provider configuration is fixed for a running attempt; changed grants stop it.
-		if session.Target.URL != "" && !reflect.DeepEqual(session.Target, next.Target) {
+		// Delivery recipients are fixed; catalog changes do not affect identity renewal.
+		if session.Target.URL != "" && session.Target != next.Target {
 			return false, fmt.Errorf("inference binding changed: %w", ErrDenied)
 		}
 		for _, remote := range r.connections {
@@ -78,11 +78,16 @@ func (r *running) configureInference(ctx context.Context, config []byte) ([]byte
 	if json.Unmarshal(config, &projected) != nil {
 		return nil, ErrDenied
 	}
-	models := map[string]any{}
-	for name, m := range r.inference.Models {
-		models[name] = map[string]any{"name": name, "limit": map[string]int{"context": m.Context, "output": m.Output}}
+	selection, err := r.selectInference(ctx)
+	if err != nil {
+		return nil, err
 	}
-	projected["model"] = inferenceProvider + "/" + r.inference.Model
+	models := nativeModels(selection.catalog)
+	models[selection.model] = nativeModel(selection.model, selection.metadata, selection.effort)
+	projected["model"] = inferenceProvider + "/" + selection.model
+	if selection.effort != "" {
+		projected["agent"] = map[string]any{"build": map[string]string{"variant": selection.effort, "model": inferenceProvider + "/" + selection.model}}
+	}
 	projected["enabled_providers"] = []string{inferenceProvider}
 	projected["provider"] = map[string]any{inferenceProvider: map[string]any{"npm": "@ai-sdk/openai-compatible", "name": "Managed inference", "options": map[string]any{"baseURL": r.inference.URL}, "models": models}}
 	projected["plugin"] = []string{"file://" + InferencePluginPath}

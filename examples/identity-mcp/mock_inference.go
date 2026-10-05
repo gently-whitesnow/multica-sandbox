@@ -36,24 +36,20 @@ func mockInference(w http.ResponseWriter, r *http.Request) {
 			ws = "10000000-0000-4000-8000-000000000002"
 		}
 	}
-	if len(body.Tools) > 0 {
+	name := ""
+	for _, tool := range body.Tools {
+		if strings.HasSuffix(tool.Function.Name, "read_fixture") {
+			name = tool.Function.Name
+		}
+	}
+	if name != "" {
 		time.Sleep(2 * time.Second)
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	chunk := map[string]any{"id": fmt.Sprintf("turn-%d", count), "object": "chat.completion.chunk", "created": time.Now().Unix(), "model": "fixture"}
 	delta := map[string]any{"content": "Fixture task completed"}
 	finish := "stop"
-	if count < 24 && len(body.Tools) > 0 {
-		name := ""
-		for _, tool := range body.Tools {
-			if strings.HasSuffix(tool.Function.Name, "read_fixture") {
-				name = tool.Function.Name
-			}
-		}
-		if name == "" {
-			w.WriteHeader(500)
-			return
-		}
+	if count < 24 && name != "" {
 		args, _ := json.Marshal(readArgs{Workspace: ws, Resource: "document"})
 		delta = map[string]any{"tool_calls": []any{map[string]any{"index": 0, "id": fmt.Sprintf("call-%d", count), "type": "function", "function": map[string]string{"name": name, "arguments": string(args)}}}}
 		finish = "tool_calls"

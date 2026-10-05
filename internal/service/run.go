@@ -76,24 +76,19 @@ func Run(ctx context.Context, c Config, stateDir, tokenPath string, out io.Write
 			return err
 		}
 		p.Launch = launch.Start
-		p.API = agentFleetAPI{api}
-		return serveFleet(ctx, c, stateDir, agentFleetAPI{api}, &p, out)
+		agentAPI := &agentFleetAPI{Client: api, inference: launch.Inference, server: strings.TrimRight(c.Server, "/")}
+		p.API = agentAPI
+		return serveFleet(ctx, c, stateDir, agentAPI, &p, out)
 	}
 	return serveFleet(ctx, c, stateDir, api, &p, out)
 }
 
-type agentFleetAPI struct{ *multica.Client }
-
-func (a agentFleetAPI) Register(ctx context.Context, ws, daemon string) (multica.Runtime, error) {
-	return a.RegisterProvider(ctx, ws, daemon, "opencode")
-}
-
 func openCodeAdapter(ctx context.Context, c Config, api *multica.Client, backend *docker.Backend) (*opencode.Adapter, error) {
 	config, err := agentidentity.ReadConfig(c.OpenCode.IdentityFile)
-	if err != nil || config.Server != strings.TrimRight(c.Server, "/") {
+	if err != nil {
 		return nil, agentidentity.ErrDenied
 	}
-	issuer, err := agentidentity.New(config)
+	issuer, err := agentidentity.New(config, strings.TrimRight(c.Server, "/"))
 	if err != nil {
 		return nil, err
 	}
@@ -112,12 +107,12 @@ func openCodeAdapter(ctx context.Context, c Config, api *multica.Client, backend
 	if err != nil {
 		return nil, err
 	}
-	return &opencode.Adapter{Inference: inferenceSource, Server: config.Server, Controller: c.Daemon, Issuer: issuer, Authority: authority, Status: api, Workloads: workloads, Command: c.Command}, nil
+	return &opencode.Adapter{Inference: inferenceSource, Server: strings.TrimRight(c.Server, "/"), Controller: c.Daemon, Issuer: issuer, Authority: authority, Status: api, Workloads: workloads, Command: c.Command}, nil
 }
 
-func (a agentFleetAPI) Message(ctx context.Context, id string) error { return a.AgentMessage(ctx, id) }
-func (a agentFleetAPI) Complete(ctx context.Context, id string) error {
+func (a *agentFleetAPI) Message(ctx context.Context, id string) error { return a.AgentMessage(ctx, id) }
+func (a *agentFleetAPI) Complete(ctx context.Context, id string) error {
 	return a.AgentComplete(ctx, id)
 }
 
-func (a agentFleetAPI) Fail(ctx context.Context, id string) error { return a.AgentFail(ctx, id) }
+func (a *agentFleetAPI) Fail(ctx context.Context, id string) error { return a.AgentFail(ctx, id) }

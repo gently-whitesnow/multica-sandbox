@@ -47,7 +47,7 @@ services:
       context: $ROOT
       dockerfile: examples/identity-mcp/Dockerfile
       target: rotation
-    command: [inference-rotation]
+    command: [${INFERENCE_SCENARIO:-inference-rotation}]
     networks: [fixture]
     environment:
       INFERENCE_FIXTURE: "1"

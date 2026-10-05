@@ -31,9 +31,9 @@ Multica owns tasks and retries. The controller manages execution environments;
 the runner executes one task through a supported agent adapter.
 
 Execution backends, agent adapters and inference connections are separate.
-Multica selects the runtime; trusted bindings select inference gateway/model.
-Provider credentials stay outside the sandbox. Full task/event/session adapters
-remain separate verification work.
+Multica selects the runtime and model; trusted bindings select the inference gateway.
+Provider credentials stay outside the sandbox. Agent-scoped discovery needs upstream
+support; full task/event/session adapters remain separate verification work.
 
 Containers share the host kernel; isolation depends on policy and granted credentials.
 

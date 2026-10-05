@@ -133,7 +133,13 @@ func (p *Probe) finish(ctx context.Context, id string, failure error, stop func(
 		return err
 	}
 	if failure != nil {
-		err = p.API.Fail(ctx, id)
+		if reporter, ok := p.API.(interface {
+			FailExecution(context.Context, string, error) error
+		}); ok {
+			err = reporter.FailExecution(ctx, id, failure)
+		} else {
+			err = p.API.Fail(ctx, id)
+		}
 	} else {
 		err = p.API.Complete(ctx, id)
 	}

@@ -27,25 +27,25 @@ func testRef() identity.Ref {
 	return identity.Ref{Server: "https://multica.example.invalid", WorkspaceID: "10000000-0000-4000-8000-000000000001", AgentID: "20000000-0000-4000-8000-000000000001"}
 }
 func testTarget() Target {
-	return Target{Gateway: Gateway{URL: "https://gateway.example.invalid/v1", Issuer: "inference"}, Model: "demo", Models: map[string]Model{"demo": {Context: 64000, Output: 4096}}}
+	return Target{Gateway: Gateway{URL: "https://gateway.example.invalid/v1", Issuer: "inference"}}
 }
 func testConfig() Config {
 	r := testRef()
-	return Config{Version: 1, Server: r.Server, Gateways: []Gateway{testTarget().Gateway}, Bindings: []Binding{{WorkspaceID: r.WorkspaceID, AgentID: r.AgentID, Target: testTarget()}}}
+	return Config{Version: 1, Gateways: []Gateway{testTarget().Gateway}, Bindings: []Binding{{WorkspaceID: r.WorkspaceID, AgentID: r.AgentID, Target: testTarget()}}}
 }
 func TestStaticSelectorsAndCopies(t *testing.T) {
 	issuer := &testIssuer{}
 	config := testConfig()
-	s, err := New(config, issuer)
+	s, err := New(config, testRef().Server, issuer)
 	if err != nil {
 		t.Fatal(err)
 	}
-	config.Bindings[0].Models["demo"] = Model{}
+	config.Bindings[0].URL = "https://changed.example.invalid"
 	session, err := s.Acquire(context.Background(), testRef())
-	if err != nil || issuer.expected != "inference" || session.Models["demo"].Output != 4096 {
+	if err != nil || issuer.expected != "inference" || session.URL != testTarget().URL {
 		t.Fatal("binding not preserved", err)
 	}
-	session.Models["demo"] = Model{}
+	session.URL = "https://changed.example.invalid"
 	ref := testRef()
 	ref.WorkspaceID = "10000000-0000-4000-8000-000000000002"
 	if _, err = s.Acquire(context.Background(), ref); err == nil || issuer.calls != 1 {
@@ -62,7 +62,7 @@ func TestExternalBindingFailClosedBeforeIssuance(t *testing.T) {
 	if err := os.WriteFile(secret, []byte("fixture-admin"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	for _, mode := range []string{"valid", "spoof", "recipient", "issuer", "model", "credentials", "oversize", "outage", "redirect"} {
+	for _, mode := range []string{"valid", "spoof", "recipient", "issuer", "credentials", "oversize", "outage", "redirect"} {
 		t.Run(mode, func(t *testing.T) {
 			target := testTarget()
 			ref := testRef()
@@ -93,8 +93,6 @@ func TestExternalBindingFailClosedBeforeIssuance(t *testing.T) {
 					target.URL = "https://unapproved.example.invalid/v1"
 				case "issuer":
 					target.Issuer = "mcp"
-				case "model":
-					target.Model = "ungranted"
 				}
 				body := map[string]any{"version": 1, "agent": ref, "target": target}
 				if mode == "credentials" {
@@ -107,7 +105,7 @@ func TestExternalBindingFailClosedBeforeIssuance(t *testing.T) {
 			c.Bindings = nil
 			c.AllowHTTP = true
 			c.External = &identity.ExternalConfig{URL: server.URL, BearerFile: secret}
-			s, err := New(c, issuer)
+			s, err := New(c, testRef().Server, issuer)
 			if err != nil {
 				t.Fatal(err)
 			}
