@@ -17,7 +17,7 @@ async def authorize(request: Request, api_key: str) -> UserAPIKeyAuth:
         raise HTTPException(403, "Unsupported parameter")
     async with httpx.AsyncClient(timeout=5, follow_redirects=False) as client:
         response = await client.post(
-            "http://gateway:8080/authorize-inference",
+            "http://fixture-provider:8080/authorize-inference",
             headers={"Authorization": f"Bearer {api_key}"},
             json={"model": body.get("model"), "reasoning_effort": body.get("reasoning_effort", "")},
         )

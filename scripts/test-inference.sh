@@ -20,7 +20,10 @@ services:
   gateway:
     environment:
       INFERENCE_FIXTURE: "1"
-    networks: [fixture, execution]
+    networks:
+      fixture:
+        aliases: [fixture-provider]
+      execution: {}
   litellm:
     mem_limit: 768m
     cpus: 0.5
@@ -67,6 +70,6 @@ compose up -d --wait --wait-timeout 180 litellm || { compose logs --no-color lit
 result=0
 compose run --rm --no-deps rotation || result=$?
 if [ "$result" -ne 0 ]; then
- compose logs --no-color litellm 2>&1 | rg -o "RateLimitError|TPM limit|rate limit|429 Too Many Requests|403 Forbidden" || true
+ compose logs --no-color litellm 2>&1 | rg -o "ConnectTimeout|ReadTimeout|ConnectError|TimeoutError|APIConnectionError|RateLimitError|TPM limit|rate limit|429 Too Many Requests|403 Forbidden" || true
 fi
 exit "$result"

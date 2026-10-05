@@ -100,3 +100,9 @@ key and independent inference JWTs. The same native OpenCode process rotates MCP
 and inference identity across real expiries. Static/external bindings, external
 model grants, streaming, outages, cancellation and invalid-token behavior are
 checked without contacting a real provider or requiring a subscription.
+
+LiteLLM's upstream and authorization calls use `fixture-provider`, an alias only
+on the stable fixture network. The generic `gateway` service name can resolve to
+an attempt network while peers are attached there; those addresses disappear on
+attempt cleanup and must not be retained by an upstream connection pool. Agent
+MCP calls keep the execution-network alias and remain isolated per attempt.

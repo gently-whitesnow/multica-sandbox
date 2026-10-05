@@ -18,7 +18,7 @@ func inferenceFixture(t *testing.T, services map[string]any) {
 	}
 	services["seed"] = map[string]any{"environment": map[string]string{"ROTATION_FIXTURE": "1", "INFERENCE_FIXTURE": "1"}}
 	services["keycloak"] = map[string]any{"mem_limit": "512m", "environment": map[string]string{"JAVA_OPTS_KC_HEAP": "-Xms64m -Xmx256m"}}
-	services["gateway"] = map[string]any{"networks": []string{"fixture", "execution"}, "environment": map[string]string{"INFERENCE_FIXTURE": "1"}}
+	services["gateway"] = map[string]any{"networks": map[string]any{"fixture": map[string]any{"aliases": []string{"fixture-provider"}}, "execution": map[string]any{}}, "environment": map[string]string{"INFERENCE_FIXTURE": "1"}}
 	services["litellm"] = map[string]any{
 		"mem_limit": "768m", "cpus": 0.5,
 		"image":    "ghcr.io/berriai/litellm:v1.104.0@sha256:625981c83410a3ea68eb0697590a57ec1d764d634514d54fa5db0591077ee839",
