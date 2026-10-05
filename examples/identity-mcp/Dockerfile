@@ -2,6 +2,7 @@ FROM golang:1.26.4-alpine@sha256:3ad57304ad93bbec8548a0437ad9e06a455660655d9af01
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
+COPY internal/identity/ ./internal/identity/
 COPY examples/identity-mcp/ ./examples/identity-mcp/
 RUN CGO_ENABLED=0 go build -trimpath -o /identity-example ./examples/identity-mcp
 FROM scratch
