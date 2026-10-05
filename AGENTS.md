@@ -12,7 +12,7 @@ from verified behavior.
   offline execution and recovery (0006), containerized service (0007),
   multi-workspace authority (0008), attempt authorization (0009), external services/adapters (0010),
   managed MCP identity delivery (0011), inference credential translation (0012),
-  identity resolution contract (0013), unified workspace discovery (0014).
+  identity resolution contract (0013).
 - `examples/end-to-end/`: opt-in real Multica/OpenCode/inference lab.
 - `examples/identity-mcp/`: disposable identity and MCP contract fixture.
 - `internal/identity/`: static/external identity resolution and verified Keycloak issuance.
@@ -40,6 +40,7 @@ from verified behavior.
 - Prefer maintained components. Document a concrete gap before replacing one.
 - Require adversarial conformance checks before advertising backend or adapter
   support; a working happy path is insufficient.
+- Keep ADRs focused on distinct decisions; update existing ones for prototype refinements.
 - Record architectural changes in numbered ADRs. Keep navigation here.
 - On Harness upgrades, review new checks and require every applicable check.
 - Add language checks and meaningful runtime tests as the implementation grows.

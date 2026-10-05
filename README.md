@@ -89,7 +89,7 @@ separate and unsupported. New workspace registration never sweeps active contain
 
 Workspace discovery is always enabled. A single accessible workspace uses the same
 execution path as many workspaces; `concurrency: 1` limits global execution to one
-attempt at a time. No workspace-mode selector or compatibility path is supported.
+attempt at a time. Membership determines which workspaces are served.
 
 `docker compose stop` gracefully removes active execution and intentionally leaves
 the controller stopped. Restart with `docker compose up -d`; interrupted tasks are

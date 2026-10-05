@@ -6,8 +6,8 @@ Date: 2026-10-04
 ## Context
 
 A deployment may serve 100 workspaces without 100 machines or controller processes.
-The original controller binds one state volume to one workspace.
-PR #11 is a single-workspace baseline, not a multi-tenant implementation.
+One controller discovers accessible memberships and keeps attempt authority
+scoped to each workspace.
 
 Research inspected upstream main at b4ca5b4a23e68b26292a680dca7689a952bb1cd5.
 The following source findings informed the implementation:
@@ -31,7 +31,9 @@ Keep runtime visibility independent from controller admission and inference poli
 Public runtimes are optional sharing inside each workspace, never tenant isolation.
 
 Start with a dedicated service user using the existing PAT path, membership-based
-workspace discovery. Discover all accessible memberships; no required allowlist. Leave public visibility
+workspace discovery. Discovery is always enabled, without workspace-mode selectors.
+One or many accessible workspaces use the same scheduler; concurrency controls
+capacity independently of membership count. Leave public visibility
 under the runtime owner's manual control. Serving the whole server requires provisioning membership
 for existing and newly created workspaces. Membership is required for the service user;
 this is not a new upstream service-account credential type. A shared PAT broadens
@@ -49,9 +51,8 @@ trusted control-plane data. Partition writable state, authorization, cache and
 telemetry accordingly. Discovering a workspace does not authorize future actions.
 Removal must stop new claims and revoke/drain its work without disturbing others.
 Cleanup must retain ownership records for removed workspaces and must not run a
-worker-wide sweep during individual workspace registration. ADR 0014 supersedes
-the initial single-workspace service mode and its migration guidance; discovery
-is now the only service path.
+worker-wide sweep during individual workspace registration. Persist controller
+ownership by server, daemon and Docker Engine as specified in ADR 0007.
 
 Inference credentials are independent of Multica control-plane credentials.
 A trusted service maps validated run identity to workspace policy and a secret
@@ -84,6 +85,9 @@ for restored access or upstream recovery mechanisms when membership is absent.
 Rejoining waits for local teardown before recovery. Registrations never auto-publish.
 
 ## Consequences
+
+The standalone probe may select one workspace for a disposable diagnostic; it is
+not a controller service mode.
 
 Multi-workspace discovery, isolation and bounded capacity precede the first real
 agent integration. Acceptance covers claim scope, revoked membership, manual
