@@ -66,15 +66,15 @@ docker compose up -d --build
 docker compose logs -f controller
 ```
 
-One controller serves all accessible workspaces with a shared `concurrency` limit
-(default 1, maximum 32) and at most one active attempt per workspace. Every attempt gets a fresh non-root,
+One controller serves all accessible workspaces with a shared `concurrency` limit (default 1, maximum 32) and at most one active attempt per workspace. Every attempt gets a fresh non-root,
 networkless container with bounded resources and temporary storage. Custom images
 need no inheritance; image-declared volumes are rejected. No service tokens or
 host mounts enter execution. Workload output/files are discarded; completion is a
 fixed test result. The opt-in OpenCode path uses per-attempt internal networks, native MCP OAuth
 rotation and external attempt leases. Optional [inference identity](internal/inference/README.md)
-uses a separate JWT and provider auth hook. Events, usage, repositories and
-retained sessions remain unimplemented.
+uses a separate JWT and provider auth hook. Native messages, reported usage, terminal
+text/session IDs and safe repository references are mapped to existing Multica APIs.
+See the [capability matrix and walkthrough](internal/opencode/README.md); direct repository checkout, retained sessions and artifact publication remain unsupported.
 
 Docker restarts a crashed controller. On startup it removes its old executions
 before asking Multica to recover tasks. Persistent state binds the shared lock to

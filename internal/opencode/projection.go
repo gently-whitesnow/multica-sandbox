@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/url"
 	"regexp"
 	"strings"
 
@@ -74,7 +75,29 @@ func Config(connections map[string]Remote) ([]byte, error) {
 }
 
 func Prompt(t multica.Task) ([]byte, error) {
-	prompt := strings.Join([]string{t.Agent.Instructions, t.WorkspaceContext, "Assigned issue: " + t.IssueID, t.TriggerCommentContent}, "\n\n")
+	if t.Agent == nil || len(t.Repos) > 32 {
+		return nil, ErrDenied
+	}
+	sources := []string{}
+	for _, repo := range t.Repos {
+		u, err := url.Parse(repo.URL)
+		if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || strings.ContainsAny(repo.URL, "\r\n\x00") {
+			return nil, ErrDenied
+		}
+		encoded, err := json.Marshal(repo)
+		if err != nil {
+			return nil, ErrDenied
+		}
+		sources = append(sources, string(encoded))
+	}
+	sections := []string{t.Agent.Instructions, t.WorkspaceContext, "Assigned issue: " + t.IssueID, t.ProjectTitle, t.ProjectDescription, t.TriggerCommentContent, t.ChatMessage}
+	if len(sources) > 0 {
+		sections = append(sections, "Repository references (no local checkout; access through selected authorized MCP):\n"+strings.Join(sources, "\n"))
+	}
+	if t.PriorSessionID != "" {
+		sections = append(sections, "This disposable attempt starts a fresh native session. Prior session resume is unavailable.")
+	}
+	prompt := strings.Join(sections, "\n\n")
 	if len(prompt) > 65536 {
 		return nil, ErrDenied
 	}

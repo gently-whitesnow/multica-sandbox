@@ -20,8 +20,8 @@ type API interface {
 	Start(context.Context, multica.Task) error
 	Status(context.Context, string) (string, error)
 	Message(context.Context, string) error
-	Complete(context.Context, string) error
-	Fail(context.Context, string, error) error
+	Complete(context.Context, string, execution.Result) error
+	Fail(context.Context, string, error, execution.Result) error
 	CancelAck(context.Context, string) error
 }
 
@@ -85,11 +85,11 @@ func (p *Probe) execute(ctx context.Context, t multica.Task, ticks <-chan time.T
 	if err := p.API.Message(ctx, t.ID); err != nil {
 		return err
 	}
-	done, stop, err := p.launch(ctx, t)
+	done, stop, outcome, err := p.launch(ctx, t)
 	if err != nil {
 		var rejected *execution.RejectedError
 		if errors.As(err, &rejected) {
-			return p.finish(ctx, t.ID, err, func() error { return nil })
+			return p.finish(ctx, t.ID, err, func() error { return nil }, func() execution.Result { return execution.Result{Disposable: p.Launch != nil} })
 		}
 		return err
 	}
@@ -114,17 +114,20 @@ func (p *Probe) execute(ctx context.Context, t multica.Task, ticks <-chan time.T
 				return err
 			}
 		case err := <-done:
-			return p.finish(ctx, t.ID, err, stop)
+			return p.finish(ctx, t.ID, err, stop, outcome)
 		case <-timer.C:
 			var failure error
-			if p.Backend != nil || p.Fail {
+			if p.Backend != nil || p.Launch != nil || p.Fail {
 				failure = fmt.Errorf("execution failed or timed out")
 			}
-			return p.finish(ctx, t.ID, failure, stop)
+			return p.finish(ctx, t.ID, failure, stop, outcome)
 		}
 	}
 }
-func (p *Probe) finish(ctx context.Context, id string, failure error, stop func() error) error {
+func (p *Probe) finish(ctx context.Context, id string, failure error, stop func() error, outcome func() execution.Result) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	if err := stop(); err != nil {
 		return err
 	}
@@ -133,9 +136,9 @@ func (p *Probe) finish(ctx context.Context, id string, failure error, stop func(
 		return err
 	}
 	if failure != nil {
-		err = p.API.Fail(ctx, id, failure)
+		err = p.API.Fail(ctx, id, failure, outcome())
 	} else {
-		err = p.API.Complete(ctx, id)
+		err = p.API.Complete(ctx, id, outcome())
 	}
 	if err == nil {
 		p.observe("reported", id)

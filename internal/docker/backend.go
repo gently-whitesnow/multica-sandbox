@@ -127,6 +127,8 @@ func (r *run) Remove(ctx context.Context) error {
 	_, err := command(ctx, "rm", "-fv", r.name)
 	return err
 }
+func (r *run) Result() execution.Result { return execution.Result{} }
+
 func (r *run) Wait(ctx context.Context) error {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()

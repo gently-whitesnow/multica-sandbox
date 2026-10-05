@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -136,9 +137,6 @@ func (r *projectedRun) Execute(ctx context.Context, args []string) error {
 	var out limitedOutput
 	cmd.Stdout = &out
 	err := cmd.Run()
-	if failure := agentFailure(out.Bytes()); failure != nil {
-		return failure
-	}
 	if err != nil {
 		return fmt.Errorf("agent execution failed; output withheld")
 	}
@@ -212,6 +210,32 @@ func reconcileNetworks(ctx context.Context, owner string) error {
 		if err := removeNetwork(ctx, id, peers); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// Stream keeps native stdout out of diagnostics and bounds it in the adapter.
+func (r *projectedRun) Stream(ctx context.Context, args []string, consume func(io.Reader) error) error {
+	execCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	cmd := exec.CommandContext(execCtx, "docker", append([]string{"exec", r.name}, args...)...)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("agent output pipe failed")
+	}
+	if err = cmd.Start(); err != nil {
+		return fmt.Errorf("agent execution failed")
+	}
+	readErr := consume(stdout)
+	if readErr != nil {
+		cancel()
+	}
+	waitErr := cmd.Wait()
+	if readErr != nil {
+		return readErr
+	}
+	if waitErr != nil {
+		return fmt.Errorf("agent execution failed; output withheld")
 	}
 	return nil
 }

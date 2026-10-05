@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/gently-whitesnow/multica-sandbox/internal/execution"
 	"net/http"
 	"os"
 	"os/exec"
@@ -154,7 +155,7 @@ func TestUpstreamLifecycle(t *testing.T) {
 		if err := api.Start(ctx, *task); err != nil {
 			t.Fatalf("safe start replay: %v", err)
 		}
-		if err := api.Complete(ctx, id); err != nil {
+		if err := api.Complete(ctx, id, execution.Result{}); err != nil {
 			t.Fatal(err)
 		}
 	})

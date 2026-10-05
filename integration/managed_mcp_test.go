@@ -66,11 +66,15 @@ func managedMCPService(t *testing.T, api *multica.Client) {
  INSERT INTO issue(id,workspace_id,title,status,creator_type,creator_id,number,assignee_type,assignee_id) VALUES('%s','%s','Managed MCP fixture','in_progress','member','%s',99999,'agent','%s');
  INSERT INTO agent_task_queue(id,agent_id,runtime_id,issue_id,status,max_attempts,originator_user_id,accountable_user_id) VALUES('%s','%s','%s','%s','queued',1,'%s','%s');`, agent, workspace, runtime, user, issue, workspace, user, agent, id, agent, runtime, issue, user, user))
 	started := dockerTest(t, "inspect", "--format", "{{.State.StartedAt}}", cid)
+	observedSession := ""
 	deadline := time.Now().Add(150 * time.Second)
 	for time.Now().Before(deadline) {
 		state, err := api.Status(context.Background(), id)
 		if err != nil {
 			t.Fatal(err)
+		}
+		if state == "running" && observedSession == "" {
+			observedSession = sql(t, fmt.Sprintf("SELECT coalesce(session_id,'') FROM agent_task_queue WHERE id='%s';", id))
 		}
 		if state == "completed" {
 			break
@@ -81,6 +85,9 @@ func managedMCPService(t *testing.T, api *multica.Client) {
 		time.Sleep(250 * time.Millisecond)
 	}
 	status(t, api, id, "completed")
+	if !strings.HasPrefix(observedSession, "ses_") {
+		t.Fatal("native session was not pinned mid-flight")
+	}
 	var evidence map[string][2]int
 	if err := json.Unmarshal([]byte(dockerTest(t, "exec", project+"-gateway-1", "/identity-example", "evidence")), &evidence); err != nil {
 		t.Fatal(err)
@@ -110,9 +117,11 @@ func managedMCPService(t *testing.T, api *multica.Client) {
 	if dockerTest(t, "inspect", "--format", "{{.State.StartedAt}}", cid) != started {
 		t.Fatal("controller restarted during task")
 	}
-	if output := sql(t, fmt.Sprintf("SELECT result FROM agent_task_queue WHERE id='%s';", id)); !strings.Contains(output, "OpenCode process completed") {
-		t.Fatal("probe callback reported agent completion")
+	if output := sql(t, fmt.Sprintf("SELECT result FROM agent_task_queue WHERE id='%s';", id)); !strings.Contains(output, "Fixture task completed") {
+		t.Fatal("native result was not reported")
 	}
+
+	assertNativeReports(t, id, os.Getenv("VERIFY_INFERENCE") == "1")
 	f.compose("stop")
 	t.Log("real Multica claim -> persistent Compose controller -> native OpenCode task -> real Keycloak/MCP rotations -> cleanup; inference is deterministic")
 }

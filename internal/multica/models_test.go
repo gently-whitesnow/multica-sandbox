@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/gently-whitesnow/multica-sandbox/internal/execution"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -74,7 +75,7 @@ func TestFailureReportContainsOnlySafeStatus(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = c.AgentFail(context.Background(), testID, 403); err != nil {
+	if err = c.AgentFail(context.Background(), testID, 403, execution.Result{}); err != nil {
 		t.Fatal(err)
 	}
 }

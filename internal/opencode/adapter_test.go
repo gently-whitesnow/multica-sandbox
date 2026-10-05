@@ -3,6 +3,7 @@ package opencode
 import (
 	"context"
 	"errors"
+	"io"
 	"strings"
 	"sync"
 	"testing"
@@ -135,3 +136,8 @@ func TestUncertainRevocationIsNotSafeRejection(t *testing.T) {
 		t.Fatal("uncertain authorization cleanup treated as safe rejection")
 	}
 }
+
+func (s *stubWorkload) Stream(ctx context.Context, args []string, _ func(io.Reader) error) error {
+	return s.Execute(ctx, args)
+}
+func (s *stubWorkload) Result() execution.Result { return execution.Result{} }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/gently-whitesnow/multica-sandbox/internal/execution"
 	"net/http"
 	"time"
 )
@@ -19,6 +20,11 @@ type Task struct {
 	Agent                 *Agent            `json:"agent"`
 	IssueID               string            `json:"issue_id"`
 	WorkspaceContext      string            `json:"workspace_context"`
+	ChatMessage           string            `json:"chat_message"`
+	ProjectTitle          string            `json:"project_title"`
+	ProjectDescription    string            `json:"project_description"`
+	Repos                 []Repository      `json:"repos"`
+	PriorSessionID        string            `json:"prior_session_id"`
 	TriggerCommentContent string            `json:"trigger_comment_content"`
 	RemoteMCPConnections  []json.RawMessage `json:"remote_mcp_connections"`
 	WorkspaceID           string            `json:"workspace_id"`
@@ -108,10 +114,10 @@ func (c *Client) Status(ctx context.Context, id string) (string, error) {
 func (c *Client) Message(ctx context.Context, id string) error {
 	return c.taskPost(ctx, id, "messages", map[string]any{"messages": []map[string]any{{"seq": 1, "type": "text", "content": "Test execution started; this runtime does not implement an agent adapter.", "created_at": time.Now().UTC()}}})
 }
-func (c *Client) Complete(ctx context.Context, id string) error {
+func (c *Client) Complete(ctx context.Context, id string, result execution.Result) error {
 	return c.taskPost(ctx, id, "complete", map[string]string{"output": "Test execution completed; this does not complete the requested agent work."})
 }
-func (c *Client) Fail(ctx context.Context, id string, _ error) error {
+func (c *Client) Fail(ctx context.Context, id string, _ error, _ execution.Result) error {
 	return c.taskPost(ctx, id, "fail", map[string]string{"error": "Lifecycle probe failure", "failure_reason": "execution_failed"})
 }
 func (c *Client) CancelAck(ctx context.Context, id string) error {
@@ -133,14 +139,20 @@ func (c *Client) taskPost(ctx context.Context, id, action string, body any) erro
 func (c *Client) AgentMessage(ctx context.Context, id string) error {
 	return c.taskPost(ctx, id, "messages", map[string]any{"messages": []map[string]any{{"seq": 1, "type": "text", "content": "Experimental OpenCode attempt started.", "created_at": time.Now().UTC()}}})
 }
-func (c *Client) AgentComplete(ctx context.Context, id string) error {
-	return c.taskPost(ctx, id, "complete", map[string]string{"output": "OpenCode process completed; detailed events, usage and artifacts are not yet reported by this experimental adapter."})
+func (c *Client) AgentComplete(ctx context.Context, id string, result execution.Result) error {
+	return c.taskPost(ctx, id, "complete", map[string]any{"output": result.Output, "session_id": result.SessionID, "session_rollout_missing": result.Disposable})
 }
 
-func (c *Client) AgentFail(ctx context.Context, id string, status int) error {
+func (c *Client) AgentFail(ctx context.Context, id string, status int, result execution.Result) error {
 	message := "OpenCode execution or identity delivery failed"
 	if status >= 400 && status <= 599 {
 		message = fmt.Sprintf("Inference gateway request failed (HTTP %d)", status)
 	}
-	return c.taskPost(ctx, id, "fail", map[string]string{"error": message, "failure_reason": "execution_failed"})
+	return c.taskPost(ctx, id, "fail", map[string]any{"error": message, "failure_reason": "execution_failed", "session_id": result.SessionID, "session_rollout_missing": result.Disposable})
+}
+
+type Repository struct {
+	URL         string `json:"url"`
+	Description string `json:"description"`
+	Ref         string `json:"ref"`
 }

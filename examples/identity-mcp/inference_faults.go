@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -160,4 +161,15 @@ func (r inferenceFaultRun) Execute(ctx context.Context, args []string) error {
 		}
 	}
 	return r.ProjectedRun.Execute(ctx, args)
+}
+
+func (r inferenceFaultRun) Stream(ctx context.Context, args []string, consume func(io.Reader) error) error {
+	if r.ready != nil {
+		select {
+		case <-r.ready:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return r.ProjectedRun.Stream(ctx, args, consume)
 }

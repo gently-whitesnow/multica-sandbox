@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -132,6 +133,7 @@ func rotation(selectionsOnly bool) error {
 	if selectionsOnly {
 		return inferenceSelections(ctx, adapter, states, tasks[0])
 	}
+	results := make(chan execution.Result, 2)
 	done := make(chan error, 2)
 	ready := make(chan error, 2)
 	for _, task := range tasks {
@@ -141,6 +143,7 @@ func rotation(selectionsOnly bool) error {
 			if err == nil {
 				err = run.Wait(ctx)
 				err = errorsJoin(err, run.Remove(context.Background()))
+				results <- run.Result()
 			}
 			done <- err
 		}()
@@ -155,16 +158,8 @@ func rotation(selectionsOnly bool) error {
 			return err
 		}
 	}
-	issuer.Lock()
-	initialA, initialB := issuer.issued[tasks[0].WorkspaceID], issuer.issued[tasks[1].WorkspaceID]
-	issuer.Unlock()
-	if len(initialA) != 0 && len(initialB) != 0 {
-		if err := call(ctx, initialA[0].Bearer(), tasks[1].WorkspaceID, "document", false); err != nil {
-			cancel()
-		}
-		if err := call(ctx, initialB[0].Bearer(), tasks[1].WorkspaceID, "document", true); err != nil {
-			cancel()
-		}
+	if err := checkCrossWorkspace(ctx, issuer, tasks); err != nil {
+		cancel()
 	}
 	var executionErr error
 	for range tasks {
@@ -175,6 +170,10 @@ func rotation(selectionsOnly bool) error {
 	}
 	if executionErr != nil {
 		return executionErr
+	}
+	firstResult, secondResult := <-results, <-results
+	if !strings.HasPrefix(firstResult.SessionID, "ses_") || firstResult.SessionID == secondResult.SessionID || !firstResult.Disposable || !secondResult.Disposable || firstResult.Output != "Fixture task completed" || secondResult.Output != "Fixture task completed" {
+		return fmt.Errorf("concurrent native attempts did not produce independent disposable sessions/results")
 	}
 	if err := checkEvidence(ctx, tasks); err != nil {
 		return err
@@ -254,4 +253,20 @@ func printEvidence() error {
 		return fmt.Errorf("evidence unavailable")
 	}
 	return json.NewEncoder(os.Stdout).Encode(evidence)
+}
+
+func checkCrossWorkspace(ctx context.Context, issuer *recordingIssuer, tasks []multica.Task) error {
+	issuer.Lock()
+	initialA, initialB := issuer.issued[tasks[0].WorkspaceID], issuer.issued[tasks[1].WorkspaceID]
+	issuer.Unlock()
+	if len(initialA) != 0 && len(initialB) != 0 {
+		if err := call(ctx, initialA[0].Bearer(), tasks[1].WorkspaceID, "document", false); err != nil {
+			return err
+		}
+		if err := call(ctx, initialB[0].Bearer(), tasks[1].WorkspaceID, "document", true); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
