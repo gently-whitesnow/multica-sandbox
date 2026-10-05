@@ -20,6 +20,11 @@ func (s *Service) AcquireForMCP(ctx context.Context, r Ref, selectedURL string) 
 	if !ok {
 		return AccessToken{}, ErrDenied
 	}
+	return s.AcquireForIssuer(ctx, r, expected)
+}
+
+// AcquireForIssuer lets a trusted delivery adapter require the resolved issuer.
+func (s *Service) AcquireForIssuer(ctx context.Context, r Ref, expected string) (AccessToken, error) {
 	c, err := s.Resolve(ctx, r)
 	if err != nil || c.Issuer != expected {
 		return AccessToken{}, ErrDenied

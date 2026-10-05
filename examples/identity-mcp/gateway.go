@@ -23,14 +23,16 @@ type grant struct {
 	ID, Workspace, Agent, Task, Attempt, Resource, TokenHash string
 	Active                                                   bool
 	Controller                                               string
+	URL                                                      string
 	Until                                                    int64
 }
 type registry struct {
 	sync.RWMutex
-	grants map[string]grant
-	ended  map[string]bool
-	calls  map[string]int
-	hashes map[string]map[string]bool
+	grants            map[string]grant
+	ended             map[string]bool
+	calls             map[string]int
+	hashes            map[string]map[string]bool
+	inferenceRequests int
 }
 
 func fingerprint(token string) string {
@@ -54,7 +56,7 @@ func (g *registry) verifier(v *oidc.IDTokenVerifier) auth.TokenVerifier {
 		g.RLock()
 		defer g.RUnlock()
 		run, ok := g.grants[fingerprint(token)]
-		if !ok || !run.Active || (run.Until != 0 && run.Until <= time.Now().Unix()) {
+		if !ok || !run.Active || (run.URL != "" && run.URL != "http://gateway:8080/mcp") || (run.Until != 0 && run.Until <= time.Now().Unix()) {
 			return nil, auth.ErrInvalidToken
 		}
 		return &auth.TokenInfo{UserID: parsed.Subject, Expiration: parsed.Expiry, Extra: map[string]any{"grant": run}}, nil
@@ -111,7 +113,8 @@ func gateway() error {
 	mux.Handle("/grants", grants.admin(secret))
 	mux.Handle("/attempts", grants.attempts(secret))
 	mux.Handle("/evidence", grants.evidence(secret))
-	mux.HandleFunc("/v1/chat/completions", mockInference)
+	mux.HandleFunc("/v1/chat/completions", fixtureInference)
+	mux.Handle("/authorize-inference", grants.inferenceAuth(provider.Verifier(&oidc.Config{ClientID: "sandbox-inference", SupportedSigningAlgs: []string{"RS256"}})))
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(204) })
 	return serve(":8080", mux)
 }

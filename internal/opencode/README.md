@@ -3,8 +3,7 @@
 The persistent controller's opt-in OpenCode path projects trusted Multica task
 context, acquires verified identity and rotates the native MCP OAuth store during
 one disposable attempt. OpenCode is pinned to 1.18.34 (source `aec0b9a6`); a version
-check precedes execution, including for user-supplied images. Full adapter conformance
-and inference identity remain #24/#22.
+check precedes execution, including for user-supplied images. Optional inference identity follows ADR 0012; full adapter conformance remains #24.
 
 ```mermaid
 flowchart TD
@@ -30,8 +29,8 @@ named `peers`. Each attempt gets a new internal network with only those peers an
 its own container. Template peer aliases preserve the selected MCP hostname. Place
 Multica, IAM, resolver and credential stores on a separate control network. Only
 approved MCP/gateway services may be peers. Enforce host/metadata and destination
-policy outside Docker; internal bridges do not establish a
-production adversarial egress boundary. Do not attach untrusted workloads/services
+policy outside Docker; internal bridges do not establish a production
+adversarial egress boundary. Do not attach untrusted workloads/services
 to the template. Concurrent attempt containers never share a network.
 
 The default command is `opencode run --format json` with the projected prompt.
@@ -39,7 +38,8 @@ An operator-supplied command may use the same `/workspace/prompt.txt` and
 `/workspace/opencode.json`; only controller configuration chooses that command.
 Images may include their own tools and credential-free provider configuration.
 No permanent inference/provider credential is permitted in an image or command;
-renewable inference configuration is #22. The fixture supplies a mock provider from
+renewable inference configuration uses the optional `inference_file`; see
+[`internal/inference`](../inference/README.md). The fixture supplies a mock provider from
 trusted test configuration solely to exercise tool turns without a subscription.
 
 ## Review route
@@ -82,7 +82,8 @@ The authority is external; this repository contains only a fixture implementatio
 
 `renew` includes `controller`, the dispatch-fenced `attempt`, `server`,
 `workspace_id`, `agent_id`, `task_id`, `mcp_url`, SHA-256 `token_hash`, and epoch-second
-`expires_at`. It contains no bearer JWT. The authority authenticates the controller,
+`expires_at`. Exactly one of `mcp_url` and `inference_url` identifies the recipient.
+It contains no bearer JWT. The authority authenticates the controller,
 validates references/recipients, and registers or renews a bounded active grant.
 `revoke` ends every fingerprint for an attempt; `recover` ends the controller's
 previous grants. Both must be idempotent. Ended attempts cannot be re-enrolled and
@@ -107,3 +108,7 @@ full events/usage/artifact reporting are not supported. A zero-exit CLI process
 without an error event yields an explicit experimental completion description;
 it does not certify requested work or produce a retained result artifact. MCP roles,
 resource permissions and model routing remain external. CI remains paused.
+
+`opencode.inference_file` enables the separate inference binding and token path.
+See [inference configuration](../inference/README.md) and
+[`deploy/inference.example.json`](../../deploy/inference.example.json).

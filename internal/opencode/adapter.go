@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
 	"github.com/gently-whitesnow/multica-sandbox/internal/attempt"
 	"github.com/gently-whitesnow/multica-sandbox/internal/execution"
 	"github.com/gently-whitesnow/multica-sandbox/internal/identity"
+	"github.com/gently-whitesnow/multica-sandbox/internal/inference"
 	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
 )
 
@@ -29,6 +31,7 @@ type Status interface {
 type Adapter struct {
 	Server, Controller string
 	Issuer             Issuer
+	Inference          Inference
 	Authority          Authority
 	Workloads          Workloads
 	Status             Status
@@ -47,6 +50,7 @@ type running struct {
 	started     bool
 	once        sync.Once
 	cleanupErr  error
+	inference   inference.Session
 }
 
 func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, error) {
@@ -80,12 +84,16 @@ func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, 
 
 func (r *running) initialize(ctx context.Context, prompt []byte) error {
 	if err := r.workload.Execute(ctx, []string{"/bin/sh", "-c", `test "$(opencode --version)" = "` + Version + `"`}); err != nil {
-		return ErrDenied
+		return fmt.Errorf("OpenCode version: %w", ErrDenied)
 	}
 	if err := r.workload.Execute(ctx, []string{"/bin/sh", "-c", `set -eu; mkdir -p /workspace/config/opencode; printf "{}" > /workspace/config/opencode/opencode.json; printf "*\n" > /workspace/config/opencode/.gitignore; chmod 555 /workspace/config/opencode`}); err != nil {
-		return ErrDenied
+		return fmt.Errorf("OpenCode config directory: %w", ErrDenied)
 	}
 	config, err := Config(r.connections)
+	if err != nil {
+		return err
+	}
+	config, err = r.configureInference(ctx, config)
 	if err != nil {
 		return err
 	}
@@ -113,7 +121,10 @@ func (r *running) project(ctx context.Context) error {
 	if err != nil {
 		return ErrDenied
 	}
-	return r.workload.Write(ctx, AuthPath, data)
+	if err := r.workload.Write(ctx, AuthPath, data); err != nil {
+		return err
+	}
+	return r.projectInference(ctx)
 }
 
 func (r *running) grant(action string) attempt.Grant {
@@ -123,7 +134,7 @@ func (r *running) grant(action string) attempt.Grant {
 func (r *running) refresh(ctx context.Context) error {
 	status, err := r.adapter.Status.Status(ctx, r.task.ID)
 	if err != nil || status != "running" {
-		return ErrDenied
+		return fmt.Errorf("task status: %w", ErrDenied)
 	}
 	changed := false
 	ref := identity.Ref{Server: r.adapter.Server, WorkspaceID: r.task.WorkspaceID, AgentID: r.task.AgentID}
@@ -132,7 +143,7 @@ func (r *running) refresh(ctx context.Context) error {
 		if time.Until(token.ExpiresAt) <= 10*time.Second {
 			token, err = r.adapter.Issuer.AcquireForMCP(ctx, ref, connection.URL)
 			if err != nil || time.Until(token.ExpiresAt) <= 10*time.Second {
-				return ErrDenied
+				return fmt.Errorf("MCP issuance: %w", ErrDenied)
 			}
 			changed = true
 		}
@@ -146,6 +157,11 @@ func (r *running) refresh(ctx context.Context) error {
 		}
 		r.tokens[name] = token
 	}
+	inferenceChanged, err := r.refreshInference(ctx, ref)
+	if err != nil {
+		return err
+	}
+	changed = changed || inferenceChanged
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -211,6 +227,7 @@ func (r *running) Remove(ctx context.Context) error {
 			r.cleanupErr = errors.Join(r.cleanupErr, r.workload.Remove(cleanCtx))
 		}
 		clear(r.tokens)
+		r.inference = inference.Session{}
 	})
 	return r.cleanupErr
 }

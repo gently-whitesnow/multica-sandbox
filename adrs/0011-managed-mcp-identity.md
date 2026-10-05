@@ -65,8 +65,9 @@ multiple expiries, using a credential-free deterministic model fixture. They ass
 successful MCP calls, distinct token versions, workspace separation,
 issuer/resolver outages, cancellation and denial of still-unexpired ended tokens.
 The upstream fixture also exercises a real claim through the Compose controller.
-Inference identity and complete events/usage/session/repository behavior remain
-#22 and #24; this is not production adapter certification.
+Optional inference identity uses the separate provider hook from ADR 0012.
+Complete events/usage/session/repository behavior remains #24; this is not
+production adapter certification.
 
 ## References
 

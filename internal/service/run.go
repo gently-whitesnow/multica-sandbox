@@ -108,7 +108,11 @@ func openCodeAdapter(ctx context.Context, c Config, api *multica.Client, backend
 	if err = workloads.ValidateNetwork(ctx); err != nil {
 		return nil, err
 	}
-	return &opencode.Adapter{Server: config.Server, Controller: c.Daemon, Issuer: issuer, Authority: authority, Status: api, Workloads: workloads, Command: c.Command}, nil
+	inferenceSource, err := openCodeInference(c)
+	if err != nil {
+		return nil, err
+	}
+	return &opencode.Adapter{Inference: inferenceSource, Server: config.Server, Controller: c.Daemon, Issuer: issuer, Authority: authority, Status: api, Workloads: workloads, Command: c.Command}, nil
 }
 
 func (a agentFleetAPI) Message(ctx context.Context, id string) error { return a.AgentMessage(ctx, id) }

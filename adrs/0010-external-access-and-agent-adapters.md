@@ -41,8 +41,9 @@ MCP does not have to transport inference requests.
 
 The lab's single-task envelope and OpenCode JSON interpretation are experimental.
 The persistent controller now has an experimental OpenCode MCP integration with
-safe context, cancellation, leases and identity checks. Full event/usage mapping,
-inference and production conformance remain #22/#24.
+safe context, cancellation, leases and identity checks. Optional external-gateway
+inference uses the separate provider hook in ADR 0012. Full event/usage mapping
+and production conformance remain #24.
 Do not silently advertise missing Multica features or copy credential-bearing
 claim fields, arbitrary environment or untrusted endpoint configuration.
 

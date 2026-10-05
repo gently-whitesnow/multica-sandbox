@@ -63,10 +63,10 @@ must not require rebuilding images, and cancellation must revoke inference acces
 
 Keep external actions MCP-mediated as in ADR 0003. Evaluate maintained gateways
 and identity components, but do not assume an OpenAI-compatible gateway supplies
-MCP inference, run attestation or immediate revocation. Inference transport remains
-open: prove a compatible MCP path or separately review a change to ADR 0003 before
-supporting agents that require native provider HTTP. Do not build a general LLM
-proxy or identity issuer inside the controller.
+MCP inference, run attestation or immediate revocation. ADRs 0009/0012 select
+native provider HTTP through an external gateway with independent inference
+identity and active-attempt checks. Do not build a general LLM proxy or identity
+issuer inside the controller.
 
 ### Implementation bounds
 

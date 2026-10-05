@@ -38,6 +38,7 @@ type recordingIssuer struct {
 
 func (s *recordingIssuer) AcquireForMCP(ctx context.Context, ref identity.Ref, url string) (identity.AccessToken, error) {
 	token, err := s.Service.AcquireForMCP(ctx, ref, url)
+
 	if err == nil {
 		s.Lock()
 		s.issued[ref.WorkspaceID] = append(s.issued[ref.WorkspaceID], token)
@@ -90,7 +91,11 @@ func rotation() error {
 	}
 	owner := sha256.Sum256([]byte(os.Getenv("EXECUTION_NETWORK")))
 	controller := fmt.Sprintf("90000000-0000-4000-8000-%x", owner[:6])
-	backend := &docker.Projected{Backend: docker.Backend{Image: opencodeImage, Owner: controller, Command: []string{"/bin/sh"}}, Network: os.Getenv("EXECUTION_NETWORK"), Peers: []string{os.Getenv("MCP_PEER")}}
+	peers := []string{os.Getenv("MCP_PEER")}
+	if os.Getenv("INFERENCE_FIXTURE") == "1" {
+		peers = append(peers, os.Getenv("INFERENCE_PEER"))
+	}
+	backend := &docker.Projected{Backend: docker.Backend{Image: opencodeImage, Owner: controller, Command: []string{"/bin/sh"}}, Network: os.Getenv("EXECUTION_NETWORK"), Peers: peers}
 	if err := backend.Reconcile(ctx); err != nil {
 		return err
 	}
@@ -100,6 +105,16 @@ func rotation() error {
 	}
 	states := &rotationStatus{states: map[string]string{}}
 	adapter := &opencode.Adapter{Server: config.Server, Controller: controller, Issuer: issuer, Authority: authority, Status: states, Workloads: fixtureWorkloads{backend}}
+	var recordedInference *recordingInference
+	if os.Getenv("INFERENCE_FIXTURE") == "1" {
+		adapter.Workloads = backend
+		var closeSource func()
+		recordedInference, closeSource, err = configureRotationInference(ctx, adapter)
+		if err != nil {
+			return err
+		}
+		defer closeSource()
+	}
 	tasks := []multica.Task{}
 	for i, binding := range config.Bindings {
 		task := multica.Task{StartClaimSupported: true, WorkspaceID: binding.WorkspaceID, AgentID: binding.AgentID, ID: fmt.Sprintf("40000000-0000-4000-8000-%012d", i+1), RuntimeID: fmt.Sprintf("50000000-0000-4000-8000-%012d", i+1), DispatchedAt: time.Now().UTC().Format(time.RFC3339Nano), Agent: &multica.Agent{ID: binding.AgentID, Instructions: "Read document repeatedly using fixture MCP.", MCPConfig: json.RawMessage(`{"mcpServers":{"fixture":{"url":"http://gateway:8080/mcp"}}}`)}}
@@ -125,6 +140,11 @@ func rotation() error {
 	for range tasks {
 		if err := <-ready; err != nil {
 			cancel()
+		}
+	}
+	if recordedInference != nil {
+		if err := checkInferencePolicy(ctx, recordedInference, tasks[0]); err != nil {
+			return err
 		}
 	}
 	issuer.Lock()
@@ -161,6 +181,17 @@ func rotation() error {
 		latest := tokens[len(tokens)-1]
 		if err := call(ctx, latest.Bearer(), task.WorkspaceID, "document", false); err != nil {
 			return fmt.Errorf("ended attempt retained access: %w", err)
+		}
+	}
+	if recordedInference != nil {
+		if err := checkInferenceEvidence(ctx, recordedInference, tasks, issuer); err != nil {
+			return err
+		}
+		if err := inferenceFailures(ctx, adapter, states, tasks[0]); err != nil {
+			return err
+		}
+		if err := inferenceFaults(ctx, adapter, states, tasks[0]); err != nil {
+			return err
 		}
 	}
 	if err := rotationFailures(ctx, adapter, states, tasks); err != nil {
