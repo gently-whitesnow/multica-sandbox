@@ -5,10 +5,13 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 )
+
+var inferenceReplies atomic.Int64
 
 const inferenceSubject = "30000000-0000-4000-8000-000000000002"
 
@@ -66,4 +69,5 @@ func fixtureInference(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	mockInference(w, r)
+	inferenceReplies.Add(1)
 }

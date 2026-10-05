@@ -63,7 +63,7 @@ func (g *registry) evidence(secret []byte) http.Handler {
 		}
 		g.RLock()
 		defer g.RUnlock()
-		out := map[string][2]int{"inference-requests": {g.inferenceRequests, 0}}
+		out := map[string][2]int{"inference-requests": {g.inferenceRequests, 0}, "inference-upstream": {int(inferenceReplies.Load()), 0}}
 		for key, calls := range g.calls {
 			out[key] = [2]int{calls, len(g.hashes[key])}
 		}

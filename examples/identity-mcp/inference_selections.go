@@ -34,6 +34,7 @@ func inferenceSelections(ctx context.Context, base *opencode.Adapter, states *ro
 		task.ID = fmt.Sprintf("40000000-0000-4000-8000-%012d", i+70)
 		task.DispatchedAt = time.Now().UTC().Format(time.RFC3339Nano)
 		states.set(task.ID, "running")
+		before := selectionEvidence(ctx)["inference-upstream"][0]
 		run, err := adapter.Start(ctx, task)
 		if err != nil {
 			return fmt.Errorf("explicit selection denied before gateway: %w", err)
@@ -52,7 +53,8 @@ func inferenceSelections(ctx context.Context, base *opencode.Adapter, states *ro
 		switch model {
 		case "fixture-new":
 			if err != nil {
-				return fmt.Errorf("stale-catalog selection failed: %w", err)
+				evidence := selectionEvidence(ctx)
+				return fmt.Errorf("stale-catalog selection failed (gateway requests=%d; upstream replies=%d; root cancelled=%t): %w", selectionCount(evidence, task), evidence["inference-upstream"][0]-before, ctx.Err() != nil, err)
 			}
 		case "ungranted":
 			var denied *execution.AgentFailure
@@ -89,4 +91,27 @@ func inferenceSelections(ctx context.Context, base *opencode.Adapter, states *ro
 	}
 	fmt.Println("PASS native model/reasoning selection survives catalog outage; gateway model/budget refusals preserve selection without substitution")
 	return nil
+}
+
+func selectionCount(evidence map[string][2]int, task multica.Task) int {
+	count := 0
+	for key, stats := range evidence {
+		if strings.HasPrefix(key, "selection:"+task.AttemptKey()+"|") {
+			count += stats[0]
+		}
+	}
+	return count
+}
+
+func selectionEvidence(ctx context.Context) map[string][2]int {
+	secret, err := os.ReadFile("/secrets/admin")
+	if err != nil {
+		return nil
+	}
+	status, data, err := doRequest(ctx, "GET", "http://gateway:8080/evidence", nil, string(secret))
+	var evidence map[string][2]int
+	if err != nil || status != 200 || json.Unmarshal(data, &evidence) != nil {
+		return nil
+	}
+	return evidence
 }

@@ -105,6 +105,15 @@ attempt authority retain that installation namespace. Agent-scoped upstream
 discovery/UI remains pending; scoped local contract tests
 do not establish that missing integration.
 
+The pinned real controller/OpenCode fixture verifies saved agent model/thinking
+claims, explicit models absent from the catalog, and gateway model denial reported
+as HTTP 403 in task failure without substitution. It also verifies that current
+unscoped discovery fails explicitly. Native OpenCode/Keycloak/LiteLLM checks cover
+catalog outage, omitted model/thinking defaults, multiple JWT expiries, isolation
+and revocation. Budget refusal preserves the selected model/effort while native
+OpenCode retries; the fixture cancels that task. Immediate quota-failure reporting
+through Multica and full retry-event reporting are not established.
+
 ## References
 
 - [Claim assembly](https://github.com/multica-ai/multica/blob/b4ca5b4a23e68b26292a680dca7689a952bb1cd5/server/internal/handler/daemon.go)
