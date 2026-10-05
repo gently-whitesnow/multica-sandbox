@@ -12,7 +12,7 @@ from verified behavior.
   offline execution and recovery (0006), containerized service (0007),
   multi-workspace authority (0008), attempt authorization (0009), external services/adapters (0010),
   managed MCP identity delivery (0011), inference credential translation (0012),
-  identity resolution contract (0013).
+  identity resolution contract (0013), unified workspace discovery (0014).
 - `examples/end-to-end/`: opt-in real Multica/OpenCode/inference lab.
 - `examples/identity-mcp/`: disposable identity and MCP contract fixture.
 - `internal/identity/`: static/external identity resolution and verified Keycloak issuance.
@@ -29,6 +29,7 @@ from verified behavior.
 ## Rules
 
 - Keep code and documentation concise.
+- Remove superseded prototype paths unless a deployed consumer requires compatibility.
 - Separate sandbox backends, agent adapters and inference configuration.
 - Keep custom images and declarative tool sets first-class configuration.
 - Keep Multica as the task authority; do not introduce a second task queue.

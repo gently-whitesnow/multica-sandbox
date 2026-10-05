@@ -49,9 +49,9 @@ trusted control-plane data. Partition writable state, authorization, cache and
 telemetry accordingly. Discovering a workspace does not authorize future actions.
 Removal must stop new claims and revoke/drain its work without disturbing others.
 Cleanup must retain ownership records for removed workspaces and must not run a
-worker-wide sweep during individual workspace registration. Migrate ADR 0007's
-single-workspace identity binding explicitly using a fresh state volume after
-stopping the old service and verifying cleanup; never silently reuse its state.
+worker-wide sweep during individual workspace registration. ADR 0014 supersedes
+the initial single-workspace service mode and its migration guidance; discovery
+is now the only service path.
 
 Inference credentials are independent of Multica control-plane credentials.
 A trusted service maps validated run identity to workspace policy and a secret

@@ -77,7 +77,7 @@ fixed test result. No agent adapter, MCP or checkpoint recovery is implemented.
 
 Docker restarts a crashed controller. On startup it removes its old executions
 before asking Multica to recover tasks. Persistent state binds the shared lock to
-the daemon, discovery scope, server and Docker Engine. Preserve the named volume across
+the daemon, server and Docker Engine. Preserve the named volume across
 updates, use one controller per identity, and do not scale this Compose service.
 Never remove the state volume while the controller is active.
 
@@ -87,11 +87,9 @@ sets public visibility in Multica. Public does not share across workspaces.
 An mdt_ token discovers only its bound workspace. Inference credentials remain
 separate and unsupported. New workspace registration never sweeps active containers.
 
-Legacy `workspace: UUID` configuration remains single-workspace and sequential;
-use `workspaces: "all-accessible"` instead for discovery. Changing scope rejects
-an existing identity volume. Stop the old service, confirm its executions are
-removed, retain the old volume for rollback, then explicitly use a fresh state
-volume with the same daemon. Never run both services simultaneously.
+Workspace discovery is always enabled. A single accessible workspace uses the same
+execution path as many workspaces; `concurrency: 1` limits global execution to one
+attempt at a time. No workspace-mode selector or compatibility path is supported.
 
 `docker compose stop` gracefully removes active execution and intentionally leaves
 the controller stopped. Restart with `docker compose up -d`; interrupted tasks are

@@ -54,7 +54,7 @@ func recreateService(t *testing.T, f serviceFixture, cid string, api *multica.Cl
 	if fresh == cid {
 		t.Fatal("expected a new controller container")
 	}
-	eventually(t, "recreated controller ready", func() bool { return strings.Contains(dockerTest(t, "logs", fresh), "ready runtime=") })
+	eventually(t, "recreated controller ready", func() bool { return strings.Contains(dockerTest(t, "logs", fresh), "ready workspaces=") })
 	after := dockerTest(t, "exec", fresh, "cat", "/var/lib/multica-sandbox/identity.json")
 	if before != after {
 		t.Fatal("identity changed during recreation")
