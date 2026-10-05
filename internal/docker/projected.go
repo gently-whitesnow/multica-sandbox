@@ -23,8 +23,6 @@ type Projected struct {
 	Peers   []string
 }
 
-type ProjectionRun = execution.ProjectedRun
-
 func (b *Projected) ValidateNetwork(ctx context.Context) error {
 	if !networkPattern.MatchString(b.Network) || len(b.Peers) == 0 || len(b.Peers) > 16 {
 		return fmt.Errorf("approved internal network and peer names required")
@@ -63,7 +61,7 @@ func (b *Projected) ValidateNetwork(ctx context.Context) error {
 	return nil
 }
 
-func (b *Projected) Start(ctx context.Context, attempt string) (ProjectionRun, error) {
+func (b *Projected) Start(ctx context.Context, attempt string) (execution.ProjectedRun, error) {
 	if err := b.Validate(ctx); err != nil {
 		return nil, err
 	}

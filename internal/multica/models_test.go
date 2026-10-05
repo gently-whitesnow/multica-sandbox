@@ -74,7 +74,7 @@ func TestFailureReportContainsOnlySafeStatus(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = c.AgentFailStatus(context.Background(), testID, 403); err != nil {
+	if err = c.AgentFail(context.Background(), testID, 403); err != nil {
 		t.Fatal(err)
 	}
 }

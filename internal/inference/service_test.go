@@ -120,3 +120,19 @@ func TestExternalBindingFailClosedBeforeIssuance(t *testing.T) {
 		})
 	}
 }
+
+func TestConfigRejectsSupersededBindingFields(t *testing.T) {
+	for _, data := range []string{
+		`{"version":1,"server":"https://override.invalid"}`,
+		`{"version":1,"bindings":[{"model":"old-selection"}]}`,
+		`{"version":1,"bindings":[{"context":64000,"output":4096}]}`,
+	} {
+		path := filepath.Join(t.TempDir(), "inference.json")
+		if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ReadConfig(path); err != ErrDenied {
+			t.Fatal("superseded config accepted", err)
+		}
+	}
+}

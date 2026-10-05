@@ -60,10 +60,10 @@ func (a *agentFleetAPI) Heartbeat(ctx context.Context, rt string) error {
 	})
 }
 
-func (a *agentFleetAPI) FailExecution(ctx context.Context, id string, cause error) error {
+func (a *agentFleetAPI) Fail(ctx context.Context, id string, cause error) error {
 	var failure *execution.AgentFailure
 	if errors.As(cause, &failure) {
-		return a.AgentFailStatus(ctx, id, failure.Status)
+		return a.AgentFail(ctx, id, failure.Status)
 	}
-	return a.AgentFail(ctx, id)
+	return a.AgentFail(ctx, id, 0)
 }

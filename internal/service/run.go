@@ -114,5 +114,3 @@ func (a *agentFleetAPI) Message(ctx context.Context, id string) error { return a
 func (a *agentFleetAPI) Complete(ctx context.Context, id string) error {
 	return a.AgentComplete(ctx, id)
 }
-
-func (a *agentFleetAPI) Fail(ctx context.Context, id string) error { return a.AgentFail(ctx, id) }

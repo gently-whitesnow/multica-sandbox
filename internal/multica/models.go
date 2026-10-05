@@ -57,11 +57,3 @@ func (c *Client) HeartbeatModels(ctx context.Context, runtime string, discover f
 	}
 	return c.call(ctx, http.MethodPost, "/api/daemon/runtimes/"+runtime+"/models/"+url.PathEscape(p.ID)+"/result", report, nil)
 }
-
-func (c *Client) AgentFailStatus(ctx context.Context, id string, status int) error {
-	message := "OpenCode reported execution failure"
-	if status >= 400 && status <= 599 {
-		message = fmt.Sprintf("Inference gateway request failed (HTTP %d)", status)
-	}
-	return c.taskPost(ctx, id, "fail", map[string]string{"error": message, "failure_reason": "execution_failed"})
-}
