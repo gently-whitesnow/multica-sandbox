@@ -92,23 +92,27 @@ scope requests and cached catalogs to runtime IDs, without an agent reference.
 Model entries preserve provider/model IDs and thinking options/defaults, but do
 not carry context/output metadata.
 
-Agent-scoped discovery requires upstream request, cache and UI scoping by agent
-within its workspace, plus context/output metadata. Do not publish a union of
-different agents' catalogs as one runtime catalog. Reuse the pending request/report
-mechanism once that scope is represented; a runtime catalog is not authorization.
+Advisory catalogs are therefore runtime-scoped. The controller registers one
+runtime per workspace, so a catalog is keyed by controller server and workspace,
+both from trusted configuration and registration, never from the request. This
+avoids an upstream fork and a union of agent catalogs: agent-specific grants stay in
+the gateway, which refuses an ungranted selection at task time; Multica shows the
+refusal and the adapter does not substitute a model. Results use upstream's report
+shape; context/output stay native OpenCode metadata. Agent-specific picker lists
+would need upstream request, cache and UI scoping and remain out of scope.
 
 The adapter separates catalog/defaults from task selections and identity renewal.
 A stale catalog must not deny an explicit model selection;
 gateway refusals must remain visible without model substitution. Controller
 configuration supplies the single Multica origin; shared external resolvers and
-attempt authority retain that installation namespace. Agent-scoped upstream
-discovery/UI remains pending; scoped local contract tests
-do not establish that missing integration.
+attempt authority retain that installation namespace. Task-time selection reads
+the same workspace catalog for defaults and native metadata.
 
 The pinned real controller/OpenCode fixture verifies saved agent model/thinking
 claims, explicit models absent from the catalog, and gateway model denial reported
-as HTTP 403 in task failure without substitution. It also verifies that current
-unscoped discovery fails explicitly. Native OpenCode/Keycloak/LiteLLM checks cover
+as HTTP 403 in task failure without substitution. It also verifies completed
+runtime discovery in unmodified Multica, its cache, and a task with the discovered
+model and selected reasoning level. Native OpenCode/Keycloak/LiteLLM checks cover
 catalog outage, omitted model/thinking defaults, multiple JWT expiries, isolation
 and revocation. Budget refusal preserves the selected model/effort while native
 OpenCode retries; the fixture cancels that task. Immediate quota-failure reporting

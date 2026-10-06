@@ -38,25 +38,35 @@ func modelRequest(t *testing.T, method, path string) map[string]any {
 	}
 	return out
 }
-func upstreamDiscoveryGap(t *testing.T, runtime string) {
+func runtimeDiscovery(t *testing.T, runtime string) string {
 	result := modelRequest(t, "POST", "/api/runtimes/"+runtime+"/models?force=true")
 	id, ok := result["id"].(string)
 	if !ok {
 		t.Fatal("discovery request missing")
 	}
-	eventually(t, "explicit unscoped discovery failure", func() bool {
+	eventually(t, "runtime model discovery", func() bool {
 		result = modelRequest(t, "GET", "/api/runtimes/"+runtime+"/models/"+id)
-		return result["status"] == "failed"
+		return result["status"] != "pending" && result["status"] != "running"
 	})
-	message, _ := result["error"].(string)
-	if !strings.Contains(message, "agent_id") || result["models"] != nil {
-		t.Fatal("upstream gap hid failure or disclosed an unscoped catalog")
+	var models []multica.ModelEntry
+	data, _ := json.Marshal(result["models"])
+	if result["status"] != "completed" || result["supported"] != true || json.Unmarshal(data, &models) != nil || len(models) != 1 {
+		t.Fatalf("runtime discovery did not complete: %v %v", result["status"], result["error"])
 	}
-	t.Log("unmodified upstream discovery reports the missing agent scope; no union catalog is published")
+	m := models[0]
+	if m.ID != "managed-inference/fixture" || m.Provider != "managed-inference" || m.Label != "Fixture" || !m.Default || m.Thinking == nil || m.Thinking.DefaultLevel != "medium" || len(m.Thinking.SupportedLevels) != 2 || m.Thinking.SupportedLevels[1].Value != "high" {
+		t.Fatalf("catalog metadata not published to Multica: %+v", m)
+	}
+	// The picker's normal path is served from Multica's runtime-scoped cache.
+	if cached := modelRequest(t, "POST", "/api/runtimes/"+runtime+"/models"); cached["status"] != "completed" || cached["cached"] != true {
+		t.Fatal("completed catalog not cached by Multica")
+	}
+	t.Log("unmodified upstream discovery completes with the workspace catalog for the runtime and caches it")
+	return m.ID
 }
 func controllerModelSelections(t *testing.T, api *multica.Client, runtime, agent, project string) {
-	upstreamDiscoveryGap(t, runtime)
-	for i, model := range []string{"fixture-new", "ungranted", "fixture-limited"} {
+	discovered := strings.TrimPrefix(runtimeDiscovery(t, runtime), "managed-inference/")
+	for i, model := range []string{discovered, "fixture-new", "ungranted", "fixture-limited"} {
 		id := fmt.Sprintf("70000000-0000-4000-8000-%012d", i+70)
 		issue := fmt.Sprintf("80000000-0000-4000-8000-%012d", i+70)
 		sql(t, fmt.Sprintf(`UPDATE agent SET model='managed-inference/%s',thinking_level='high',instructions='Reply briefly.',mcp_config='{}' WHERE id='%s';
@@ -80,7 +90,7 @@ func controllerModelSelections(t *testing.T, api *multica.Client, runtime, agent
 			t.Fatal("selected model/effort did not reach gateway")
 		}
 	}
-	t.Log("real Multica selected model/reasoning reaches native OpenCode/LiteLLM; stale catalog permits explicit selection, refusals do not substitute models")
+	t.Log("real Multica discovered and selected model/reasoning reaches native OpenCode/LiteLLM; models absent from the catalog are not rejected; refusals do not substitute models")
 }
 func selectionEvidence(t *testing.T, project, id, model, effort string, assertNoFallback bool) bool {
 	t.Helper()

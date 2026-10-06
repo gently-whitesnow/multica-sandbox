@@ -37,7 +37,7 @@ func configureServiceInference(t *testing.T, dir, project string, c *service.Con
 	binding.Bindings[0].SecretFile = "/identity-secrets/inference"
 	writeJSON(t, filepath.Join(dir, "inference-identity.json"), binding)
 	target := inference.Target{Gateway: inference.Gateway{URL: "http://litellm:4000/v1", Issuer: "fixture"}}
-	writeJSON(t, filepath.Join(dir, "inference.json"), inference.Config{Version: 1, AllowHTTP: true, IdentityFile: "/etc/multica-sandbox/inference-identity.json", Gateways: []inference.Gateway{target.Gateway}, Bindings: []inference.Binding{{WorkspaceID: workspace, AgentID: binding.Bindings[0].AgentID, Target: target}}, Catalogs: []inference.CatalogBinding{{WorkspaceID: workspace, AgentID: binding.Bindings[0].AgentID, Catalog: inference.Catalog{DefaultModel: "fixture", Models: map[string]inference.Model{"fixture": {Context: 64000, Output: 4096}}}}}})
+	writeJSON(t, filepath.Join(dir, "inference.json"), inference.Config{Version: 1, AllowHTTP: true, IdentityFile: "/etc/multica-sandbox/inference-identity.json", Gateways: []inference.Gateway{target.Gateway}, Bindings: []inference.Binding{{WorkspaceID: workspace, AgentID: binding.Bindings[0].AgentID, Target: target}}, Catalogs: []inference.CatalogBinding{{WorkspaceID: workspace, Catalog: inference.Catalog{DefaultModel: "fixture", Models: map[string]inference.Model{"fixture": {Label: "Fixture", Context: 64000, Output: 4096, Thinking: &inference.Thinking{DefaultLevel: "medium", SupportedLevels: []inference.ThinkingLevel{{Value: "medium", Label: "Medium"}, {Value: "high", Label: "High"}}}}}}}}})
 	c.Command = nil
 	c.OpenCode.InferenceFile = "/etc/multica-sandbox/inference.json"
 	c.OpenCode.Peers = append(c.OpenCode.Peers, project+"-litellm-1")

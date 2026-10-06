@@ -13,12 +13,12 @@ type catalogInference struct {
 	changingInference
 	catalog      inference.Catalog
 	err          error
-	ref          identity.Ref
+	scope        inference.Scope
 	catalogCalls int
 }
 
-func (s *catalogInference) Catalog(_ context.Context, ref identity.Ref) (inference.Catalog, error) {
-	s.ref = ref
+func (s *catalogInference) Catalog(_ context.Context, scope inference.Scope) (inference.Catalog, error) {
+	s.scope = scope
 	s.catalogCalls++
 	return s.catalog, s.err
 }
@@ -70,7 +70,7 @@ func TestModelSelectionIsIntentNotCatalogAuthorization(t *testing.T) {
 			if err != nil || got.model != wantModel || got.effort != wantEffort {
 				t.Fatalf("selection = %+v, %v", got, err)
 			}
-			if source.ref.Server != r.adapter.Server || source.ref.WorkspaceID != task.WorkspaceID || source.ref.AgentID != task.AgentID {
+			if source.scope != (inference.Scope{Server: r.adapter.Server, WorkspaceID: task.WorkspaceID}) {
 				t.Fatal("catalog selectors did not come from trusted controller/claim")
 			}
 

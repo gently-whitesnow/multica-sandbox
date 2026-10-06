@@ -56,8 +56,12 @@ func configureRotationInference(ctx context.Context, adapter *opencode.Adapter) 
 	for _, b := range inferenceIdentityConfig().Bindings {
 		c.Bindings = append(c.Bindings, inference.Binding{WorkspaceID: b.WorkspaceID, AgentID: b.AgentID, Target: fixtureInferenceTarget()})
 	}
+	workspaces := map[string]bool{}
 	for _, b := range c.Bindings {
-		c.Catalogs = append(c.Catalogs, inference.CatalogBinding{WorkspaceID: b.WorkspaceID, AgentID: b.AgentID, Catalog: fixtureInferenceCatalog()})
+		if !workspaces[b.WorkspaceID] {
+			workspaces[b.WorkspaceID] = true
+			c.Catalogs = append(c.Catalogs, inference.CatalogBinding{WorkspaceID: b.WorkspaceID, Catalog: fixtureInferenceCatalog()})
+		}
 	}
 	static, err := inference.New(c, adapter.Server, issuer)
 	if err != nil {

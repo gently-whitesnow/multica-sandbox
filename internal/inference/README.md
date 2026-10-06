@@ -4,8 +4,6 @@ The optional external OpenAI-compatible gateway owns model access, quotas, budge
 and provider routing. The controller delivers short-lived identity and maps trusted
 Multica `agent.model` / `agent.thinking_level` from the claim into native OpenCode.
 Those fields express selection, not permission. MCP uses its separate OAuth store.
-Migration: remove `server` from identity/inference files and move binding `model` /
-`models` into a separate catalog/default entry; recipient bindings keep URL/issuer.
 
 Set `opencode.inference_file` to an absolute configuration path. It names an
 `identity_file`, approved `gateways` (URL/issuer pairs), and either static `bindings`
@@ -13,16 +11,17 @@ or an authenticated `external` recipient resolver. Bindings contain only
 workspace/agent IDs, URL and issuer. The controller's `server` supplies the Multica
 origin to both services; identity/inference files cannot override it.
 
-Catalog/default data is separate: use static `catalogs` (a service catalog snapshot)
-or `catalog_external`. Entries include `default_model` and a model map with
-context/output preparation metadata and optional `thinking.supported_levels`
+Catalog/default data is separate and runtime-scoped: use static `catalogs` keyed by
+`workspace_id` (a service catalog snapshot) or `catalog_external`. Entries include
+`default_model` and a model map with context/output preparation metadata and optional `thinking.supported_levels`
 (value/label pairs) and `default_level`. These values are capabilities, not budgets
 or a controller permission list. Catalog lookup neither issues JWTs nor grants
 access, and catalog changes do not interrupt identity renewal.
 
-External sources receive `{version: 1, agent: {server, workspace_id, agent_id}}`.
-Recipient resolution returns the exact echoed reference and `target: {url, issuer}`.
-Catalog resolution independently returns the echoed reference and `catalog`.
+Recipient sources receive `{version: 1, agent: {server, workspace_id, agent_id}}`
+and return the exact echoed reference and `target: {url, issuer}`. Catalog sources
+receive `{version: 1, workspace: {server, workspace_id}}` and return the echoed
+`workspace` and `catalog`.
 Unknown fields, credentials, mismatched references, oversized responses and
 redirects fail the relevant resolution. The approved URL/issuer boundary remains
 mandatory for identity delivery; the catalog is advisory.
@@ -40,14 +39,16 @@ model's advertised thinking default, or sends no effort for models without a
 control. The gateway decides whether an explicit effort is acceptable. The adapter
 never silently drops it. Only token syntax is checked locally.
 
-Discovery reuses Multica heartbeat pending requests and model result reports.
-Catalog IDs are `managed-inference/<gateway-model>`, with the same provider ID,
-metadata and thinking options/defaults. Agent scope must come from the pending
-request; workspace scope comes from the registered runtime. Current upstream
-`b4ca5b4` supplies only request ID and caches by runtime, so the controller reports
-an explicit discovery failure rather than publishing a union of agent catalogs.
-Agent-scoped request/cache/UI metadata support is still required upstream; the
-scoped response contract is tested locally, not claimed as real UI integration.
+Discovery reuses Multica heartbeat pending requests and model result reports in
+upstream's shape (`status`, `supported`, `models`, or `failed` with `error`).
+Upstream `b4ca5b4` sends only a request ID and caches by runtime; the controller
+registers one runtime per workspace, so the workspace comes from the registered
+runtime and the server from controller configuration. Entries use IDs
+`managed-inference/<gateway-model>`, labels, default and thinking options/defaults;
+upstream entries have no context/output, which stay in native OpenCode metadata.
+Agents of one workspace see the same advisory list; the gateway refuses
+ungranted models at task time and Multica shows that failure without substitution.
+Catalog outage reports a failed discovery without detail.
 
 The native provider auth hook reads atomically replaced mode-0600
 `/workspace/inference-token.json` before each request. It replaces authorization,

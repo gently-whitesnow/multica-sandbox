@@ -18,7 +18,7 @@ const inferenceProvider = "managed-inference"
 
 type Inference interface {
 	Acquire(context.Context, identity.Ref) (inference.Session, error)
-	Catalog(context.Context, identity.Ref) (inference.Catalog, error)
+	Catalog(context.Context, inference.Scope) (inference.Catalog, error)
 }
 
 func (r *running) refreshInference(ctx context.Context, ref identity.Ref) (bool, error) {

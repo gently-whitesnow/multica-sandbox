@@ -68,7 +68,7 @@ func failureInferenceSource(mode, server string) (*recordingInference, *atomic.B
 		return nil, nil, nil, err
 	}
 	cfg := inference.Config{Version: 1, AllowHTTP: true, Gateways: []inference.Gateway{fixtureInferenceTarget().Gateway}, Bindings: []inference.Binding{{WorkspaceID: c.Bindings[0].WorkspaceID, AgentID: c.Bindings[0].AgentID, Target: fixtureInferenceTarget()}}}
-	cfg.Catalogs = []inference.CatalogBinding{{WorkspaceID: c.Bindings[0].WorkspaceID, AgentID: c.Bindings[0].AgentID, Catalog: fixtureInferenceCatalog()}}
+	cfg.Catalogs = []inference.CatalogBinding{{WorkspaceID: c.Bindings[0].WorkspaceID, Catalog: fixtureInferenceCatalog()}}
 	if mode == "resolver" {
 		cfg.Bindings = nil
 		cfg.External = &identity.ExternalConfig{URL: endpoint.URL, BearerFile: "/secrets/admin"}
