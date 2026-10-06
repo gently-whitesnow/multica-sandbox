@@ -29,6 +29,12 @@ type Status interface {
 	Status(context.Context, string) (string, error)
 }
 
+// Grants issues per-attempt relay credentials; the mat_ token stays in controller memory.
+type Grants interface {
+	Issue(string, string) (string, error)
+	Revoke(string)
+}
+
 type Adapter struct {
 	Server, Controller string
 	Issuer             Issuer
@@ -38,6 +44,9 @@ type Adapter struct {
 	Status             Status
 	Command            []string
 	Reporter           Reporter
+	// Relay and RelayURL enable upstream-equivalent Multica CLI access (ADR 0014).
+	Relay    Grants
+	RelayURL string
 }
 
 type running struct {
@@ -55,6 +64,7 @@ type running struct {
 	inference   inference.Session
 	events      *eventStream
 	model       string
+	relayToken  string
 }
 
 func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, error) {
@@ -62,13 +72,22 @@ func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, 
 	if err != nil {
 		return nil, &execution.RejectedError{Err: err}
 	}
-	prompt, err := Prompt(task)
+	prompt, brief, err := Prompt(task, a.Relay != nil)
 	if err != nil {
 		return nil, &execution.RejectedError{Err: err}
 	}
 	r := &running{adapter: a, task: task, connections: connections, tokens: map[string]identity.AccessToken{}, done: make(chan error, 1), exited: make(chan struct{})}
 	runCtx, cancel := context.WithCancel(ctx)
 	r.cancel = cancel
+	if a.Relay != nil {
+		token, err := task.TaskToken()
+		if err == nil {
+			r.relayToken, err = a.Relay.Issue(task.AttemptKey(), token)
+		}
+		if err != nil {
+			return nil, r.reject(fmt.Errorf("Multica relay grant: %w", ErrDenied))
+		}
+	}
 	if err = r.refresh(runCtx); err != nil {
 		cancel()
 		return nil, r.reject(err)
@@ -78,7 +97,7 @@ func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, 
 		cancel()
 		return nil, errors.Join(err, r.Remove(context.Background()))
 	}
-	if err = r.initialize(runCtx, prompt); err != nil {
+	if err = r.initialize(runCtx, prompt, brief); err != nil {
 		return nil, r.reject(err)
 	}
 	r.events = &eventStream{reporter: a.Reporter, task: task.ID, model: r.model}
@@ -88,14 +107,14 @@ func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, 
 	return r, nil
 }
 
-func (r *running) initialize(ctx context.Context, prompt []byte) error {
+func (r *running) initialize(ctx context.Context, prompt, brief []byte) error {
 	if err := r.workload.Execute(ctx, []string{"/bin/sh", "-c", `test "$(opencode --version)" = "` + Version + `"`}); err != nil {
 		return fmt.Errorf("OpenCode version: %w", ErrDenied)
 	}
 	if err := r.workload.Execute(ctx, []string{"/bin/sh", "-c", `set -eu; mkdir -p /workspace/config/opencode; printf "{}" > /workspace/config/opencode/opencode.json; printf "*\n" > /workspace/config/opencode/.gitignore; chmod 555 /workspace/config/opencode`}); err != nil {
 		return fmt.Errorf("OpenCode config directory: %w", ErrDenied)
 	}
-	config, err := Config(r.connections)
+	config, err := Config(r.connections, r.relayToken != "")
 	if err != nil {
 		return err
 	}
@@ -103,7 +122,11 @@ func (r *running) initialize(ctx context.Context, prompt []byte) error {
 	if err != nil {
 		return err
 	}
-	for path, data := range map[string][]byte{"/workspace/opencode.json": config, "/workspace/prompt.txt": prompt} {
+	files := map[string][]byte{"/workspace/opencode.json": config, "/workspace/prompt.txt": prompt}
+	if brief != nil {
+		files[BriefPath] = brief
+	}
+	for path, data := range files {
 		if err := r.workload.Write(ctx, path, data); err != nil {
 			return err
 		}
@@ -185,7 +208,7 @@ func (r *running) loop(ctx context.Context) {
 	}
 	agent := make(chan error, 1)
 	go func() {
-		agent <- r.workload.Stream(ctx, command, func(reader io.Reader) error { return r.events.read(ctx, reader) })
+		agent <- r.workload.Stream(ctx, command, r.environment(), func(reader io.Reader) error { return r.events.read(ctx, reader) })
 	}()
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
@@ -235,6 +258,10 @@ func (r *running) Wait(ctx context.Context) error {
 }
 func (r *running) Remove(ctx context.Context) error {
 	r.once.Do(func() {
+		// Relay access ends first, before the agent process is joined.
+		if r.relayToken != "" {
+			r.adapter.Relay.Revoke(r.task.AttemptKey())
+		}
 		r.cancel()
 		if r.started {
 			<-r.exited

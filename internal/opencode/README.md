@@ -24,14 +24,7 @@ configuration, static/external secret files and authority credential **only into
 controller**, for example through a local Compose override. The base Compose manifest
 has no corporate identity mounts. Keep all actual configuration outside Git.
 
-`network` names an operator-owned internal bridge template containing exactly the
-named `peers`. Each attempt gets a new internal network with only those peers and
-its own container. Template peer aliases preserve the selected MCP hostname. Place
-Multica, IAM, resolver and credential stores on a separate control network. Only
-approved MCP/gateway services may be peers. Enforce host/metadata and destination
-policy outside Docker; internal bridges do not establish a production
-adversarial egress boundary. Do not attach untrusted workloads/services
-to the template. Concurrent attempt containers never share a network.
+`network` names an operator-owned internal bridge template containing exactly the named `peers`. Each attempt gets a new internal network with only those peers and its own container. Template peer aliases preserve the selected MCP hostname. Place Multica, IAM, resolver and credential stores on a separate control network. Only approved MCP/gateway services may be peers. Enforce host/metadata and destination policy outside Docker; internal bridges do not establish a production adversarial egress boundary. Do not attach untrusted workloads/services to the template. Concurrent attempt containers never share a network.
 
 The default command is `opencode run --format json` with the projected prompt.
 An operator-supplied command may use the same `/workspace/prompt.txt` and
@@ -41,6 +34,10 @@ No permanent inference/provider credential is permitted in an image or command;
 renewable inference configuration uses the optional `inference_file`; see
 [`internal/inference`](../inference/README.md). The fixture supplies a mock provider from
 trusted test configuration solely to exercise tool turns without a subscription.
+
+## Multica API relay
+
+`multica_relay` (`listen`, `url`) enables ADR 0014: the controller relays the upstream `multica` CLI to its configured Multica origin, replacing a per-attempt `mat_relay_` credential with the claim's `mat_` token held only in memory. Add the controller container to the template `peers` with the alias named by `url`; Multica stays on the control network. The image must contain `multica` built from the pinned revision (`examples/agent-image`). Issue tasks then receive the upstream prompt, an `AGENTS.md` brief, the `MULTICA_*` environment and in-container `bash`/file tools. Grants end at cleanup or controller restart; credential-minting, daemon and account routes are denied.
 
 ## External authority adapter
 
@@ -98,19 +95,12 @@ OpenCode 1.18.34 `aec0b9a6d8898f68f923aaf08b7306d931fd9d76`.
 
 Unsupported adapter capabilities/dependencies: skills, project resource materialization, broker-managed MCP connections and connected apps,
 private Git/artifact delivery without controller credentials in workloads, retained
-native sessions and artifact publication, task-scoped Multica tools, agent-specific
+native sessions and artifact publication, chat/autopilot/quick-create CLI workflows, agent-specific
 picker catalogs (upstream discovery is runtime-scoped), production egress enforcement. Do not replace these with a
 sandbox Git service, session store, IAM, tools or policy engine. New Kubernetes
 ownership/deadlines remain #6; image/tool work remains #4.
 
-Inspection sources: Multica `server/internal/daemon/{types,client}.go`,
-`server/internal/handler/daemon.go`, `server/pkg/agent/opencode.go`,
-`server/pkg/db/queries/task_usage.sql`; OpenCode
-`packages/opencode/src/cli/cmd/run.ts` and native message/token normalization.
-Multica daemon client/execenv/repocache are internal, not an external sandbox SDK: reuse supported
-HTTP schemas as in ADR 0005; host checkout/cache is not a disposable delivery API. OpenCode CLI owns retry/transport/session
-behavior, including HTTP 429 retries. CLI JSON has no model/provider per usage
-part; like upstream, attribution uses the applied model or `unknown`.
+Inspection sources: Multica `server/internal/daemon/{types,client}.go`, `server/internal/handler/daemon.go`, `server/pkg/agent/opencode.go`, `server/pkg/db/queries/task_usage.sql`; OpenCode `packages/opencode/src/cli/cmd/run.ts` and native message/token normalization. Multica daemon client/execenv/repocache are internal, not an external sandbox SDK: reuse supported HTTP schemas as in ADR 0005; host checkout/cache is not a disposable delivery API. OpenCode CLI owns retry/transport/session behavior, including HTTP 429 retries. CLI JSON has no model/provider per usage part; like upstream, attribution uses the applied model or `unknown`.
 
 ## Разбор изменений для ревью #24
 

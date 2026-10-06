@@ -48,5 +48,13 @@ until curl -fsS "$MULTICA_TEST_URL/health" >/dev/null 2>&1; do
  sleep 1
 done
 if [ "${VERIFY_SERVICE:-0}" = 1 ]; then docker build -t multica-sandbox-controller:local .; fi
+if [ "${VERIFY_SERVICE:-0}" = 1 ] && [ "${VERIFY_OPENCODE:-0}" = 1 ]; then
+ mkdir "$TMP/agent"
+ (cd "$SOURCE/server" && CGO_ENABLED=0 GOOS=linux GOARCH="$ARCH" go build -trimpath -o "$TMP/agent/multica" ./cmd/multica)
+ docker build -q -t multica-sandbox-agent:local -f examples/agent-image/Dockerfile "$TMP/agent" >/dev/null
+ # Digest references need the containerd image store; the backend accepts only pinned images.
+ MULTICA_TEST_AGENT_IMAGE=$(docker image inspect multica-sandbox-agent:local --format '{{index .RepoDigests 0}}')
+ export MULTICA_TEST_AGENT_IMAGE
+fi
 MULTICA_TEST_SERVER_CONTAINER="$SERVER" MULTICA_TEST_DB_CONTAINER="$DB" go test -tags=upstream -run "${UPSTREAM_TEST_FILTER:-.}" -count=1 -v ./integration
 printf 'Verified upstream %s\n' "$REV"

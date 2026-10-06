@@ -18,6 +18,8 @@ credentials, Multica task/daemon tokens, registry credentials and signing keys
 in trusted services outside the sandbox. Never deliver them through environment
 variables, files, mounts, prompts, logs, snapshots or credential-bearing sidecars
 reachable by agent code. Local MCP helpers may hold no upstream credentials.
+ADR 0014 records one narrow exception: an opaque per-attempt credential for the
+controller's Multica API relay; the `mat_` task token itself stays in controller memory.
 
 Use an existing workload identity issuer, such as SPIRE or deployment OIDC.
 Bind attested workload identity to tenant, agent, task and execution attempt in

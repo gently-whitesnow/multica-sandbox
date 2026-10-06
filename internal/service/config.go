@@ -14,6 +14,7 @@ import (
 type Config struct {
 	OpenCode    *OpenCodeConfig `json:"opencode,omitempty"`
 	Server      string          `json:"server"`
+	AllowHTTP   bool            `json:"allow_http,omitempty"`
 	Concurrency int             `json:"concurrency,omitempty"`
 	Daemon      string          `json:"daemon"`
 	Image       string          `json:"image"`
@@ -62,4 +63,12 @@ type OpenCodeConfig struct {
 	Authority     attempt.Config `json:"authority"`
 	Network       string         `json:"network"`
 	Peers         []string       `json:"peers"`
+	MulticaRelay  *RelayConfig   `json:"multica_relay,omitempty"`
+}
+
+// RelayConfig enables the embedded Multica API relay (ADR 0014). URL is what agents
+// receive as MULTICA_SERVER_URL; the controller must be an approved peer answering it.
+type RelayConfig struct {
+	Listen string `json:"listen"`
+	URL    string `json:"url"`
 }

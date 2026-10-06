@@ -41,7 +41,11 @@ func Run(ctx context.Context, c Config, stateDir, tokenPath string, out io.Write
 	if err != nil {
 		return fmt.Errorf("read controller token file: %w", err)
 	}
-	api, err := multica.New(c.Server, strings.TrimSpace(string(token)))
+	newClient := multica.New
+	if c.AllowHTTP {
+		newClient = multica.NewAllowHTTP
+	}
+	api, err := newClient(c.Server, strings.TrimSpace(string(token)))
 	if err != nil {
 		return err
 	}
@@ -111,7 +115,15 @@ func openCodeAdapter(ctx context.Context, c Config, api *multica.Client, backend
 	if err != nil {
 		return nil, err
 	}
-	return &opencode.Adapter{Inference: inferenceSource, Server: strings.TrimRight(c.Server, "/"), Controller: c.Daemon, Issuer: issuer, Authority: authority, Status: api, Reporter: api, Workloads: workloads, Command: c.Command}, nil
+	adapter := &opencode.Adapter{Inference: inferenceSource, Server: strings.TrimRight(c.Server, "/"), Controller: c.Daemon, Issuer: issuer, Authority: authority, Status: api, Reporter: api, Workloads: workloads, Command: c.Command}
+	if c.OpenCode.MulticaRelay != nil {
+		adapter.Relay, err = serveRelay(ctx, c.Server, *c.OpenCode.MulticaRelay)
+		if err != nil {
+			return nil, err
+		}
+		adapter.RelayURL = strings.TrimRight(c.OpenCode.MulticaRelay.URL, "/")
+	}
+	return adapter, nil
 }
 
 func (a *agentFleetAPI) Message(ctx context.Context, id string) error { return a.AgentMessage(ctx, id) }
