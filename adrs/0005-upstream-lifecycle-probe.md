@@ -34,8 +34,10 @@ The fake executor only waits and emits fixed text. It executes no process, promp
 workspace preparation or tool call. Run one process per daemon identity, protected
 by an OS lock at a shared trusted path. Register and recover orphans before
 claiming after restart. Multica owns retries; the probe never requeues work.
-On transport uncertainty, stop and return an error rather than replay claims or
-execution. A subsequent invocation reconciles with the server.
+Never replay claims or execution. As in the upstream daemon, transient transport,
+5xx, 408 and 429 errors are retried for the dispatch-fenced start and terminal
+callbacks and tolerated for transcript, heartbeat and status calls; other
+control-plane errors stop the probe. A subsequent invocation reconciles with the server.
 
 ## Consequences
 

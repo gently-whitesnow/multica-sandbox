@@ -16,6 +16,7 @@ type lifecycleAPI struct {
 	events   *[]string
 	status   string
 	failure  string
+	errs     map[string]error
 	reported *error
 }
 
@@ -24,7 +25,7 @@ func (a lifecycleAPI) record(s string) error {
 	if a.failure == s {
 		return errors.New(s)
 	}
-	return nil
+	return a.errs[s]
 }
 func (a lifecycleAPI) Register(context.Context, string, string) (multica.Runtime, error) {
 	return multica.Runtime{ID: id}, a.record("register")
@@ -188,3 +189,40 @@ func TestRejectedAgentDoesNotStopController(t *testing.T) {
 }
 
 func (b *testBackend) Result() execution.Result { return execution.Result{} }
+
+func TestUpstreamLifecycleSignals(t *testing.T) {
+	for name, tc := range map[string]struct {
+		errs map[string]error
+		want []string
+	}{
+		"start conflict drops claim":   {map[string]error{"start": &multica.HTTPError{Status: 409}}, []string{"lease", "start"}},
+		"message is best-effort":       {map[string]error{"message": &multica.HTTPError{Status: 500}}, []string{"lease", "start", "message", "launch", "remove", "status", "complete"}},
+		"missing task interrupts":      {map[string]error{"status": &multica.HTTPError{Status: 404}}, []string{"lease", "start", "message", "launch", "remove", "status"}},
+		"transient status still ends":  {map[string]error{"status": &multica.HTTPError{Status: 503}}, []string{"lease", "start", "message", "launch", "remove", "status", "complete"}},
+		"queued report is not a crash": {map[string]error{"complete": multica.ErrDeferred}, []string{"lease", "start", "message", "launch", "remove", "status", "complete"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			events := []string{}
+			p := Probe{API: lifecycleAPI{events: &events, status: "running", errs: tc.errs}, Backend: &testBackend{events: &events}, Duration: time.Second}
+			if err := p.execute(context.Background(), multica.Task{ID: id}, nil); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(events, tc.want) {
+				t.Fatalf("events=%v", events)
+			}
+		})
+	}
+}
+
+func TestControllerTimeoutIsTyped(t *testing.T) {
+	events := []string{}
+	var reported error
+	p := Probe{API: lifecycleAPI{events: &events, status: "running", reported: &reported}, Backend: &testBackend{events: &events, running: true}, Duration: time.Millisecond}
+	if err := p.execute(context.Background(), multica.Task{ID: id}, nil); err != nil {
+		t.Fatal(err)
+	}
+	var timeout *execution.TimeoutError
+	if !errors.As(reported, &timeout) {
+		t.Fatalf("timeout cause lost: %v", reported)
+	}
+}

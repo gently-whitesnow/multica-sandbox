@@ -142,7 +142,7 @@ func execute(ctx context.Context) error {
 	body := map[string]string{"output": "OpenCode read real task context through MCP and produced the verified reference word."}
 	if runErr != nil {
 		action = "fail"
-		body = map[string]string{"error": "E2E fixture execution failed", "failure_reason": "execution_failed"}
+		body = map[string]string{"error": "E2E fixture execution failed"}
 	}
 	if err = control(ctx, c, "POST", "/api/daemon/tasks/"+t.ID+"/"+action, body, nil); err != nil {
 		return err

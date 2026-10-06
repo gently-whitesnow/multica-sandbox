@@ -5,6 +5,7 @@ package integration
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
@@ -54,6 +55,9 @@ func containerLifecycle(t *testing.T, api *multica.Client, rt multica.Runtime) {
 				t.Fatal(err)
 			}
 			status(t, api, task, want)
+			if reason := sql(t, fmt.Sprintf("SELECT coalesce(failure_reason,'') FROM agent_task_queue WHERE id='%s';", task)); scenario == "timeout" && reason != "timeout" || scenario == "fail" && (reason == "" || reason == "execution_failed") {
+				t.Fatalf("failure reason not usable by Multica retry policy: %q", reason)
+			}
 			if got := ownedContainers(t); got != "" {
 				t.Fatalf("terminal task retained containers: %s", got)
 			}

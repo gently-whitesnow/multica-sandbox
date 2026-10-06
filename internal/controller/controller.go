@@ -80,10 +80,16 @@ func (p *Probe) execute(ctx context.Context, t multica.Task, ticks <-chan time.T
 		return err
 	}
 	if err := p.API.Start(ctx, t); err != nil {
+		if multica.Conflict(err) {
+			// Multica no longer dispatches this claim to us; nothing started.
+			p.observe("start-rejected", t.ID)
+			return nil
+		}
 		return err
 	}
+	// Transcript messages are best-effort, as in the upstream daemon.
 	if err := p.API.Message(ctx, t.ID); err != nil {
-		return err
+		p.observe("message-deferred", t.ID)
 	}
 	done, stop, outcome, err := p.launch(ctx, t)
 	if err != nil {
@@ -106,7 +112,7 @@ func (p *Probe) execute(ctx context.Context, t multica.Task, ticks <-chan time.T
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticks:
-			if err := p.API.Heartbeat(ctx, t.RuntimeID); err != nil {
+			if err := p.API.Heartbeat(ctx, t.RuntimeID); err != nil && !multica.Transient(err) {
 				return err
 			}
 			active, err := p.reconcile(ctx, t.ID, stop)
@@ -117,8 +123,10 @@ func (p *Probe) execute(ctx context.Context, t multica.Task, ticks <-chan time.T
 			return p.finish(ctx, t.ID, err, stop, outcome)
 		case <-timer.C:
 			var failure error
-			if p.Backend != nil || p.Launch != nil || p.Fail {
-				failure = fmt.Errorf("execution failed or timed out")
+			if p.Backend != nil || p.Launch != nil {
+				failure = &execution.TimeoutError{After: p.Duration}
+			} else if p.Fail {
+				failure = fmt.Errorf("probe failure requested")
 			}
 			return p.finish(ctx, t.ID, failure, stop, outcome)
 		}
@@ -140,14 +148,25 @@ func (p *Probe) finish(ctx context.Context, id string, failure error, stop func(
 	} else {
 		err = p.API.Complete(ctx, id, outcome())
 	}
-	if err == nil {
+	switch {
+	case err == nil:
 		p.observe("reported", id)
+	case errors.Is(err, multica.ErrDeferred):
+		p.observe("report-deferred", id)
+		return nil
 	}
 	return err
 }
 func (p *Probe) reconcile(ctx context.Context, id string, stop func() error) (bool, error) {
 	status, err := p.API.Status(ctx, id)
-	if err != nil {
+	switch {
+	case multica.Transient(err):
+		// Keep running; the next tick or the terminal callback checks again.
+		return true, nil
+	case multica.Missing(err):
+		p.observe("gone", id)
+		return false, stop()
+	case err != nil:
 		return false, err
 	}
 	switch status {

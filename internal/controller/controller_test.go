@@ -14,7 +14,9 @@ import (
 
 const id = "11111111-1111-4111-8111-111111111111"
 
-func TestProbeStopsOnControlPlaneFailure(t *testing.T) {
+// Like the upstream daemon, transient errors are retried or tolerated; claim, lease and exhausted retries still stop.
+func TestProbeTransientControlPlaneFailures(t *testing.T) {
+	tolerated := map[string]bool{"messages": true, "status": true, "heartbeat": true}
 	for _, failure := range []string{"claim", "prepare-lease", "start", "messages", "status", "heartbeat", "complete"} {
 		t.Run(failure, func(t *testing.T) {
 			completed := false
@@ -46,11 +48,12 @@ func TestProbeStopsOnControlPlaneFailure(t *testing.T) {
 			p := Probe{API: api, Interval: time.Millisecond, Duration: 20 * time.Millisecond}
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
-			if err := p.Run(ctx, id); err == nil {
-				t.Fatal("failure ignored")
+			err := p.Run(ctx, id)
+			if (err == nil) != tolerated[failure] || completed != tolerated[failure] {
+				t.Fatalf("error=%v completed=%v", err, completed)
 			}
-			if completed || failedCalls != 1 {
-				t.Fatalf("completed=%v requests=%d", completed, failedCalls)
+			if failedCalls == 0 || (failure == "start" && failedCalls < 2) {
+				t.Fatalf("requests=%d", failedCalls)
 			}
 			if failure != "claim" && !claimed {
 				t.Fatal("fixture did not claim")

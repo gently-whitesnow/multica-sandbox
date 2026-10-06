@@ -52,6 +52,9 @@ func Run(ctx context.Context, c Config, stateDir, tokenPath string, out io.Write
 	if err = bindState(stateDir, identity{strings.TrimRight(c.Server, "/"), c.Daemon, engine}); err != nil {
 		return err
 	}
+	if err = api.UseOutbox(filepath.Join(stateDir, "terminal-reports")); err != nil {
+		return err
+	}
 	command := c.Command
 	if c.OpenCode != nil {
 		c.Command = []string{"/bin/sh"}

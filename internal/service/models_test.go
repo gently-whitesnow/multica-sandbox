@@ -3,11 +3,14 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
+	"github.com/gently-whitesnow/multica-sandbox/internal/execution"
 	agentidentity "github.com/gently-whitesnow/multica-sandbox/internal/identity"
 	"github.com/gently-whitesnow/multica-sandbox/internal/inference"
 	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
@@ -50,5 +53,21 @@ func TestDiscoveryUsesRegisteredWorkspaceAndControllerOrigin(t *testing.T) {
 	}
 	if source.ref.Server != api.server || source.ref.WorkspaceID != "registered-workspace" || source.ref.AgentID != id {
 		t.Fatal("untrusted discovery selectors accepted")
+	}
+}
+
+func TestFailureReasonsMatchUpstreamDaemon(t *testing.T) {
+	for _, tc := range []struct {
+		cause           error
+		message, reason string
+	}{
+		{&execution.TimeoutError{After: time.Minute}, "opencode timed out after 1m0s", "timeout"},
+		{&execution.RejectedError{Err: errors.New("private detail")}, "Sandbox rejected the task before OpenCode started", "environment_prepare_failed"},
+		{fmt.Errorf("wrapped: %w", &execution.AgentFailure{Status: 429}), "Agent inference request failed (HTTP 429)", ""},
+		{errors.New("private detail"), "OpenCode execution or identity delivery failed", ""},
+	} {
+		if message, reason := failure(tc.cause); message != tc.message || reason != tc.reason {
+			t.Errorf("%v -> %q %q", tc.cause, message, reason)
+		}
 	}
 }

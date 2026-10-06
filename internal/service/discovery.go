@@ -34,7 +34,7 @@ func (f *fleet) sync(ctx context.Context) error {
 			continue
 		}
 		rt, err := f.api.Register(ctx, ws.ID, f.daemon)
-		if inaccessible(err) {
+		if inaccessible(err) || multica.Transient(err) {
 			continue
 		}
 		if err != nil {
@@ -48,8 +48,9 @@ func (f *fleet) sync(ctx context.Context) error {
 		if err := writeRegistry(f.dir, f.known); err != nil {
 			return err
 		}
+		// A transient recovery failure leaves the workspace unready until the next sync.
 		recovered, err := f.api.Recover(ctx, rt.ID)
-		if inaccessible(err) {
+		if inaccessible(err) || multica.Transient(err) {
 			continue
 		}
 		if err != nil {
@@ -75,6 +76,9 @@ func (f *fleet) beat(ctx context.Context) error {
 		err := f.api.Heartbeat(ctx, rt)
 		if inaccessible(err) {
 			f.remove(ws, rt)
+			continue
+		}
+		if multica.Transient(err) {
 			continue
 		}
 		if err != nil {

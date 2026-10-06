@@ -14,6 +14,8 @@ import (
 type fleetFake struct {
 	workspaces []multica.Workspace
 	claims     int
+	recoverErr error
+	calls      []string
 }
 
 func (a *fleetFake) Workspaces(context.Context) ([]multica.Workspace, error) {
@@ -23,9 +25,14 @@ func (a *fleetFake) Register(_ context.Context, ws, _ string) (multica.Runtime, 
 	return multica.Runtime{ID: ws}, nil
 }
 func (a *fleetFake) Recover(context.Context, string) (multica.Recovery, error) {
-	return multica.Recovery{}, nil
+	a.calls = append(a.calls, "recover")
+	return multica.Recovery{}, a.recoverErr
 }
 func (a *fleetFake) Heartbeat(context.Context, string) error { return nil }
+func (a *fleetFake) Replay(context.Context) (int, error) {
+	a.calls = append(a.calls, "replay")
+	return 0, nil
+}
 func (a *fleetFake) ClaimBatch(_ context.Context, _ string, scopes map[string]string, _ int) ([]multica.Task, error) {
 	a.claims++
 	for rt, ws := range scopes {
@@ -101,5 +108,40 @@ func TestRevokedAttemptCannotHideCleanupFailure(t *testing.T) {
 	err := errors.Join(denied, &controller.CleanupError{Err: fmt.Errorf("remove failed")})
 	if f.completed(completion{"rt", err}) == nil {
 		t.Fatal("ignored failed cleanup")
+	}
+}
+
+func TestTransientMulticaErrorsKeepServing(t *testing.T) {
+	unavailable := &multica.HTTPError{Status: 503}
+	a := &fleetFake{workspaces: []multica.Workspace{{ID: "10000000-0000-4000-8000-000000000001"}}, recoverErr: unavailable}
+	f := newFleet(t, a)
+	if err := f.tolerate("sync", f.sync(context.Background())); err != nil || len(f.ready) != 0 {
+		t.Fatal("transient recovery failure stopped the controller or readied the workspace", err)
+	}
+	a.recoverErr = nil
+	if err := f.sync(context.Background()); err != nil || len(f.ready) != 1 {
+		t.Fatal("workspace not recovered on the next sync", err)
+	}
+	if err := f.completed(completion{"rt", unavailable}); err != nil {
+		t.Fatal("transient attempt error stopped the controller")
+	}
+	if f.completed(completion{"rt", errors.Join(unavailable, &controller.CleanupError{Err: fmt.Errorf("remove failed")})}) == nil {
+		t.Fatal("cleanup uncertainty hidden by a transient error")
+	}
+	if f.completed(completion{"rt", &multica.HTTPError{Status: 400}}) == nil {
+		t.Fatal("protocol rejection ignored")
+	}
+}
+
+func TestReplayPrecedesRecovery(t *testing.T) {
+	a := &fleetFake{workspaces: []multica.Workspace{{ID: "10000000-0000-4000-8000-000000000001"}}}
+	f := newFleet(t, a)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := f.serve(ctx, 1, func(context.Context, multica.Task) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if len(a.calls) < 2 || a.calls[0] != "replay" || a.calls[1] != "recover" {
+		t.Fatalf("calls=%v", a.calls)
 	}
 }

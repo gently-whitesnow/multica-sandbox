@@ -71,7 +71,7 @@ and resolver outages, cancellation, still-unexpired ended-token denial and clean
 Add `VERIFY_SERVICE=1` for a real Multica claim through the actual Compose controller.
 `VERIFY_CONTAINERS=1` checks projection/network isolation and startup cleanup.
 
-Native JSON events report text/status/thinking and paired tool-use/results to Multica, with ordered sequence numbers and unchanged call IDs. Known projected JWTs (including replaced versions) are redacted; native error bodies are withheld. Limits are 1 MiB per native line, 64 KiB text/result and 10,000 distinct parts per attempt. Exceeding them stops the attempt rather than claiming an intact result. No automatic report replay/outbox or exactly-once terminal callback is promised. MCP roles, resource permissions and model routing remain external. CI remains paused.
+Native JSON events report text/status/thinking and paired tool-use/results to Multica, with ordered sequence numbers and unchanged call IDs. Known projected JWTs (including replaced versions) are redacted; native error bodies are withheld. Limits are 1 MiB per native line, 64 KiB text/result and 10,000 distinct parts per attempt. Exceeding them stops the attempt rather than claiming an intact result. Complete/fail callbacks use the upstream retry schedule and a durable state-volume queue; delivery is at-least-once and Multica treats repeated terminal callbacks idempotently. MCP roles, resource permissions and model routing remain external. CI remains paused.
 
 `opencode.inference_file` enables the separate inference binding and token path.
 See [inference configuration](../inference/README.md) and
