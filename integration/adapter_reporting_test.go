@@ -31,7 +31,7 @@ func assertNativeReports(t *testing.T, id string, usage bool) {
 	}
 	if usage {
 		counters := sql(t, fmt.Sprintf("SELECT provider || ':' || model || ':' || input_tokens || ':' || output_tokens FROM task_usage WHERE task_id='%s';", id))
-		if counters != "managed-inference:fixture:275:175" {
+		if counters != "opencode:managed-inference/fixture:275:175" {
 			t.Fatalf("native cumulative usage mismatch: %s", counters)
 		}
 	}

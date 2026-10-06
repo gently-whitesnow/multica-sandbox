@@ -69,11 +69,14 @@ func (a *agentFleetAPI) Fail(ctx context.Context, id string, cause error, result
 // causes and leaves agent errors to Multica's classifier (empty reason).
 func failure(cause error) (string, string) {
 	var timeout *execution.TimeoutError
+	var idle *execution.IdleError
 	var rejected *execution.RejectedError
 	var agent *execution.AgentFailure
 	switch {
 	case errors.As(cause, &timeout):
 		return "opencode " + timeout.Error(), "timeout"
+	case errors.As(cause, &idle):
+		return idle.Error(), "idle_watchdog"
 	case errors.As(cause, &rejected):
 		return "Sandbox rejected the task before OpenCode started", "environment_prepare_failed"
 	case errors.As(cause, &agent):

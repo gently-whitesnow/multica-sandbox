@@ -5,10 +5,17 @@ import (
 	"time"
 )
 
-// AgentFailure exposes only a numeric HTTP status, never native response bodies or credentials.
-type AgentFailure struct{ Status int }
+// AgentFailure exposes a numeric HTTP status or fixed adapter text, never native
+// response bodies or credentials. Multica classifies the text.
+type AgentFailure struct {
+	Status  int
+	Message string
+}
 
 func (e *AgentFailure) Error() string {
+	if e.Message != "" {
+		return e.Message
+	}
 	if e.Status >= 400 && e.Status <= 599 {
 		return fmt.Sprintf("Agent inference request failed (HTTP %d)", e.Status)
 	}
@@ -19,3 +26,10 @@ func (e *AgentFailure) Error() string {
 type TimeoutError struct{ After time.Duration }
 
 func (e *TimeoutError) Error() string { return fmt.Sprintf("timed out after %s", e.After) }
+
+// IdleError is the upstream idle watchdog: the agent emitted nothing for the window.
+type IdleError struct{ After time.Duration }
+
+func (e *IdleError) Error() string {
+	return fmt.Sprintf("agent produced no new messages for %s; force-stopped by idle watchdog", e.After)
+}
