@@ -18,8 +18,9 @@ credentials, Multica task/daemon tokens, registry credentials and signing keys
 in trusted services outside the sandbox. Never deliver them through environment
 variables, files, mounts, prompts, logs, snapshots or credential-bearing sidecars
 reachable by agent code. Local MCP helpers may hold no upstream credentials.
-ADR 0014 records one narrow exception: an opaque per-attempt credential for the
-controller's Multica API relay; the `mat_` task token itself stays in controller memory.
+ADRs 0012 and 0014 record narrow exceptions: opaque per-attempt credentials for the
+controller's inference and Multica API relays. The workspace gateway key and the
+`mat_` task token stay in controller memory.
 
 Use an existing workload identity issuer, such as SPIRE or deployment OIDC.
 Bind attested workload identity to tenant, agent, task and execution attempt in
@@ -43,8 +44,9 @@ API access, cloud metadata, host sockets and Kubernetes API access. Remove defau
 service-account mounts. The controller channel accepts only that run's lifecycle
 events. External Git and package operations also require mediated access; local
 Git, compilers and filesystem operations remain local. An adapter requiring raw
-provider credentials is unsupported. ADR 0009 selects a protected OpenAI-compatible inference gateway with separate
-audience and attempt authorization. Direct provider access remains forbidden.
+provider credentials is unsupported. ADR 0012 routes inference through the
+controller relay to a protected OpenAI-compatible gateway with a workspace key.
+Direct gateway and provider access remain forbidden.
 
 Audit principal, task, attempt, tool, target, policy decision and outcome outside
 the sandbox; redact sensitive inputs/results. Treat tool results as untrusted.

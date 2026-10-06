@@ -46,13 +46,23 @@ func multicaRelayService(t *testing.T, api *multica.Client) {
 	server := os.Getenv("MULTICA_TEST_SERVER_CONTAINER")
 	network := strings.TrimSuffix(server, "-server")
 	fixture := filepath.Join(dir, "fixture.json")
-	writeJSON(t, fixture, map[string]any{"services": map[string]any{"seed": map[string]any{"environment": map[string]string{"ROTATION_FIXTURE": "1"}}, "gateway": map[string]any{"networks": []string{"fixture", "execution"}}}, "networks": map[string]any{"fixture": map[string]any{"external": true, "name": network, "internal": nil}, "execution": map[string]any{"internal": true}}})
+	withInference := os.Getenv("VERIFY_INFERENCE") == "1"
+	services := map[string]any{"seed": map[string]any{"environment": map[string]string{"ROTATION_FIXTURE": "1"}}, "gateway": map[string]any{"networks": []string{"fixture", "execution"}}}
+	target := "gateway"
+	if withInference {
+		// Agents reach inference only through the controller relay; the mock provider stays behind LiteLLM.
+		inferenceServices(services)
+		target = "litellm"
+		dockerTest(t, "network", "create", "--internal", project+"_execution")
+		t.Cleanup(func() { dockerTest(t, "network", "rm", project+"_execution") })
+	}
+	writeJSON(t, fixture, map[string]any{"services": services, "networks": map[string]any{"fixture": map[string]any{"external": true, "name": network, "internal": nil}, "execution": map[string]any{"internal": true}}})
 	compose := func(args ...string) string {
-		return dockerTest(t, append([]string{"compose", "-p", project, "-f", "../examples/identity-mcp/compose.yaml", "-f", fixture}, args...)...)
+		return dockerTest(t, append([]string{"compose", "-p", project, "--profile", "inference", "-f", "../examples/identity-mcp/compose.yaml", "-f", fixture}, args...)...)
 	}
 	t.Cleanup(func() { compose("down", "-v", "--remove-orphans") })
 	compose("build", "seed", "gateway")
-	compose("up", "-d", "--wait", "--wait-timeout", "180", "gateway")
+	compose("up", "-d", "--wait", "--wait-timeout", "240", target)
 
 	controller := "90000000-0000-4000-8000-000000000014"
 	agent := "a1000000-0000-4000-8000-000000000014"
@@ -64,12 +74,17 @@ func multicaRelayService(t *testing.T, api *multica.Client) {
 	f := serviceFixture{fmt.Sprintf("sandbox-relay-controller-%d", stamp), filepath.Join(dir, "controller.json"), t}
 	controllerName := f.project + "-controller-1"
 	c := service.Config{Server: "http://" + server + ":8080", AllowHTTP: true, Daemon: controller, Image: agentImage, Command: []string{"/bin/sh", "-c", command}, Timeout: "180s", OpenCode: &service.OpenCodeConfig{IdentityFile: "/etc/multica-sandbox/identity.json", Authority: attempt.Config{URL: "http://gateway:8080/attempts", BearerFile: "/identity-secrets/admin", AllowHTTP: true}, Network: project + "_execution", Peers: []string{project + "-gateway-1", controllerName}, MulticaRelay: &service.RelayConfig{Listen: ":8091", URL: "http://multica-relay:8091"}}}
+	var w *workspaceInference
+	if withInference {
+		w = configureInference(t, dir, project, &c)
+		c.OpenCode.Peers = []string{controllerName}
+	}
 	writeJSON(t, filepath.Join(dir, "config.json"), c)
 	if err := os.WriteFile(filepath.Join(dir, "token"), []byte(token(t)), 0600); err != nil {
 		t.Fatal(err)
 	}
-	// The controller has its own namespace: Multica on the control network, relay alias on the template.
-	writeJSON(t, f.override, map[string]any{"services": map[string]any{"controller": map[string]any{"networks": map[string]any{"control": map[string]any{}, "execution": map[string]any{"aliases": []string{"multica-relay"}}}, "volumes": managedVolumes(dir, c)}}, "networks": map[string]any{"control": map[string]any{"external": true, "name": network}, "execution": map[string]any{"external": true, "name": project + "_execution"}}, "volumes": map[string]any{"identity-secrets": map[string]any{"external": true, "name": project + "_credentials"}}, "secrets": map[string]any{"multica_token": map[string]string{"file": filepath.Join(dir, "token")}}})
+	// The controller has its own namespace: Multica on the control network, relay aliases on the template.
+	writeJSON(t, f.override, map[string]any{"services": map[string]any{"controller": map[string]any{"networks": map[string]any{"control": map[string]any{}, "execution": map[string]any{"aliases": []string{"multica-relay", "inference-relay"}}}, "volumes": managedVolumes(dir, c)}}, "networks": map[string]any{"control": map[string]any{"external": true, "name": network}, "execution": map[string]any{"external": true, "name": project + "_execution"}}, "volumes": map[string]any{"identity-secrets": map[string]any{"external": true, "name": project + "_credentials"}}, "secrets": map[string]any{"multica_token": map[string]string{"file": filepath.Join(dir, "token")}}})
 	t.Cleanup(func() {
 		f.compose("down", "-v")
 		if err := (&docker.Backend{Owner: controller}).Reconcile(context.Background()); err != nil {
@@ -86,7 +101,7 @@ func multicaRelayService(t *testing.T, api *multica.Client) {
  INSERT INTO issue(id,workspace_id,title,description,status,creator_type,creator_id,number,assignee_type,assignee_id) VALUES('%s','%s','Relay fixture issue','Read me through the relay.','todo','member','%s',99914,'agent','%s');
  INSERT INTO agent_task_queue(id,agent_id,runtime_id,issue_id,status,max_attempts,originator_user_id,accountable_user_id) VALUES('%s','%s','%s','%s','queued',1,'%s','%s');`, agent, workspace, runtime, user, issue, workspace, user, agent, id, agent, runtime, issue, user, user))
 
-	opaque := ""
+	opaque, inferenceOpaque := "", ""
 	deadline := time.Now().Add(150 * time.Second)
 	for time.Now().Before(deadline) {
 		state, err := api.Status(context.Background(), id)
@@ -100,6 +115,9 @@ func multicaRelayService(t *testing.T, api *multica.Client) {
 				switch {
 				case err == nil:
 					opaque = string(out)
+					if w != nil {
+						inferenceOpaque = inferenceCredential(t, w, container)
+					}
 				case errors.As(err, &exit) && exit.ExitCode() == 3:
 				default:
 					t.Fatalf("attempt boundary probe failed: %v", err)
@@ -115,7 +133,7 @@ func multicaRelayService(t *testing.T, api *multica.Client) {
 		time.Sleep(250 * time.Millisecond)
 	}
 	status(t, api, id, "completed")
-	if !strings.HasPrefix(opaque, "mat_relay_") {
+	if !strings.HasPrefix(opaque, "mat_relay_") || (w != nil && inferenceOpaque == "") {
 		t.Fatal("live attempt credential was not observed")
 	}
 	comments := sql(t, fmt.Sprintf("SELECT count(*) || ':' || min(author_type) || ':' || min(author_id::text) FROM comment WHERE issue_id='%s' AND type='comment';", issue))
@@ -128,10 +146,30 @@ func multicaRelayService(t *testing.T, api *multica.Client) {
 	if out, err := denied.CombinedOutput(); err != nil {
 		t.Fatalf("ended attempt credential not denied: %v %s", err, out)
 	}
+	if w != nil {
+		denied := exec.Command("docker", "run", "--rm", "--network", network, "--entrypoint", "/bin/sh", "-e", "T="+inferenceOpaque, agentImage, "-c", `wget -q -O /dev/null --header "Authorization: Bearer $T" --post-data '{}' http://`+controllerName+`:8092/v1/chat/completions 2>&1 | grep -q ' 401 '`)
+		if out, err := denied.CombinedOutput(); err != nil {
+			t.Fatalf("ended inference credential not denied: %v %s", err, out)
+		}
+	}
 	logs := dockerTest(t, "logs", controllerName)
 	transcript := sql(t, fmt.Sprintf("SELECT coalesce(string_agg(coalesce(content,'') || coalesce(input::text,'') || coalesce(output,''), ' '),'') FROM task_message WHERE task_id='%s';", id))
 	if taskToken.MatchString(logs+transcript+content) || strings.Contains(logs, opaque) {
 		t.Fatal("task credential leaked into controller logs, transcript or comments")
 	}
 	t.Log("pinned Multica claim -> controller relay -> upstream multica CLI read issue and posted one agent comment; mat_ token stayed outside the attempt")
+	if w == nil {
+		return
+	}
+	result := sql(t, fmt.Sprintf("SELECT coalesce(result::text,'') || coalesce(error,'') FROM agent_task_queue WHERE id='%s';", id))
+	if w.leaked(logs+transcript+content+result) || (inferenceOpaque != "" && strings.Contains(logs, inferenceOpaque)) {
+		t.Fatal("workspace key leaked into controller logs, transcript, comments or results")
+	}
+	if usage := sql(t, fmt.Sprintf("SELECT provider || ':' || model FROM task_usage WHERE task_id='%s';", id)); usage != "opencode:managed-inference/fixture" {
+		t.Fatalf("native usage not attributed to the managed model: %s", usage)
+	}
+	w.usage(t, map[string][2]string{attribution(agent, id): {"fixture", "workspace"}})
+	t.Log("the same task used the workspace LiteLLM key through the inference relay; LiteLLM attributes workspace/agent/task")
+	restartFailsClosed(t, w, network, controllerName, agentImage, runtime, agent)
+	controllerModelSelections(t, api, w, runtime, agent)
 }

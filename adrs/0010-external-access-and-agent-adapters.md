@@ -18,9 +18,9 @@ services. Deployment examples may assemble those services without making them
 runtime-owned components. Lifecycle signals or bounded identity leases are still
 needed for external services to revoke ended attempts under ADR 0009.
 
-ADR 0012 permits an optional credential-translation relay in the controller process
-for key-only inference deployments. External gateways remain the default; provider
-routing, IAM and budgets remain external in both paths.
+ADR 0012 makes a narrow credential-translation relay in the controller process the
+single inference path: it swaps an opaque attempt credential for the workspace's
+gateway key. Provider routing, model grants and budgets remain in the gateway.
 
 Use OpenCode as the first end-to-end example adapter because it supports custom
 providers, remote MCP authorization headers and machine-readable output. Keep
@@ -31,18 +31,18 @@ A custom image must meet a supported adapter/runner contract. Its own entrypoint
 toolchain and dependency choices cannot relax backend policy.
 
 The integration lab uses unmodified Multica, Keycloak, LiteLLM and CLIProxyAPI.
-Provider account authentication stays in the proxy's credential store. Distinct
-short-lived audiences identify the agent to MCP and inference services. The lab's
-external MCP fixture checks roles, the fixed agent/resource mapping and live
-Multica task state. An example LiteLLM custom-auth hook delegates the inference
-decision there and restricts routes, model and caller-supplied provider overrides.
-This demonstrates an OSS integration route, not a production authorization SDK.
-MCP does not have to transport inference requests.
+Provider account authentication stays in the proxy's credential store. A
+short-lived MCP audience identifies the agent to the lab's external MCP fixture,
+which checks roles, the fixed agent/resource mapping and live Multica task state.
+Inference uses the ADR 0012 relay in the lab controller with a LiteLLM virtual key
+for the lab workspace; LiteLLM refuses other models and caller-supplied provider
+overrides. This demonstrates an OSS integration route, not a production
+authorization SDK. MCP does not have to transport inference requests.
 
 The lab's single-task envelope and OpenCode JSON interpretation are experimental.
 The persistent controller now has an experimental OpenCode MCP integration with
-safe context, cancellation, leases and identity checks. Optional external-gateway
-inference uses the separate provider hook in ADR 0012. Native events, cumulative reported usage, terminal text and disposable session
+safe context, cancellation, leases and identity checks. Optional inference uses
+the workspace-key relay in ADR 0012. Native events, cumulative reported usage, terminal text and disposable session
 identifiers use the existing Multica APIs; see the adapter README capability
 matrix. Production adversarial egress conformance remains deployment-owned.
 Do not silently advertise missing Multica features or copy credential-bearing
@@ -66,5 +66,5 @@ and Docker socket authority are explicit lab limitations.
 - [OpenCode providers](https://opencode.ai/docs/providers/)
 - [OpenCode remote MCP](https://opencode.ai/docs/mcp-servers/)
 - [OpenCode CLI](https://opencode.ai/docs/cli/)
-- [LiteLLM custom authentication](https://docs.litellm.ai/docs/proxy/custom_auth)
+- [LiteLLM virtual keys](https://docs.litellm.ai/docs/proxy/virtual_keys)
 - [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI)

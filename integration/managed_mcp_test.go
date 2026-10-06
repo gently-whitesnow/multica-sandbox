@@ -28,20 +28,13 @@ func managedMCPService(t *testing.T, api *multica.Client) {
 	network := strings.TrimSuffix(os.Getenv("MULTICA_TEST_SERVER_CONTAINER"), "-server")
 	fixture := filepath.Join(dir, "fixture.json")
 	services := map[string]any{"seed": map[string]any{"environment": map[string]string{"ROTATION_FIXTURE": "1"}}, "gateway": map[string]any{"networks": []string{"fixture", "execution"}}}
-	if os.Getenv("VERIFY_INFERENCE") == "1" {
-		inferenceFixture(t, services)
-	}
 	writeJSON(t, fixture, map[string]any{"services": services, "networks": map[string]any{"fixture": map[string]any{"external": true, "name": network, "internal": nil}, "execution": map[string]any{"internal": true}}})
 	compose := func(args ...string) string {
 		return dockerTest(t, append([]string{"compose", "-p", project, "-f", "../examples/identity-mcp/compose.yaml", "-f", fixture}, args...)...)
 	}
 	t.Cleanup(func() { compose("down", "-v", "--remove-orphans") })
 	compose("build", "seed", "gateway")
-	target := "gateway"
-	if os.Getenv("VERIFY_INFERENCE") == "1" {
-		target = "litellm"
-	}
-	compose("up", "-d", "--wait", "--wait-timeout", "180", target)
+	compose("up", "-d", "--wait", "--wait-timeout", "180", "gateway")
 	controller := "90000000-0000-4000-8000-000000000029"
 	agent := "20000000-0000-4000-8000-000000000001"
 	id := "70000000-0000-4000-8000-000000000001"
@@ -52,9 +45,6 @@ func managedMCPService(t *testing.T, api *multica.Client) {
 	// This credential-free mock model is trusted fixture configuration, outside claim data.
 	command := `OPENCODE_CONFIG_CONTENT='{"model":"fixture/fixture","enabled_providers":["fixture"],"provider":{"fixture":{"npm":"@ai-sdk/openai-compatible","name":"Fixture","options":{"baseURL":"http://gateway:8080/v1"},"models":{"fixture":{"name":"Fixture","limit":{"context":64000,"output":4096}}}}}}' exec opencode run --format json "$(cat /workspace/prompt.txt)"`
 	c := service.Config{Server: "http://127.0.0.1:8080", Daemon: controller, Image: "ghcr.io/anomalyco/opencode:1.18.34@sha256:b34342987ca889fc2cc19cbc046eefc2418e5980a3d696e209fbb401a288f631", Command: []string{"/bin/sh", "-c", command}, Timeout: "180s", OpenCode: &service.OpenCodeConfig{IdentityFile: "/etc/multica-sandbox/identity.json", Authority: attempt.Config{URL: "http://gateway:8080/attempts", BearerFile: "/identity-secrets/admin", AllowHTTP: true}, Network: project + "_execution", Peers: []string{project + "-gateway-1"}}}
-	if os.Getenv("VERIFY_INFERENCE") == "1" {
-		configureServiceInference(t, dir, project, &c, binding)
-	}
 	f := prepareManagedService(t, dir, c, project+"_credentials")
 	cid := f.compose("ps", "-q", "controller")
 	eventually(t, "OpenCode runtime registration", func() bool { return strings.Contains(dockerTest(t, "logs", cid), "ready workspaces=") })
@@ -94,25 +84,12 @@ func managedMCPService(t *testing.T, api *multica.Client) {
 	}
 	successful := false
 	for key, stats := range evidence {
-		if !strings.HasPrefix(key, "inference:") && strings.Contains(key, id) && stats[0] >= 24 && stats[1] >= 3 {
+		if strings.Contains(key, id) && stats[0] >= 24 && stats[1] >= 3 {
 			successful = true
 		}
 	}
 	if !successful {
 		t.Fatal("real controller did not complete successful MCP calls across rotations")
-	}
-	if c.OpenCode.InferenceFile != "" {
-		successfulInference := false
-		for key, stats := range evidence {
-			if strings.HasPrefix(key, "inference:") && strings.Contains(key, id) && stats[0] >= 25 && stats[1] >= 3 {
-				successfulInference = true
-			}
-		}
-		if !successfulInference {
-			t.Fatal("real controller did not rotate inference JWTs through LiteLLM")
-		}
-		t.Log("same native OpenCode process used independent MCP and inference JWTs through real LiteLLM")
-		controllerModelSelections(t, api, runtime, agent, project)
 	}
 	if dockerTest(t, "inspect", "--format", "{{.State.StartedAt}}", cid) != started {
 		t.Fatal("controller restarted during task")
@@ -121,9 +98,9 @@ func managedMCPService(t *testing.T, api *multica.Client) {
 		t.Fatal("native result was not reported")
 	}
 
-	assertNativeReports(t, id, os.Getenv("VERIFY_INFERENCE") == "1")
+	assertNativeReports(t, id)
 	f.compose("stop")
-	t.Log("real Multica claim -> persistent Compose controller -> native OpenCode task -> real Keycloak/MCP rotations -> cleanup; inference is deterministic")
+	t.Log("real Multica claim -> persistent Compose controller -> native OpenCode task -> real Keycloak/MCP rotations -> cleanup; inference is a deterministic mock")
 }
 
 func prepareManagedService(t *testing.T, dir string, c service.Config, credentials string) serviceFixture {

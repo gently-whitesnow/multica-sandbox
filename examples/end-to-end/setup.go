@@ -55,6 +55,17 @@ func setup(ctx context.Context) error {
 	if err = writeJSON("/config/runtime.json", rt); err != nil {
 		return err
 	}
+	// The workspace's LiteLLM virtual key grants the demo model and limits; only the controller reads it.
+	var key struct {
+		Key string `json:"key"`
+	}
+	status, err := exchange(ctx, "POST", "http://litellm:4000/key/generate", "sk-"+c.Master, map[string]any{"models": []string{"demo"}, "rpm_limit": 20, "tpm_limit": 30000, "metadata": map[string]string{"workspace": workspace}}, &key)
+	if err != nil || status != 200 || key.Key == "" {
+		return fmt.Errorf("LiteLLM workspace key unavailable")
+	}
+	if err = os.WriteFile("/config/workspace-key", []byte(key.Key), 0600); err != nil {
+		return err
+	}
 	fmt.Println("READY real Multica issue and queued task")
 	return nil
 }

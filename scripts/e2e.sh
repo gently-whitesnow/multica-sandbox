@@ -12,7 +12,7 @@ case "${1:-}" in
  models) compose run --rm --no-deps controller models ;;
  login) compose run --rm --no-deps login ;;
  check) compose run --rm --no-deps controller check ;;
- run) compose run --rm --no-deps controller run ;;
+ run) compose run --rm --no-deps --use-aliases controller run ;;
  stop)
   compose run --rm --no-deps controller clean
   compose down

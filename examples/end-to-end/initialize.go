@@ -43,14 +43,14 @@ func initialize() error {
 		return writeLLMEnv(c)
 	}
 	c := configuration{secret(), secret(), secret(), secret(), secret()[:12]}
-	roles := []any{map[string]any{"name": "fixture-reader"}, map[string]any{"name": "inference-demo"}}
+	roles := []any{map[string]any{"name": "fixture-reader"}}
 	scopes := []any{}
-	for _, name := range []string{"mcp", "inference"} {
+	for _, name := range []string{"mcp"} {
 		scopes = append(scopes, map[string]any{"name": name, "protocol": "openid-connect", "attributes": map[string]string{"include.in.token.scope": "true"}, "protocolMappers": []any{map[string]any{"name": "audience", "protocol": "openid-connect", "protocolMapper": "oidc-audience-mapper", "config": map[string]string{"included.custom.audience": "sandbox-" + name, "access.token.claim": "true", "id.token.claim": "false"}}}})
 	}
 	realm := map[string]any{"realm": "e2e", "enabled": true, "accessTokenLifespan": 180, "roles": map[string]any{"realm": roles}, "clientScopes": scopes, "clients": []any{
-		map[string]any{"clientId": "agent-demo", "secret": c.Client, "enabled": true, "serviceAccountsEnabled": true, "standardFlowEnabled": false, "directAccessGrantsEnabled": false, "defaultClientScopes": []string{"roles"}, "optionalClientScopes": []string{"mcp", "inference"}, "fullScopeAllowed": true, "protocolMappers": []any{map[string]any{"name": "agent-roles", "protocol": "openid-connect", "protocolMapper": "oidc-usermodel-realm-role-mapper", "config": map[string]string{"multivalued": "true", "claim.name": "realm_access.roles", "jsonType.label": "String", "access.token.claim": "true", "id.token.claim": "false"}}}},
-	}, "users": []any{map[string]any{"id": agentID, "username": "service-account-agent-demo", "enabled": true, "serviceAccountClientId": "agent-demo", "realmRoles": []string{"fixture-reader", "inference-demo"}}}}
+		map[string]any{"clientId": "agent-demo", "secret": c.Client, "enabled": true, "serviceAccountsEnabled": true, "standardFlowEnabled": false, "directAccessGrantsEnabled": false, "defaultClientScopes": []string{"roles"}, "optionalClientScopes": []string{"mcp"}, "fullScopeAllowed": true, "protocolMappers": []any{map[string]any{"name": "agent-roles", "protocol": "openid-connect", "protocolMapper": "oidc-usermodel-realm-role-mapper", "config": map[string]string{"multivalued": "true", "claim.name": "realm_access.roles", "jsonType.label": "String", "access.token.claim": "true", "id.token.claim": "false"}}}},
+	}, "users": []any{map[string]any{"id": agentID, "username": "service-account-agent-demo", "enabled": true, "serviceAccountClientId": "agent-demo", "realmRoles": []string{"fixture-reader"}}}}
 	if err := writeJSON("/realm/realm.json", realm); err != nil {
 		return err
 	}
@@ -72,5 +72,6 @@ func initialize() error {
 }
 
 func writeLLMEnv(c configuration) error {
-	return os.WriteFile("/config/litellm.env", []byte("PROXY_BRIDGE_KEY="+c.Proxy+"\nLITELLM_MASTER_KEY=sk-"+c.Master+"\n"), 0600)
+	// LiteLLM keeps virtual keys in its own schema of the lab database.
+	return os.WriteFile("/config/litellm.env", []byte("PROXY_BRIDGE_KEY="+c.Proxy+"\nLITELLM_MASTER_KEY=sk-"+c.Master+"\nDATABASE_URL=postgresql://fixture:fixture@postgres:5432/fixture?schema=litellm\n"), 0600)
 }

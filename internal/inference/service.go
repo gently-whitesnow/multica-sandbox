@@ -5,53 +5,41 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"strings"
 	"time"
-
-	"github.com/gently-whitesnow/multica-sandbox/internal/identity"
 )
 
-type Issuer interface {
-	AcquireForIssuer(context.Context, identity.Ref, string) (identity.AccessToken, error)
-}
-type Session struct {
-	Target
-	Token identity.AccessToken
-}
 type Service struct {
 	config   Config
 	server   string
-	issuer   Issuer
-	gateways map[string]string
-	bindings map[identity.Ref]Target
+	gateways map[string]bool
+	bindings map[Scope]Binding
 	catalogs map[Scope]Catalog
 	client   *http.Client
 }
 
-func New(c Config, server string, issuer Issuer) (*Service, error) {
+func New(c Config, server string) (*Service, error) {
 	parsed, _ := url.Parse(server)
-	if c.Version != 1 || parsed == nil || parsed.Path != "" || !endpoint(server, c.AllowHTTP) || len(c.Gateways) == 0 || issuer == nil || (len(c.Bindings) > 0) == (c.External != nil) {
+	if c.Version != 1 || parsed == nil || parsed.Path != "" || !endpoint(server, c.AllowHTTP) || len(c.Gateways) == 0 || (len(c.Bindings) > 0) == (c.External != nil) {
 		return nil, ErrDenied
 	}
 	if c.External != nil {
 		external := *c.External
 		c.External = &external
 	}
-	s := &Service{config: c, server: server, issuer: issuer, gateways: map[string]string{}, bindings: map[identity.Ref]Target{}, catalogs: map[Scope]Catalog{}, client: &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+	s := &Service{config: c, server: server, gateways: map[string]bool{}, bindings: map[Scope]Binding{}, catalogs: map[Scope]Catalog{}, client: &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 	for _, g := range c.Gateways {
-		if !endpoint(g.URL, c.AllowHTTP) || g.Issuer == "" || s.gateways[g.URL] != "" {
+		if !origin(g, c.AllowHTTP) || s.gateways[g] {
 			return nil, ErrDenied
 		}
-		s.gateways[g.URL] = g.Issuer
+		s.gateways[g] = true
 	}
 	for _, b := range c.Bindings {
-		ref := identity.Ref{Server: server, WorkspaceID: b.WorkspaceID, AgentID: b.AgentID}
-		if !s.validRef(ref) || !s.validTarget(b.Target) {
+		scope := Scope{Server: server, WorkspaceID: b.WorkspaceID}
+		if _, exists := s.bindings[scope]; exists || !s.validScope(scope) || !s.gateways[b.Gateway] || !filepath.IsAbs(b.KeyFile) {
 			return nil, ErrDenied
 		}
-		if _, exists := s.bindings[ref]; exists {
-			return nil, ErrDenied
-		}
-		s.bindings[ref] = b.Target
+		s.bindings[scope] = b
 	}
 	if c.External != nil && (!endpoint(c.External.URL, c.AllowHTTP) || !filepath.IsAbs(c.External.BearerFile)) {
 		return nil, ErrDenied
@@ -61,32 +49,31 @@ func New(c Config, server string, issuer Issuer) (*Service, error) {
 	}
 	return s, nil
 }
-func (s *Service) validRef(r identity.Ref) bool {
-	return r.Server == s.server && uuid.MatchString(r.WorkspaceID) && uuid.MatchString(r.AgentID)
-}
-func (s *Service) validTarget(t Target) bool {
-	return t.Issuer != "" && s.gateways[t.URL] == t.Issuer
-}
-func (s *Service) Acquire(ctx context.Context, ref identity.Ref) (Session, error) {
-	if !s.validRef(ref) || ctx.Err() != nil {
-		return Session{}, ErrDenied
+
+// Acquire resolves the workspace's gateway and key for one new attempt. Static key
+// files are re-read each time, so a changed key applies to new attempts only.
+func (s *Service) Acquire(ctx context.Context, scope Scope) (Target, error) {
+	if !s.validScope(scope) || ctx.Err() != nil {
+		return Target{}, ErrDenied
 	}
-	target, err := s.resolve(ctx, ref)
-	if err != nil || !s.validTarget(target) {
-		return Session{}, ErrDenied
-	}
-	token, err := s.issuer.AcquireForIssuer(ctx, ref, target.Issuer)
-	if err != nil {
-		return Session{}, ErrDenied
-	}
-	return Session{target, token}, nil
-}
-func (s *Service) resolve(ctx context.Context, ref identity.Ref) (Target, error) {
+	var target Target
 	if s.config.External != nil {
-		return s.remote(ctx, ref)
+		var err error
+		if target, err = s.remote(ctx, scope); err != nil {
+			return Target{}, ErrDenied
+		}
+	} else {
+		binding, ok := s.bindings[scope]
+		if !ok {
+			return Target{}, ErrDenied
+		}
+		data, err := readFile(binding.KeyFile, 4096)
+		if err != nil {
+			return Target{}, ErrDenied
+		}
+		target = Target{Gateway: binding.Gateway, Key: Key{strings.TrimSpace(string(data))}}
 	}
-	target, ok := s.bindings[ref]
-	if !ok {
+	if !s.gateways[target.Gateway] || !target.Key.valid() {
 		return Target{}, ErrDenied
 	}
 	return target, nil

@@ -1,5 +1,5 @@
 // Package relay is the controller's narrow credential-translation boundary
-// (ADR 0012 and 0014): one trusted origin per relay, caller authorization is
+// (ADR 0012 and 0014): each grant fixes one trusted origin, caller authorization is
 // replaced, redirects are refused and upstream details never reach the caller.
 package relay
 
@@ -13,68 +13,89 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"path"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
 
 // Lease is an authorized forwarding grant for one request.
 type Lease struct {
+	Origin     *url.URL
 	Credential string
+	Header     http.Header
 	// Context ends when the grant is revoked, cancelling in-flight requests.
 	Context context.Context
 	Release func()
 }
 
-// Authorizer validates the caller and resolves the upstream credential from trusted state.
+// Authorizer validates the caller and resolves the upstream from trusted state.
 type Authorizer interface {
 	Authorize(*http.Request) (Lease, bool)
 }
 
-type Relay struct {
-	auth  Authorizer
-	allow func(string) bool
-	limit int64
-	proxy *httputil.ReverseProxy
+// Policy bounds what a relay forwards.
+type Policy struct {
+	// Allow admits cleaned request paths.
+	Allow func(string) bool
+	Limit int64
+	// Reserved lists lower-case header prefixes owned by the relay: caller values
+	// are removed before forwarding and upstream values before responding.
+	Reserved []string
+	// Withhold replaces upstream error bodies with a fixed one; the status is kept.
+	Withhold bool
+	// HeaderTimeout bounds the wait for upstream response headers (default 60s).
+	HeaderTimeout time.Duration
 }
 
-type credentialKey struct{}
+type Relay struct {
+	auth   Authorizer
+	policy Policy
+	proxy  *httputil.ReverseProxy
+}
+
+type leaseKey struct{}
 
 var errRedirect = errors.New("upstream redirect refused")
 
 // dropped never leave the relay: caller credentials, sessions and forwarding hints.
 var dropped = []string{"Authorization", "Cookie", "Proxy-Authorization", "Forwarded", "X-Real-Ip", "X-Actor-Source", "X-User-Id", "X-User-Email"}
 
-// New forwards to origin only; allow admits cleaned request paths.
-func New(origin string, auth Authorizer, allow func(string) bool, limit int64) (*Relay, error) {
-	u, err := url.Parse(origin)
-	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") || auth == nil || allow == nil || limit <= 0 {
-		return nil, errors.New("relay requires an HTTP(S) origin, authorizer, path policy and body limit")
+func New(auth Authorizer, p Policy) (*Relay, error) {
+	if auth == nil || p.Allow == nil || p.Limit <= 0 || p.HeaderTimeout < 0 {
+		return nil, errors.New("relay requires an authorizer, path policy and body limit")
 	}
-	u.Path = ""
+	if p.HeaderTimeout == 0 {
+		p.HeaderTimeout = 60 * time.Second
+	}
 	transport := &http.Transport{
 		Proxy:                 nil,
 		DialContext:           (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
 		TLSHandshakeTimeout:   10 * time.Second,
-		ResponseHeaderTimeout: 60 * time.Second,
+		ResponseHeaderTimeout: p.HeaderTimeout,
 		MaxIdleConnsPerHost:   16,
 		ForceAttemptHTTP2:     true,
 	}
-	r := &Relay{auth: auth, allow: allow, limit: limit}
+	r := &Relay{auth: auth, policy: p}
 	r.proxy = &httputil.ReverseProxy{
 		Transport:     transport,
 		FlushInterval: -1,
 		ErrorLog:      log.New(io.Discard, "", 0),
 		Rewrite: func(pr *httputil.ProxyRequest) {
-			pr.SetURL(u)
+			lease := pr.In.Context().Value(leaseKey{}).(Lease)
+			pr.SetURL(lease.Origin)
 			for _, name := range dropped {
 				pr.Out.Header.Del(name)
 			}
 			for name := range pr.Out.Header {
-				if strings.HasPrefix(strings.ToLower(name), "x-forwarded-") {
+				if strings.HasPrefix(strings.ToLower(name), "x-forwarded-") || reserved(name, p.Reserved) {
 					pr.Out.Header.Del(name)
 				}
 			}
-			pr.Out.Header.Set("Authorization", "Bearer "+pr.In.Context().Value(credentialKey{}).(string))
+			for name, values := range lease.Header {
+				pr.Out.Header[name] = slices.Clone(values)
+			}
+			pr.Out.Header.Set("Authorization", "Bearer "+lease.Credential)
 		},
 		ModifyResponse: func(resp *http.Response) error {
 			// The transport never follows redirects; refusing them also withholds upstream locations.
@@ -82,6 +103,18 @@ func New(origin string, auth Authorizer, allow func(string) bool, limit int64) (
 				return errRedirect
 			}
 			resp.Header.Del("Set-Cookie")
+			for name := range resp.Header {
+				if reserved(name, p.Reserved) {
+					resp.Header.Del(name)
+				}
+			}
+			if p.Withhold && resp.StatusCode >= 400 {
+				_ = resp.Body.Close()
+				body := `{"error":{"message":"upstream refused the request","type":"upstream_error","code":"` + strconv.Itoa(resp.StatusCode) + `"}}`
+				resp.Body = io.NopCloser(strings.NewReader(body))
+				resp.ContentLength = int64(len(body))
+				resp.Header = http.Header{"Content-Type": {"application/json"}, "Cache-Control": {"no-store"}, "Content-Length": {strconv.Itoa(len(body))}}
+			}
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, _ error) {
@@ -92,7 +125,7 @@ func New(origin string, auth Authorizer, allow func(string) bool, limit int64) (
 }
 
 func (r *Relay) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-	if req.URL.Scheme != "" || req.URL.Host != "" || req.Method == http.MethodConnect || req.Header.Get("Upgrade") != "" || !cleanPath(req.URL) || !r.allow(req.URL.Path) {
+	if req.URL.Scheme != "" || req.URL.Host != "" || req.Method == http.MethodConnect || req.Header.Get("Upgrade") != "" || !cleanPath(req.URL) || !r.policy.Allow(req.URL.Path) {
 		deny(w, http.StatusForbidden, "request not permitted")
 		return
 	}
@@ -102,10 +135,10 @@ func (r *Relay) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	defer lease.Release()
-	ctx, cancel := context.WithCancel(context.WithValue(req.Context(), credentialKey{}, lease.Credential))
+	ctx, cancel := context.WithCancel(context.WithValue(req.Context(), leaseKey{}, lease))
 	defer cancel()
 	defer context.AfterFunc(lease.Context, cancel)()
-	req.Body = http.MaxBytesReader(w, req.Body, r.limit)
+	req.Body = http.MaxBytesReader(w, req.Body, r.policy.Limit)
 	r.proxy.ServeHTTP(w, req.WithContext(ctx))
 }
 

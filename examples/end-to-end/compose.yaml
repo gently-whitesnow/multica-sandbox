@@ -106,16 +106,16 @@ services:
     entrypoint: [/bin/sh, -c, 'set -a; . /config/litellm.env; set +a; exec litellm --config /fixture/litellm.yaml --port 4000']
     environment:
       UPSTREAM_MODEL: openai/${UPSTREAM_MODEL:-gpt-5.6-luna}
-      PYTHONPATH: /fixture
+      LITELLM_LOCAL_MODEL_COST_MAP: "True"
     volumes:
       - config:/config:ro
       - ./litellm.yaml:/fixture/litellm.yaml:ro
-      - ./litellm_auth.py:/fixture/litellm_auth.py:ro
-    networks: [sandbox, inference]
+    # Agents reach LiteLLM only through the controller relay.
+    networks: [control, inference]
     depends_on:
       init:
         condition: service_completed_successfully
-      mcp:
+      postgres:
         condition: service_healthy
   frontend:
     image: ghcr.io/multica-ai/multica-web@sha256:cc8260b0371661896dce52f968c8822d8275e0b275a43484347e5a59efffbb7c
@@ -131,7 +131,11 @@ services:
     <<: *control
     command: [setup]
     profiles: [run]
-    networks: [control, inference]
+    networks:
+      control: {}
+      inference: {}
+      sandbox:
+        aliases: [inference-relay]
     environment:
       COMPOSE_PROJECT_NAME: sandbox-e2e
       UPSTREAM_MODEL: ${UPSTREAM_MODEL:-gpt-5.6-luna}

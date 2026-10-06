@@ -57,7 +57,7 @@ Pin the build and Docker CLI base images by digest. Build the controller locally
 registry publishing is separate work. Preserve the existing probe for explicit
 one-attempt experiments. The default service and standalone probe execute offline test commands. An explicit
 OpenCode configuration enables the experimental agent/identity path under ADR 0011;
-optional inference identity follows ADR 0012. Full event/session conformance
+optional inference follows ADR 0012. Full event/session conformance
 remains separate work.
 
 ## Consequences

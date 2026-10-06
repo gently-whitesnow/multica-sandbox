@@ -46,8 +46,7 @@ The OpenCode controller adapter uses the issuance guard for approved MCP deliver
 targets from trusted claims. Delivery rules never add connections to the set selected
 by Multica. Separate attempt grants, atomic projection, renewal and cancellation
 follow ADRs 0009 and 0011. A reference alone is not workload attestation.
-Inference endpoint/model bindings are separate; ADR 0012 reuses this credential
-contract for inference-specific issuance.
+Inference does not use this contract: ADR 0012 binds workspaces to gateway keys.
 
 The existing identity/MCP fixture now exercises both resolution paths against
 real Keycloak. Local tests cover protocol/tenant failures, credential changes and

@@ -86,8 +86,8 @@ func (s *Service) validScope(scope Scope) bool {
 	return scope.Server == s.server && uuid.MatchString(scope.WorkspaceID)
 }
 
-// Catalog describes a runtime's capabilities for discovery; it never issues
-// identity or grants access. Per-agent access stays with the gateway.
+// Catalog describes a runtime's capabilities for discovery; it never grants access.
+// Workspace model access stays with the gateway key.
 func (s *Service) Catalog(ctx context.Context, scope Scope) (Catalog, error) {
 	if !s.validScope(scope) || ctx.Err() != nil {
 		return Catalog{}, ErrDenied

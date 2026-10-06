@@ -18,7 +18,7 @@ import (
 
 var networkPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
 var envPattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,63}$`)
-var projectionPaths = map[string]bool{"/workspace/opencode.json": true, "/workspace/prompt.txt": true, "/workspace/AGENTS.md": true, "/workspace/inference-token.json": true, "/workspace/inference-auth.mjs": true, "/workspace/data/opencode/auth.json": true, "/workspace/data/opencode/mcp-auth.json": true}
+var projectionPaths = map[string]bool{"/workspace/opencode.json": true, "/workspace/prompt.txt": true, "/workspace/AGENTS.md": true, "/workspace/data/opencode/mcp-auth.json": true}
 
 type Projected struct {
 	Backend

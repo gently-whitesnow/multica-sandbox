@@ -11,13 +11,14 @@ from verified behavior.
   component reuse and security acceptance gates (0004), lifecycle probe (0005),
   offline execution and recovery (0006), containerized service (0007),
   multi-workspace authority (0008), attempt authorization (0009), external services/adapters (0010),
-  managed MCP identity delivery (0011), inference credential translation (0012),
+  managed MCP identity delivery (0011), workspace inference relay (0012),
   identity resolution contract (0013), Multica API relay (0014).
 - `examples/end-to-end/`: opt-in real Multica/OpenCode/inference lab.
 - `examples/identity-mcp/`: disposable identity and MCP contract fixture.
-- `internal/inference/`: trusted recipients, advisory model catalogs and renewable inference identity.
+- `internal/inference/`: workspace gateway bindings, relay policy and advisory model catalogs.
 - `internal/identity/`: static/external identity resolution and verified Keycloak issuance.
-- `internal/relay/`: shared credential-translation reverse proxy and per-attempt grants.
+- `internal/relay/`: shared credential-translation reverse proxy and per-attempt grants
+  (Multica API and inference).
 - `examples/agent-image/`: example OpenCode image with the upstream `multica` CLI.
 - `cmd/sandbox-controller`, `internal/service/`: persistent controller service.
 - `Dockerfile`, `compose.yaml`, `deploy/`: controller packaging/configuration.
@@ -59,8 +60,8 @@ available. Run `VERIFY_CONTAINERS=1 ./verify.sh` for backend changes and
 `VERIFY_SERVICE=1 ./verify.sh` for service/packaging changes. Never run test commands
 against production tasks. Keep fixture data generic.
 Run `VERIFY_IDENTITY=1 ./verify.sh` for identity/MCP fixture changes.
-Run `VERIFY_INFERENCE=1 ./verify.sh` for native OpenCode/Keycloak/LiteLLM checks;
-add `VERIFY_SERVICE=1 VERIFY_OPENCODE=1` for real controller inference.
+Run `VERIFY_INFERENCE=1 ./verify.sh` for native OpenCode/relay/LiteLLM workspace-key
+checks; add `VERIFY_SERVICE=1 VERIFY_OPENCODE=1` for real controller inference.
 The end-to-end lab uses `scripts/e2e.sh`; real inference requires explicit local
 subscription login. Never copy account data into documentation or test reports.
 CI is paused; run verification locally. Do not re-enable CI without an explicit

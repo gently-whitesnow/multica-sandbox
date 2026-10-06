@@ -27,18 +27,17 @@ type Config struct {
 }
 
 type Grant struct {
-	Version      int    `json:"version"`
-	Controller   string `json:"controller"`
-	Attempt      string `json:"attempt,omitempty"`
-	Server       string `json:"server,omitempty"`
-	Workspace    string `json:"workspace_id,omitempty"`
-	Agent        string `json:"agent_id,omitempty"`
-	Task         string `json:"task_id,omitempty"`
-	URL          string `json:"mcp_url,omitempty"`
-	InferenceURL string `json:"inference_url,omitempty"`
-	TokenHash    string `json:"token_hash,omitempty"`
-	ExpiresAt    int64  `json:"expires_at,omitempty"`
-	Action       string `json:"action"`
+	Version    int    `json:"version"`
+	Controller string `json:"controller"`
+	Attempt    string `json:"attempt,omitempty"`
+	Server     string `json:"server,omitempty"`
+	Workspace  string `json:"workspace_id,omitempty"`
+	Agent      string `json:"agent_id,omitempty"`
+	Task       string `json:"task_id,omitempty"`
+	URL        string `json:"mcp_url,omitempty"`
+	TokenHash  string `json:"token_hash,omitempty"`
+	ExpiresAt  int64  `json:"expires_at,omitempty"`
+	Action     string `json:"action"`
 }
 
 type Authority struct {

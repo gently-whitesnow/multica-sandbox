@@ -12,8 +12,8 @@ import (
 	"github.com/gently-whitesnow/multica-sandbox/internal/attempt"
 	"github.com/gently-whitesnow/multica-sandbox/internal/execution"
 	"github.com/gently-whitesnow/multica-sandbox/internal/identity"
-	"github.com/gently-whitesnow/multica-sandbox/internal/inference"
 	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
+	"github.com/gently-whitesnow/multica-sandbox/internal/relay"
 )
 
 type Issuer interface {
@@ -29,9 +29,9 @@ type Status interface {
 	Status(context.Context, string) (string, error)
 }
 
-// Grants issues per-attempt relay credentials; the mat_ token stays in controller memory.
+// Grants issues per-attempt relay credentials; upstream credentials stay in controller memory.
 type Grants interface {
-	Issue(string, string) (string, error)
+	Issue(string, relay.Upstream) (string, error)
 	Revoke(string)
 }
 
@@ -47,6 +47,9 @@ type Adapter struct {
 	// Relay and RelayURL enable upstream-equivalent Multica CLI access (ADR 0014).
 	Relay    Grants
 	RelayURL string
+	// InferenceRelay and InferenceRelayURL carry workspace-key inference (ADR 0012).
+	InferenceRelay    Grants
+	InferenceRelayURL string
 }
 
 type running struct {
@@ -61,10 +64,11 @@ type running struct {
 	started     bool
 	once        sync.Once
 	cleanupErr  error
-	inference   inference.Session
 	events      *eventStream
 	model       string
 	relayToken  string
+	// inferenceToken is the opaque per-attempt provider key; it never rotates.
+	inferenceToken string
 }
 
 func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, error) {
@@ -82,11 +86,15 @@ func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, 
 	if a.Relay != nil {
 		token, err := task.TaskToken()
 		if err == nil {
-			r.relayToken, err = a.Relay.Issue(task.AttemptKey(), token)
+			r.relayToken, err = a.Relay.Issue(task.AttemptKey(), relay.Upstream{Origin: a.Server, Credential: token})
 		}
 		if err != nil {
 			return nil, r.reject(fmt.Errorf("Multica relay grant: %w", ErrDenied))
 		}
+	}
+	if err = r.grantInference(runCtx); err != nil {
+		cancel()
+		return nil, r.reject(err)
 	}
 	if err = r.refresh(runCtx); err != nil {
 		cancel()
@@ -150,10 +158,7 @@ func (r *running) project(ctx context.Context) error {
 	if err != nil {
 		return ErrDenied
 	}
-	if err := r.workload.Write(ctx, AuthPath, data); err != nil {
-		return err
-	}
-	return r.projectInference(ctx)
+	return r.workload.Write(ctx, AuthPath, data)
 }
 
 func (r *running) grant(action string) attempt.Grant {
@@ -186,11 +191,6 @@ func (r *running) refresh(ctx context.Context) error {
 		}
 		r.tokens[name] = token
 	}
-	inferenceChanged, err := r.refreshInference(ctx, ref)
-	if err != nil {
-		return err
-	}
-	changed = changed || inferenceChanged
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -258,9 +258,12 @@ func (r *running) Wait(ctx context.Context) error {
 }
 func (r *running) Remove(ctx context.Context) error {
 	r.once.Do(func() {
-		// Relay access ends first, before the agent process is joined.
+		// Relay access ends first, before the agent process is joined; revocation cancels in-flight streams.
 		if r.relayToken != "" {
 			r.adapter.Relay.Revoke(r.task.AttemptKey())
+		}
+		if r.inferenceToken != "" {
+			r.adapter.InferenceRelay.Revoke(r.task.AttemptKey())
 		}
 		r.cancel()
 		if r.started {
@@ -273,7 +276,6 @@ func (r *running) Remove(ctx context.Context) error {
 			r.cleanupErr = errors.Join(r.cleanupErr, r.workload.Remove(cleanCtx))
 		}
 		clear(r.tokens)
-		r.inference = inference.Session{}
 	})
 	return r.cleanupErr
 }

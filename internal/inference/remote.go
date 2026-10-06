@@ -11,17 +11,17 @@ import (
 	"github.com/gently-whitesnow/multica-sandbox/internal/identity"
 )
 
-func (s *Service) remote(ctx context.Context, ref identity.Ref) (Target, error) {
+func (s *Service) remote(ctx context.Context, scope Scope) (Target, error) {
 	var out struct {
-		Version int          `json:"version"`
-		Agent   identity.Ref `json:"agent"`
-		Target  Target       `json:"target"`
+		Version   int    `json:"version"`
+		Workspace Scope  `json:"workspace"`
+		Target    Target `json:"target"`
 	}
 	request := struct {
-		Version int          `json:"version"`
-		Agent   identity.Ref `json:"agent"`
-	}{1, ref}
-	if s.remoteJSON(ctx, request, s.config.External, &out) != nil || out.Version != 1 || out.Agent != ref {
+		Version   int   `json:"version"`
+		Workspace Scope `json:"workspace"`
+	}{1, scope}
+	if s.remoteJSON(ctx, request, s.config.External, &out) != nil || out.Version != 1 || out.Workspace != scope {
 		return Target{}, ErrDenied
 	}
 	return out.Target, nil

@@ -50,7 +50,7 @@ func agent(ctx context.Context) error {
 	}
 	config := map[string]any{
 		"model": "gateway/demo", "enabled_providers": []string{"gateway"}, "share": "disabled", "autoupdate": false,
-		"provider":   map[string]any{"gateway": map[string]any{"npm": "@ai-sdk/openai-compatible", "name": "External gateway", "options": map[string]string{"baseURL": "http://litellm:4000/v1", "apiKey": request.Inference}, "models": map[string]any{"demo": map[string]any{"name": "Demo", "limit": map[string]int{"context": 64000, "output": 4096}}}}},
+		"provider":   map[string]any{"gateway": map[string]any{"npm": "@ai-sdk/openai-compatible", "name": "Inference relay", "options": map[string]string{"baseURL": "http://inference-relay:8092/v1", "apiKey": request.Inference}, "models": map[string]any{"demo": map[string]any{"name": "Demo", "limit": map[string]int{"context": 64000, "output": 4096}}}}},
 		"mcp":        map[string]any{"fixture": map[string]any{"type": "remote", "url": "http://mcp:8080/mcp", "oauth": false, "headers": map[string]string{"Authorization": "Bearer " + request.MCP}}},
 		"agent":      map[string]any{"build": map[string]any{"steps": 8}},
 		"permission": map[string]string{"*": "allow", "webfetch": "deny", "websearch": "deny"},

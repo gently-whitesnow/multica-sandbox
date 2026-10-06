@@ -7,44 +7,62 @@ import (
 	"encoding/hex"
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 )
 
-// Prefix keeps the upstream CLI's task-token check; the suffix is longer than a real mat_ token.
-const Prefix = "mat_relay_"
-
 const inflight = 16
 
-// Grants maps opaque per-attempt credentials to upstream credentials held only in memory.
+// Upstream is the trusted destination of one grant; callers never select any of it.
+type Upstream struct {
+	Origin     string
+	Credential string
+	// Header holds trusted attribution set on every forwarded request.
+	Header map[string]string
+}
+
+// Grants maps opaque per-attempt credentials to upstreams held only in memory.
 // A controller restart drops every grant, so recovered attempts fail closed.
 type Grants struct {
+	prefix    string
 	mu        sync.Mutex
 	byHash    map[[32]byte]*grant
 	byAttempt map[string][32]byte
 }
 
 type grant struct {
+	origin     *url.URL
 	credential string
+	header     http.Header
 	ctx        context.Context
 	cancel     context.CancelFunc
 	slots      chan struct{}
 }
 
-func NewGrants() *Grants {
-	return &Grants{byHash: map[[32]byte]*grant{}, byAttempt: map[string][32]byte{}}
+// NewGrants issues credentials of the form prefix + 64 hex characters.
+func NewGrants(prefix string) *Grants {
+	return &Grants{prefix: prefix, byHash: map[[32]byte]*grant{}, byAttempt: map[string][32]byte{}}
 }
 
 // Issue binds a new opaque credential to an active attempt; one grant per attempt.
-func (g *Grants) Issue(attempt, credential string) (string, error) {
-	if attempt == "" || credential == "" || strings.ContainsAny(credential, "\r\n") {
-		return "", errors.New("relay grant requires an attempt and credential")
+func (g *Grants) Issue(attempt string, u Upstream) (string, error) {
+	origin, err := parseOrigin(u.Origin)
+	if attempt == "" || err != nil || u.Credential == "" || strings.ContainsAny(u.Credential, "\r\n") {
+		return "", errors.New("relay grant requires an attempt, origin and credential")
+	}
+	header := http.Header{}
+	for name, value := range u.Header {
+		if name == "" || strings.ContainsAny(name+value, "\r\n\x00") {
+			return "", errors.New("invalid relay attribution header")
+		}
+		header.Set(name, value)
 	}
 	random := make([]byte, 32)
 	if _, err := rand.Read(random); err != nil {
 		return "", errors.New("relay credential generation failed")
 	}
-	opaque := Prefix + hex.EncodeToString(random)
+	opaque := g.prefix + hex.EncodeToString(random)
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if _, ok := g.byAttempt[attempt]; ok {
@@ -52,7 +70,7 @@ func (g *Grants) Issue(attempt, credential string) (string, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	hash := sha256.Sum256([]byte(opaque))
-	g.byHash[hash] = &grant{credential: credential, ctx: ctx, cancel: cancel, slots: make(chan struct{}, inflight)}
+	g.byHash[hash] = &grant{origin: origin, credential: u.Credential, header: header, ctx: ctx, cancel: cancel, slots: make(chan struct{}, inflight)}
 	g.byAttempt[attempt] = hash
 	return opaque, nil
 }
@@ -72,7 +90,7 @@ func (g *Grants) Revoke(attempt string) {
 
 func (g *Grants) Authorize(r *http.Request) (Lease, bool) {
 	opaque, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-	if !ok || !strings.HasPrefix(opaque, Prefix) || len(opaque) != len(Prefix)+64 {
+	if !ok || !strings.HasPrefix(opaque, g.prefix) || len(opaque) != len(g.prefix)+64 {
 		return Lease{}, false
 	}
 	g.mu.Lock()
@@ -86,5 +104,24 @@ func (g *Grants) Authorize(r *http.Request) (Lease, bool) {
 	default:
 		return Lease{}, false
 	}
-	return Lease{Credential: entry.credential, Context: entry.ctx, Release: func() { <-entry.slots }}, true
+	return Lease{Origin: entry.origin, Credential: entry.credential, Header: entry.header, Context: entry.ctx, Release: func() { <-entry.slots }}, true
+}
+
+func parseOrigin(origin string) (*url.URL, error) {
+	u, err := url.Parse(origin)
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
+		return nil, errors.New("relay origin must be an HTTP(S) origin")
+	}
+	return &url.URL{Scheme: u.Scheme, Host: u.Host}, nil
+}
+
+// reserved reports whether a header name starts with one of the lower-case prefixes.
+func reserved(name string, prefixes []string) bool {
+	name = strings.ToLower(name)
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
 }

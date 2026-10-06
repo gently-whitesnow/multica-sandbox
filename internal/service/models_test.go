@@ -11,15 +11,14 @@ import (
 	"time"
 
 	"github.com/gently-whitesnow/multica-sandbox/internal/execution"
-	agentidentity "github.com/gently-whitesnow/multica-sandbox/internal/identity"
 	"github.com/gently-whitesnow/multica-sandbox/internal/inference"
 	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
 )
 
 type scopedCatalog struct{ scope inference.Scope }
 
-func (s *scopedCatalog) Acquire(context.Context, agentidentity.Ref) (inference.Session, error) {
-	return inference.Session{}, fmt.Errorf("discovery must not issue JWT")
+func (s *scopedCatalog) Acquire(context.Context, inference.Scope) (inference.Target, error) {
+	return inference.Target{}, fmt.Errorf("discovery must not resolve a gateway key")
 }
 func (s *scopedCatalog) Catalog(_ context.Context, scope inference.Scope) (inference.Catalog, error) {
 	s.scope = scope

@@ -1,10 +1,11 @@
-// Package inference resolves trusted gateway/model bindings separately from MCP.
+// Package inference resolves trusted workspace gateway bindings and advisory catalogs separately from MCP.
 package inference
 
 import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/url"
 	"os"
@@ -15,22 +16,23 @@ import (
 	"github.com/gently-whitesnow/multica-sandbox/internal/identity"
 )
 
-var ErrDenied = errors.New("inference identity unavailable or denied")
+var ErrDenied = errors.New("inference binding unavailable or denied")
 var uuid = regexp.MustCompile(`^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`)
 
+// Config binds workspaces to an approved gateway origin and a controller-only key.
 type Config struct {
 	Version         int                      `json:"version"`
-	IdentityFile    string                   `json:"identity_file"`
 	AllowHTTP       bool                     `json:"allow_http,omitempty"`
-	Gateways        []Gateway                `json:"gateways"`
+	Gateways        []string                 `json:"gateways"`
 	Bindings        []Binding                `json:"bindings,omitempty"`
 	External        *identity.ExternalConfig `json:"external,omitempty"`
 	Catalogs        []CatalogBinding         `json:"catalogs,omitempty"`
 	CatalogExternal *identity.ExternalConfig `json:"catalog_external,omitempty"`
 }
-type Gateway struct {
-	URL    string `json:"url"`
-	Issuer string `json:"issuer"`
+type Binding struct {
+	WorkspaceID string `json:"workspace_id"`
+	Gateway     string `json:"gateway"`
+	KeyFile     string `json:"key_file"`
 }
 type Model struct {
 	Label    string    `json:"label,omitempty"`
@@ -58,16 +60,45 @@ type CatalogBinding struct {
 	Catalog
 }
 
-// Scope selects an advisory catalog. It is not an identity reference.
+// Scope is the inference principal: a workspace of the controller's Multica server.
 type Scope struct {
 	Server      string `json:"server"`
 	WorkspaceID string `json:"workspace_id"`
 }
-type Target struct{ Gateway }
-type Binding struct {
-	WorkspaceID string `json:"workspace_id"`
-	AgentID     string `json:"agent_id"`
-	Target
+
+// Key is a workspace gateway key. It never formats, marshals or logs its value.
+type Key struct{ value string }
+
+func (k *Key) UnmarshalJSON(data []byte) error {
+	if json.Unmarshal(data, &k.value) != nil {
+		return ErrDenied
+	}
+	return nil
+}
+func (Key) MarshalJSON() ([]byte, error) { return []byte(`null`), nil }
+func (Key) String() string               { return "[redacted]" }
+func (Key) GoString() string             { return "[redacted]" }
+func (Key) Format(f fmt.State, _ rune)   { _, _ = io.WriteString(f, "[redacted]") }
+
+// Reveal returns the key for the relay grant only.
+func (k Key) Reveal() string { return k.value }
+
+func (k Key) valid() bool {
+	if len(k.value) == 0 || len(k.value) > 4096 {
+		return false
+	}
+	for _, r := range k.value {
+		if r <= 32 || r == 127 {
+			return false
+		}
+	}
+	return true
+}
+
+// Target is where a workspace's attempts are relayed, with the key that replaces their credential.
+type Target struct {
+	Gateway string `json:"gateway"`
+	Key     Key    `json:"key"`
 }
 
 func ReadConfig(path string) (Config, error) {
@@ -111,6 +142,12 @@ func readFile(path string, limit int64) ([]byte, error) {
 		return nil, ErrDenied
 	}
 	return b, nil
+}
+
+// origin admits a gateway origin; the relay forwards only the OpenAI-compatible /v1 path.
+func origin(s string, allowHTTP bool) bool {
+	u, err := url.Parse(s)
+	return err == nil && endpoint(s, allowHTTP) && u.Path == ""
 }
 func endpoint(s string, allowHTTP bool) bool {
 	u, err := url.Parse(s)

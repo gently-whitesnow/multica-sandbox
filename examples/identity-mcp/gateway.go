@@ -28,11 +28,10 @@ type grant struct {
 }
 type registry struct {
 	sync.RWMutex
-	grants            map[string]grant
-	ended             map[string]bool
-	calls             map[string]int
-	hashes            map[string]map[string]bool
-	inferenceRequests int
+	grants map[string]grant
+	ended  map[string]bool
+	calls  map[string]int
+	hashes map[string]map[string]bool
 }
 
 func fingerprint(token string) string {
@@ -113,8 +112,7 @@ func gateway() error {
 	mux.Handle("/grants", grants.admin(secret))
 	mux.Handle("/attempts", grants.attempts(secret))
 	mux.Handle("/evidence", grants.evidence(secret))
-	mux.HandleFunc("/v1/chat/completions", fixtureInference)
-	mux.Handle("/authorize-inference", grants.inferenceAuth(provider.Verifier(&oidc.Config{ClientID: "sandbox-inference", SupportedSigningAlgs: []string{"RS256"}})))
+	mux.HandleFunc("/v1/chat/completions", grants.provider)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(204) })
 	return serve(":8080", mux)
 }

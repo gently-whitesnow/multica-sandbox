@@ -17,6 +17,7 @@ import (
 	"github.com/gently-whitesnow/multica-sandbox/internal/instance"
 	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
 	"github.com/gently-whitesnow/multica-sandbox/internal/opencode"
+	"github.com/gently-whitesnow/multica-sandbox/internal/relay"
 )
 
 func Run(ctx context.Context, c Config, stateDir, tokenPath string, out io.Writer) error {
@@ -111,17 +112,21 @@ func openCodeAdapter(ctx context.Context, c Config, api *multica.Client, backend
 	if err = workloads.ValidateNetwork(ctx); err != nil {
 		return nil, err
 	}
-	inferenceSource, err := openCodeInference(c)
-	if err != nil {
-		return nil, err
-	}
-	adapter := &opencode.Adapter{Inference: inferenceSource, Server: strings.TrimRight(c.Server, "/"), Controller: c.Daemon, Issuer: issuer, Authority: authority, Status: api, Reporter: api, Workloads: workloads, Command: c.Command}
+	adapter := &opencode.Adapter{Server: strings.TrimRight(c.Server, "/"), Controller: c.Daemon, Issuer: issuer, Authority: authority, Status: api, Reporter: api, Workloads: workloads, Command: c.Command}
 	if c.OpenCode.MulticaRelay != nil {
-		adapter.Relay, err = serveRelay(ctx, c.Server, *c.OpenCode.MulticaRelay)
+		adapter.Relay, err = serveRelay(ctx, "Multica", multica.RelayPrefix, *c.OpenCode.MulticaRelay, relay.Policy{Allow: multica.RelayPath})
 		if err != nil {
 			return nil, err
 		}
 		adapter.RelayURL = strings.TrimRight(c.OpenCode.MulticaRelay.URL, "/")
+	}
+	source, grants, err := openCodeInference(ctx, c)
+	if err != nil {
+		return nil, err
+	}
+	if source != nil {
+		adapter.Inference, adapter.InferenceRelay = source, grants
+		adapter.InferenceRelayURL = strings.TrimRight(c.OpenCode.InferenceRelay.URL, "/")
 	}
 	return adapter, nil
 }

@@ -31,9 +31,9 @@ Multica owns tasks and retries. The controller manages execution environments;
 the runner executes one task through a supported agent adapter.
 
 Execution backends, agent adapters and inference connections are separate.
-Multica selects the runtime and model; trusted bindings select the inference gateway.
-Provider credentials stay outside the sandbox. The picker shows each workspace runtime's
-advisory catalog; the gateway enforces per-agent access. Full event/session adapters remain open.
+Multica selects the runtime and model; trusted workspace bindings select the gateway
+and key, which stay outside the sandbox with provider credentials. The picker shows
+the workspace runtime's advisory catalog; the gateway enforces the key's grants. Full event/session adapters remain open.
 
 Containers share the host kernel; isolation depends on policy and granted credentials.
 
@@ -71,8 +71,8 @@ networkless container with bounded resources and temporary storage. Custom image
 need no inheritance; image-declared volumes are rejected. No service tokens or
 host mounts enter execution. Workload output/files are discarded; completion is a
 fixed test result. The opt-in OpenCode path uses per-attempt internal networks, native MCP OAuth
-rotation and external attempt leases. Optional [inference identity](internal/inference/README.md)
-uses a separate JWT and provider auth hook. Native messages, reported usage, terminal
+rotation and external attempt leases. Optional [inference](internal/inference/README.md)
+uses a controller relay that swaps an opaque attempt credential for a workspace key. Native messages, reported usage, terminal
 text/session IDs and safe repository references are mapped to existing Multica APIs.
 See the [capability matrix and walkthrough](internal/opencode/README.md); direct repository checkout, retained sessions and artifact publication remain unsupported.
 
@@ -119,8 +119,8 @@ loopback HTTP; deployment configuration requires HTTPS for non-loopback origins.
 
 [Identity/MCP](examples/identity-mcp/README.md) and [end-to-end lab](examples/end-to-end/README.md):
 Compose fixtures and trust-boundary diagrams. The identity fixture also verifies
-the controller OpenCode path with deterministic inference. `VERIFY_INFERENCE=1`
-adds Keycloak/LiteLLM rotation; combine all three flags for controller inference.
+the controller OpenCode path with deterministic inference. `VERIFY_INFERENCE=1` runs
+OpenCode through the relay to LiteLLM keys; combine all three flags for the controller.
 
 ## Contributing
 

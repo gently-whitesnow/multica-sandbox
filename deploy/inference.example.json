@@ -1,18 +1,13 @@
 {
   "version": 1,
-  "identity_file": "/etc/multica-sandbox/inference-identity.json",
   "gateways": [
-    {
-      "url": "https://inference.example.invalid/v1",
-      "issuer": "corporate"
-    }
+    "https://litellm.example.invalid"
   ],
   "bindings": [
     {
       "workspace_id": "10000000-0000-4000-8000-000000000001",
-      "agent_id": "20000000-0000-4000-8000-000000000001",
-      "url": "https://inference.example.invalid/v1",
-      "issuer": "corporate"
+      "gateway": "https://litellm.example.invalid",
+      "key_file": "/run/secrets/inference-workspace-1"
     }
   ],
   "catalogs": [

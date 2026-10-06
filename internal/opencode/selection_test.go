@@ -5,12 +5,11 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/gently-whitesnow/multica-sandbox/internal/identity"
 	"github.com/gently-whitesnow/multica-sandbox/internal/inference"
 )
 
 type catalogInference struct {
-	changingInference
+	workspaceInference
 	catalog      inference.Catalog
 	err          error
 	scope        inference.Scope
@@ -75,20 +74,5 @@ func TestModelSelectionIsIntentNotCatalogAuthorization(t *testing.T) {
 			}
 
 		})
-	}
-}
-func TestCatalogChangesDoNotStopIdentityRotation(t *testing.T) {
-	source := &catalogInference{}
-	r := &running{adapter: &Adapter{Inference: source, Authority: &stubAuthority{}}, connections: map[string]Remote{}}
-	if _, err := r.refreshInference(context.Background(), identity.Ref{}); err != nil {
-		t.Fatal(err)
-	}
-	source.catalog = inference.Catalog{DefaultModel: "different"}
-	r.inference.Token.ExpiresAt = r.inference.Token.ExpiresAt.Add(-2e9)
-	if _, err := r.refreshInference(context.Background(), identity.Ref{}); err != nil || source.calls != 2 {
-		t.Fatal("catalog change interfered with renewal", err)
-	}
-	if source.catalogCalls != 0 {
-		t.Fatal("renewal queried catalog")
 	}
 }
