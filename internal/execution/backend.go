@@ -1,6 +1,15 @@
 package execution
 
-import "context"
+import (
+	"context"
+	"io"
+)
+
+// Result contains retained reporting data, never execution credentials or paths.
+type Result struct {
+	Output, SessionID string
+	Disposable        bool
+}
 
 // Backend owns only execution resources, never task scheduling or retries.
 type Backend interface {
@@ -11,6 +20,7 @@ type Backend interface {
 type Run interface {
 	Wait(context.Context) error
 	Remove(context.Context) error
+	Result() Result
 }
 
 // ProjectedRun accepts bounded adapter-owned files without host directory mounts.
@@ -18,6 +28,7 @@ type ProjectedRun interface {
 	Run
 	Write(context.Context, string, []byte) error
 	Execute(context.Context, []string) error
+	Stream(context.Context, []string, func(io.Reader) error) error
 }
 
 // RejectedError is safe to report as a task failure: no execution resources remain.

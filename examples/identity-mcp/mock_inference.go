@@ -58,6 +58,8 @@ func mockInference(w http.ResponseWriter, r *http.Request) {
 	data, _ := json.Marshal(chunk)
 	fmt.Fprintf(w, "data: %s\n\n", data)
 	chunk["choices"] = []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": finish}}
+	// Test-only provider usage checks native-to-Multica accumulation, not billing.
+	chunk["usage"] = map[string]int{"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18}
 	data, _ = json.Marshal(chunk)
 	fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", data)
 }

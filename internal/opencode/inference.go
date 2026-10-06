@@ -51,6 +51,7 @@ func (r *running) refreshInference(ctx context.Context, ref identity.Ref) (bool,
 	if err := r.adapter.Authority.Apply(ctx, grant); err != nil {
 		return false, err
 	}
+	r.remember(session.Token.Bearer())
 	r.inference = session
 	return changed, nil
 }
@@ -82,6 +83,7 @@ func (r *running) configureInference(ctx context.Context, config []byte) ([]byte
 	if err != nil {
 		return nil, err
 	}
+	r.eventsModel = selection.model
 	models := nativeModels(selection.catalog)
 	models[selection.model] = nativeModel(selection.model, selection.metadata, selection.effort)
 	projected["model"] = inferenceProvider + "/" + selection.model

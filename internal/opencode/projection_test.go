@@ -57,3 +57,26 @@ func TestInferenceTaskCanHaveNoMCP(t *testing.T) {
 		t.Fatal("inference task required an MCP connection", err)
 	}
 }
+
+func TestPromptProjectsOnlySafeSourceReferences(t *testing.T) {
+	task := safeTask()
+	task.ChatMessage = "chat instruction"
+	task.ProjectDescription = "project context"
+	task.PriorSessionID = "ses_old"
+	task.Repos = []multica.Repository{{URL: "https://git.example.invalid/team/repo.git", Ref: "main", Description: "source"}}
+	prompt, err := Prompt(task)
+	if err != nil || !strings.Contains(string(prompt), "chat instruction") || !strings.Contains(string(prompt), "project context") || !strings.Contains(string(prompt), "main") || !strings.Contains(string(prompt), "resume is unavailable") || strings.Contains(string(prompt), "ses_old") {
+		t.Fatalf("source/context projection: %v", err)
+	}
+	for _, u := range []string{"https://user:secret@git.example/repo", "https://git.example/repo?token=secret", "file:///host/repo", "ssh://git.example/repo", "https://git.example/repo\nsecret"} {
+		task.Repos[0].URL = u
+		if _, err := Prompt(task); err == nil {
+			t.Fatal("unsafe source reference accepted")
+		}
+	}
+	task.Repos = nil
+	task.ChatMessage = strings.Repeat("a", 65537)
+	if _, err := Prompt(task); err == nil {
+		t.Fatal("oversized context accepted")
+	}
+}

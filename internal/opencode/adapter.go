@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"strings"
 	"sync"
 	"time"
 
@@ -36,6 +38,7 @@ type Adapter struct {
 	Workloads          Workloads
 	Status             Status
 	Command            []string
+	Reporter           Reporter
 }
 
 type running struct {
@@ -51,6 +54,10 @@ type running struct {
 	once        sync.Once
 	cleanupErr  error
 	inference   inference.Session
+	events      *eventStream
+	eventsModel string
+	secretMu    sync.Mutex
+	secrets     []string
 }
 
 func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, error) {
@@ -77,6 +84,7 @@ func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, 
 	if err = r.initialize(runCtx, prompt); err != nil {
 		return nil, r.reject(err)
 	}
+	r.events = &eventStream{reporter: a.Reporter, task: task.ID, seq: 1, redact: r.redact, usage: multica.Usage{Provider: inferenceProvider, Model: r.eventsModel}}
 	r.started = true
 	go r.loop(runCtx)
 	return r, nil
@@ -155,6 +163,7 @@ func (r *running) refresh(ctx context.Context) error {
 		if err := r.adapter.Authority.Apply(ctx, grant); err != nil {
 			return err
 		}
+		r.remember(token.Bearer())
 		r.tokens[name] = token
 	}
 	inferenceChanged, err := r.refreshInference(ctx, ref)
@@ -178,7 +187,9 @@ func (r *running) loop(ctx context.Context) {
 		command = []string{"/bin/sh", "-c", `exec opencode run --format json "$(cat /workspace/prompt.txt)"`}
 	}
 	agent := make(chan error, 1)
-	go func() { agent <- r.workload.Execute(ctx, command) }()
+	go func() {
+		agent <- r.workload.Stream(ctx, command, func(reader io.Reader) error { return r.events.read(ctx, reader) })
+	}()
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	var err error
@@ -204,6 +215,13 @@ loop:
 		<-agent
 	}
 	r.done <- err
+}
+
+func (r *running) Result() execution.Result {
+	if r.events == nil {
+		return execution.Result{Disposable: true}
+	}
+	return execution.Result{Output: r.events.output.String(), SessionID: r.events.session, Disposable: true}
 }
 
 func (r *running) Wait(ctx context.Context) error {
@@ -237,4 +255,26 @@ func (r *running) reject(cause error) error {
 		return errors.Join(cause, err)
 	}
 	return &execution.RejectedError{Err: cause}
+}
+
+func (r *running) remember(value string) {
+	if value == "" {
+		return
+	}
+	r.secretMu.Lock()
+	defer r.secretMu.Unlock()
+	for _, known := range r.secrets {
+		if known == value {
+			return
+		}
+	}
+	r.secrets = append(r.secrets, value)
+}
+func (r *running) redact(value string) string {
+	r.secretMu.Lock()
+	defer r.secretMu.Unlock()
+	for _, secret := range r.secrets {
+		value = strings.ReplaceAll(value, secret, "[redacted]")
+	}
+	return value
 }

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"github.com/gently-whitesnow/multica-sandbox/internal/execution"
 	"io"
 	"os"
 	"path/filepath"
@@ -107,10 +108,10 @@ func openCodeAdapter(ctx context.Context, c Config, api *multica.Client, backend
 	if err != nil {
 		return nil, err
 	}
-	return &opencode.Adapter{Inference: inferenceSource, Server: strings.TrimRight(c.Server, "/"), Controller: c.Daemon, Issuer: issuer, Authority: authority, Status: api, Workloads: workloads, Command: c.Command}, nil
+	return &opencode.Adapter{Inference: inferenceSource, Server: strings.TrimRight(c.Server, "/"), Controller: c.Daemon, Issuer: issuer, Authority: authority, Status: api, Reporter: api, Workloads: workloads, Command: c.Command}, nil
 }
 
 func (a *agentFleetAPI) Message(ctx context.Context, id string) error { return a.AgentMessage(ctx, id) }
-func (a *agentFleetAPI) Complete(ctx context.Context, id string) error {
-	return a.AgentComplete(ctx, id)
+func (a *agentFleetAPI) Complete(ctx context.Context, id string, result execution.Result) error {
+	return a.AgentComplete(ctx, id, result)
 }

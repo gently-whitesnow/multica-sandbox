@@ -39,8 +39,10 @@ func (a lifecycleAPI) Status(context.Context, string) (string, error) {
 	return a.status, a.record("status")
 }
 func (a lifecycleAPI) Heartbeat(context.Context, string) error { return a.record("heartbeat") }
-func (a lifecycleAPI) Complete(context.Context, string) error  { return a.record("complete") }
-func (a lifecycleAPI) Fail(_ context.Context, _ string, cause error) error {
+func (a lifecycleAPI) Complete(context.Context, string, execution.Result) error {
+	return a.record("complete")
+}
+func (a lifecycleAPI) Fail(_ context.Context, _ string, cause error, _ execution.Result) error {
 	if a.reported != nil {
 		*a.reported = cause
 	}
@@ -93,7 +95,7 @@ func TestRecoveryRequiresSuccessfulReaping(t *testing.T) {
 	}
 }
 func TestCleanupPrecedesTerminalCallback(t *testing.T) {
-	for _, scenario := range []string{"success", "failure", "cancel", "timeout", "cleanup-failure", "status-failure", "start-failure", "heartbeat-failure", "shutdown"} {
+	for _, scenario := range []string{"success", "failure", "cancel", "timeout", "launch-timeout", "cleanup-failure", "status-failure", "start-failure", "heartbeat-failure", "shutdown"} {
 		t.Run(scenario, func(t *testing.T) {
 			events := []string{}
 			var reported error
@@ -107,7 +109,7 @@ func TestCleanupPrecedesTerminalCallback(t *testing.T) {
 			case "cancel":
 				a.status = "cancelled"
 				terminal = "ack"
-			case "timeout":
+			case "timeout", "launch-timeout":
 				b.running = true
 				terminal = "fail"
 			case "cleanup-failure":
@@ -128,6 +130,12 @@ func TestCleanupPrecedesTerminalCallback(t *testing.T) {
 				terminal = ""
 			}
 			p := Probe{API: a, Backend: b, Duration: 10 * time.Millisecond}
+			if scenario == "launch-timeout" {
+				p.Backend = nil
+				p.Launch = func(ctx context.Context, task multica.Task) (execution.Run, error) {
+					return b.Start(ctx, task.AttemptKey())
+				}
+			}
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			ticks := make(chan time.Time, 1)
@@ -178,3 +186,5 @@ func TestRejectedAgentDoesNotStopController(t *testing.T) {
 		t.Fatalf("callbacks=%v", events)
 	}
 }
+
+func (b *testBackend) Result() execution.Result { return execution.Result{} }

@@ -66,8 +66,9 @@ successful MCP calls, distinct token versions, workspace separation,
 issuer/resolver outages, cancellation and denial of still-unexpired ended tokens.
 The upstream fixture also exercises a real claim through the Compose controller.
 Optional inference identity uses the separate provider hook from ADR 0012.
-Complete events/usage/session/repository behavior remains #24; this is not
-production adapter certification.
+The first adapter maps native events/usage/session IDs and safe repository
+references as recorded in its README. Repository materialization and native
+session resume remain unsupported; this is not production adapter certification.
 
 ## References
 

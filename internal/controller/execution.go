@@ -9,9 +9,9 @@ import (
 	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
 )
 
-func (p *Probe) launch(ctx context.Context, t multica.Task) (<-chan error, func() error, error) {
+func (p *Probe) launch(ctx context.Context, t multica.Task) (<-chan error, func() error, func() execution.Result, error) {
 	if p.Backend == nil && p.Launch == nil {
-		return nil, func() error { return nil }, nil
+		return nil, func() error { return nil }, func() execution.Result { return execution.Result{} }, nil
 	}
 	waitCtx, cancel := context.WithTimeout(ctx, p.Duration)
 	var run execution.Run
@@ -23,7 +23,7 @@ func (p *Probe) launch(ctx context.Context, t multica.Task) (<-chan error, func(
 	}
 	if err != nil {
 		cancel()
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	done := make(chan error, 1)
 	waited := make(chan struct{})
@@ -40,7 +40,7 @@ func (p *Probe) launch(ctx context.Context, t multica.Task) (<-chan error, func(
 		})
 		return cleanupErr
 	}
-	return done, stop, nil
+	return done, stop, run.Result, nil
 }
 
 // CleanupError keeps a failed teardown distinguishable from a revoked API grant.

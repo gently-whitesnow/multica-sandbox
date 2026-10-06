@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"github.com/gently-whitesnow/multica-sandbox/internal/execution"
 	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
 	"testing"
 	"time"
@@ -22,11 +23,11 @@ func (a *queueAPI) Claim(context.Context, string) (*multica.Task, error) {
 	}
 	return &multica.Task{ID: id}, nil
 }
-func (a *queueAPI) Complete(ctx context.Context, id string) error {
+func (a *queueAPI) Complete(ctx context.Context, id string, result execution.Result) error {
 	if a.claims == 2 && a.cancel != nil {
 		a.cancel()
 	}
-	return a.lifecycleAPI.Complete(ctx, id)
+	return a.lifecycleAPI.Complete(ctx, id, result)
 }
 func TestServeSequentialAttemptsAndStopsOnError(t *testing.T) {
 	for _, failure := range []bool{false, true} {
