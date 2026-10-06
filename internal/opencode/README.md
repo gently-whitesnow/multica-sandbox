@@ -3,7 +3,7 @@
 The persistent controller's opt-in OpenCode path projects trusted Multica task
 context, acquires verified identity and rotates the native MCP OAuth store during
 one disposable attempt. OpenCode is pinned to 1.18.34 (source `aec0b9a6`); a version
-check precedes execution, including for user-supplied images. Optional inference uses the workspace-key relay from ADR 0012. The verified scope and upstream dependencies are listed below.
+check precedes execution, including for user-supplied images. Optional inference uses the workspace-key relay from ADR 0012. The [conformance](#conformance) section lists pinned versions, verified behavior with its tests and explicit limitations.
 
 ```mermaid
 flowchart TD
@@ -58,82 +58,71 @@ JWT identity/audience and an active unexpired grant, including concrete resource
 rules independently and fail closed on loss of state. In-flight operation cancellation
 is outside this contract. A stopped renewal loop alone does not revoke a JWT.
 
-## Verification and limits
+## Native reporting
 
-`VERIFY_OPENCODE=1 ./verify.sh` runs real Keycloak and MCP with two native OpenCode
-tasks across multiple JWT expiries, separate workspaces/networks and successful
-calls under at least three token versions. It covers real issuance
-and resolver outages, cancellation, still-unexpired ended-token denial and cleanup.
-Add `VERIFY_SERVICE=1` for a real Multica claim through the actual Compose controller.
-`VERIFY_CONTAINERS=1` checks projection/network isolation and startup cleanup.
+The adapter reads `opencode run --format json` with the upstream OpenCode backend
+rules (`server/pkg/agent/opencode.go`). Text, reasoning, status and paired tool
+use/results go to Multica in 500 ms best-effort batches with ordered `seq` and
+unchanged call IDs. Tool results use the upstream 8 KiB UTF-8 preview; unknown or
+non-JSON lines are skipped; a 10-minute silent stream stops (`idle_watchdog`).
+Terminal signals and error wording match upstream, so Multica classifies failures
+and retries; native error bodies are withheld. Usage is the sum of `step_finish`
+counters, reported once as provider `opencode` with the applied model or `unknown`.
+The native session ID is reported mid-flight and on completion with
+`session_rollout_missing`, so Multica never resumes it. Complete/fail follow
+cleanup and use a durable at-least-once queue.
 
-Native JSON events follow the upstream OpenCode backend: text/status/thinking and paired tool-use/results are reported in 500 ms best-effort batches with ordered sequence numbers and unchanged call IDs. Tool results use the upstream 8 KiB UTF-8 preview with `output_truncated`; lines up to 32 MiB are read and unknown or non-JSON lines are skipped. Multica's server masks secret-shaped message content; native error bodies are withheld. A 10-minute silent stream is stopped by the upstream idle watchdog. Complete/fail callbacks use the upstream retry schedule and a durable state-volume queue; delivery is at-least-once and Multica treats repeated terminal callbacks idempotently. MCP roles, resource permissions and model routing remain external. CI remains paused.
+## Conformance
 
-`opencode.inference_file` with `opencode.inference_relay` enables workspace-key
-inference through the controller relay. See [inference configuration](../inference/README.md) and
-[`deploy/inference.example.json`](../../deploy/inference.example.json).
+Supported means this path only: persistent controller, Docker projected backend,
+native OpenCode. Evidence is fixture-based for the pinned stack, not production
+certification. Pins: Multica `b4ca5b4a23e68b26292a680dca7689a952bb1cd5`
+(unmodified); OpenCode 1.18.34 (`aec0b9a6`, image digest); LiteLLM v1.104.0 with
+Postgres virtual keys; Keycloak 26.8.0; MCP Go SDK 1.8.0; go-oidc 3.21.0; Docker
+Engine 29.2.1 (runc, cgroup v2). Reproduce with `MULTICA_SOURCE=<checkout>` and
+`VERIFY_CONTAINERS=1 VERIFY_SERVICE=1 VERIFY_OPENCODE=1 VERIFY_INFERENCE=1 VERIFY_IDENTITY=1 ./verify.sh`.
 
-## First adapter contract (issue #24)
+| Verified behavior | Evidence (flags) |
+| --- | --- |
+| Trusted context only; safe repository references | `projection_test.go`; `claim-secret-sentinel` in `integration/managed_mcp_test.go` (SERVICE, OPENCODE) |
+| Messages, tool pairs, order, usage, session, terminal signals | `events_test.go`; `integration/adapter_reporting_test.go` |
+| Upstream failure reasons, durable reports, replay before recovery | `internal/multica/outbox_test.go`; `integration/retry_test.go` (UPSTREAM) |
+| Cancellation revokes and cleans up before the terminal callback | `adapter_test.go`; `integration/upstream_test.go`; fixture `cancelled` (OPENCODE) |
+| Restart: old attempts removed, authority `recover`, relay grants lost | `integration/service_recovery_test.go`; `rotation_lease.go`; `restartFailsClosed` |
+| Concurrent workspaces; 100-workspace fairness | `examples/identity-mcp/rotation.go`, `inference.go`; `integration/fleet_test.go` |
+| MCP JWT rotation across expiries, exact recipient, per-attempt store | `rotation.go` (OPENCODE); `internal/identity` tests |
+| Issuer/resolver outage; ended JWTs denied before expiry | `examples/identity-mcp/rotation_failures.go` (OPENCODE) |
+| 15 s outage lease; no fingerprint move or re-enrollment | `examples/identity-mcp/rotation_lease.go` (OPENCODE) |
+| MCP checks resource/attempt/workspace per call | `examples/identity-mcp/scenario.go` (IDENTITY) |
+| Multica relay: opaque credential, token-minting denied | `internal/relay` tests; `integration/multica_relay_test.go` |
+| Workspace keys: spoofing, cross-workspace, forged/ended, key change, stream revocation, 403/422 without substitution | `internal/inference`, `internal/relay` tests; `inference.go` (INFERENCE); `integration/inference_test.go` |
+| No `mat_`/gateway/provider key in attempt env/files, logs, transcript, comments, results | `integration/multica_relay_test.go`, `inferenceCredential` |
+| Hostile workload: no capabilities/sockets/secrets/metadata, limits, no route, external DNS, IPv6 or other attempt | `internal/docker/backend_test.go`, `projected_test.go` (CONTAINERS) |
 
-Inspected before implementation on 2026-10-05:
-Multica `b4ca5b4a23e68b26292a680dca7689a952bb1cd5`;
-OpenCode 1.18.34 `aec0b9a6d8898f68f923aaf08b7306d931fd9d76`.
+Deployment-owned, verified only as integration contracts: production egress
+policy, attempt-network TLS, host and kernel hardening (gVisor/Kata/Sysbox);
+workload attestation and the attempt authority (this repository ships fixture
+plumbing); MCP tool/role/resource authorization; gateway grants, budgets and
+routing. Revocation denies new MCP operations but does not cancel MCP work in
+flight; relay streams are cancelled. While the controller is down no backend
+deadline exists; Kubernetes deadlines and distributed ownership are #6.
 
-| Capability | Pinned contracts | Selected adapter scope |
-| --- | --- | --- |
-| Trusted context | Multica daemon Task/AgentData JSON | Instructions, workspace/project context, issue identifier, triggering comment, chat message; bounded prompt, no claim credentials/env/host paths |
-| Repository/source inputs | Multica repos: URL, description, ref; project resources use type-specific refs | Credential-free HTTPS repository references in prompt, usable through selected authorized MCP; no clone, host checkout or arbitrary resource materialization |
-| Messages | Multica messages: seq, type, call_id, created_at, content/input/output | Native text, reasoning, status, tool-use/result pairs; ordering and opaque call ID preserved |
-| Usage | Multica usage upserts cumulative provider/model totals | Summed step_finish input/output/reasoning/cache counters reported once as provider `opencode`, applied model or `unknown`; no estimates, pricing or budgets |
-| Errors/completion | Native CLI error event may accompany exit 0 | Upstream terminal-signal rules and error wording, so Multica classifies and retries; numeric HTTP status or error name only; complete with native text only after cleanup |
-| Sessions | Native sessionID; Multica session/complete/fail fields | Report observed native ID, no work_dir; fresh attempt, terminal session_rollout_missing=true clears resume pointer; resume unsupported |
-| Identity | Native MCP OAuth store; provider `apiKey` | Verified MCP issuance, exact recipient, atomic renewal, external leases/revocation; opaque per-attempt inference relay credential |
-| Cancellation/recovery | Multica start/dispatch/status/cancel-ack/recover APIs | Existing fencing, joined exec/renewal, cleanup before terminal callback, restart resource reconciliation |
-| Isolation/egress | Maintained Docker internal bridge/read-only/non-root/limits | Disposable per-attempt container/network; fixture isolation evidence, no production hostile host/metadata/destination guarantee |
-| Other adapters/images | Native contracts differ | OpenCode 1.18.34 only; image/provider/backend configuration independent |
+Limitations: OpenCode 1.18.34 only; other agents need their own conformance.
+Every attempt has a fresh session; resume is unsupported. Only issue tasks use the
+upstream prompt and `multica` CLI; chat and other kinds use the bounded legacy
+prompt. Unsupported: repository checkout, project resources, skills, broker MCP
+connections, connected apps, artifact publication, chat/autopilot/quick-create CLI
+workflows. Discovery entries lack context/output; pickers and inference grants
+are per workspace. Native retries, including HTTP 429, stay native; fixture token
+counts are not billing evidence; LiteLLM does not record auth-stage refusals per
+end user. The Multica relay credential keeps upstream agent authority for the
+attempt minus denied routes. Tests seed tasks in the database, not the UI.
+Local digest-pinned images need the containerd image store. External DNS denial
+on internal networks is engine behavior: re-run `VERIFY_CONTAINERS=1` after
+Docker upgrades. Do not fill gaps with a sandbox Git service, session store, IAM,
+tools or policy engine; images/tools are #4.
 
-Unsupported adapter capabilities/dependencies: skills, project resource materialization, broker-managed MCP connections and connected apps,
-private Git/artifact delivery without controller credentials in workloads, retained
-native sessions and artifact publication, chat/autopilot/quick-create CLI workflows, agent-specific
-picker catalogs (upstream discovery is runtime-scoped), production egress enforcement. Do not replace these with a
-sandbox Git service, session store, IAM, tools or policy engine. New Kubernetes
-ownership/deadlines remain #6; image/tool work remains #4.
-
-Inspection sources: Multica `server/internal/daemon/{types,client}.go`, `server/internal/handler/daemon.go`, `server/pkg/agent/opencode.go`, `server/pkg/db/queries/task_usage.sql`; OpenCode `packages/opencode/src/cli/cmd/run.ts` and native message/token normalization. Multica daemon client/execenv/repocache are internal, not an external sandbox SDK: reuse supported HTTP schemas as in ADR 0005; host checkout/cache is not a disposable delivery API. OpenCode CLI owns retry/transport/session behavior, including HTTP 429 retries. CLI JSON has no model/provider per usage part; like upstream, attribution uses the applied model or `unknown`.
-
-## Разбор изменений для ревью #24
-
-`internal/opencode/projection.go` собирает ограниченный по размеру prompt из
-доверенных полей claim. Repository URL/ref — ссылки, а не команда клонирования.
-URL с логином, паролем или query отклоняется; доступ к содержимому остаётся у
-выбранного внешнего MCP. Chat/project context передаётся как текст. Секретные
-поля claim, host paths и произвольное окружение не копируются.
-
-`internal/docker/projected.go:Stream` читает stdout работающего CLI через pipe.
-Docker отвечает за процесс; `internal/opencode/events.go` повторяет правила
-upstream `pkg/agent/opencode.go`: неизвестные строки пропускаются, а завершение
-требует закрытого шага без ожидаемого продолжения и с признаками работы. Тексты
-ошибок совпадают с upstream, поэтому сервер Multica сам выбирает failure_reason
-и решает об авто-retry. Отправка сообщений best-effort и не влияет на исход.
-
-Каждое сообщение получает следующий `seq`; tool call и его результат сохраняют
-один `call_id`. `step_finish` содержит расход одного шага, а API Multica
-перезаписывает итог: адаптер суммирует шаги и отправляет usage один раз.
-OpenCode 1.18.34 отдельно считает reasoning; в Multica он входит в output.
-Цена и `total` не добавляются к токенам. Provider — `opencode`, model —
-применённая адаптером модель или `unknown`, как в upstream.
-
-`execution.Result` переносит текст и native session ID до terminal callback.
-`controller.finish` сначала останавливает renewal/exec и удаляет ресурсы, затем
-проверяет состояние task и отправляет complete/fail. При cleanup failure нельзя
-выдать успешное завершение. Session ID отправляется и во время выполнения;
-при complete/fail выставляется `session_rollout_missing`, без `work_dir`; Multica очищает session ID.
-Cancel-ack/recovery не поддерживают missing-rollout field: возможный stale pointer никогда не используется адаптером.
-Новый attempt всегда создаёт свежую сессию: native database удаляется вместе с
-контейнером. Если claim содержит prior session, prompt сообщает об отсутствии
-resume; sandbox не пытается восстановить чужое хранилище.
-
-`events_test.go` проверяет ordering, correlation, usage, terminal-сигналы
-upstream, preview результатов, ошибку с exit 0, idle watchdog и потерю reporting API.
-Реальная fixture проверяет сохранённые messages/session/usage в pinned Multica.
-Её детерминированные числа токенов проверяют mapping, а не точность биллинга.
+Inspection sources: Multica `server/internal/daemon/{types,client,prompt}.go`,
+`server/internal/handler/daemon.go`, `server/pkg/agent/opencode.go`; OpenCode
+`packages/opencode/src/cli/cmd/run.ts`. Multica daemon internals and host
+`execenv/repocache` are not a disposable delivery API; reuse the HTTP schemas.

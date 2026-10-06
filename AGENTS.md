@@ -20,6 +20,8 @@ from verified behavior.
 - `internal/relay/`: shared credential-translation reverse proxy and per-attempt grants
   (Multica API and inference).
 - `examples/agent-image/`: example OpenCode image with the upstream `multica` CLI.
+- `internal/opencode/`: OpenCode adapter, native reporting and conformance
+  (verified behavior, deployment-owned boundaries, limitations).
 - `cmd/sandbox-controller`, `internal/service/`: persistent controller service.
 - `Dockerfile`, `compose.yaml`, `deploy/`: controller packaging/configuration.
 - `cmd/sandbox-probe`, `internal/`: test executor, controller and HTTP integration.

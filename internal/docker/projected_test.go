@@ -46,6 +46,10 @@ func TestProjectedAttemptIsolation(t *testing.T) {
 	if err := b.Execute(ctx, []string{"/bin/sh", "-c", `test ! -e /workspace/data/opencode/mcp-auth.json; test ! -e /var/run/docker.sock; test ! -e /run/secrets; ! wget -T 1 -q -O /tmp/leak http://169.254.169.254/; ! wget -T 1 -q -O /tmp/leak http://1.1.1.1/`}); err != nil {
 		t.Fatal(err)
 	}
+	// A hostile attempt resolves only approved peer aliases: no route, external DNS or IPv6 egress.
+	if err := b.Execute(ctx, []string{"/bin/sh", "-c", `set -e; nslookup gateway >/dev/null; ! ip route | grep -q default; ! ip -6 route | grep -q default; ! timeout 2 nslookup example.com; ! wget -T 1 -q -O /tmp/leak http://[2606:4700:4700::1111]/`}); err != nil {
+		t.Fatal("attempt network allows egress beyond approved peers:", err)
+	}
 	rA, rB := a.(*projectedRun), b.(*projectedRun)
 	if rA.network == rB.network {
 		t.Fatal("shared attempt network")
