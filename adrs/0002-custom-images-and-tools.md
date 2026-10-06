@@ -34,6 +34,9 @@ Resolve image and bundle references to digests before use. Include those digests
 the runner version and effective environment manifest in preparation cache keys.
 Keep registry credentials and runtime secrets outside images, manifests and caches.
 Docker and Kubernetes backends implement the same environment contract.
+With the Multica relay (ADR 0014), the OpenCode adapter also requires the upstream
+`multica` CLI from the pinned Multica revision on `PATH`; `examples/agent-image`
+adds it to the pinned OpenCode image without credentials.
 
 ## Consequences
 

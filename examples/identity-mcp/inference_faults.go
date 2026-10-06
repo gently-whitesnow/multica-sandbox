@@ -163,7 +163,7 @@ func (r inferenceFaultRun) Execute(ctx context.Context, args []string) error {
 	return r.ProjectedRun.Execute(ctx, args)
 }
 
-func (r inferenceFaultRun) Stream(ctx context.Context, args []string, consume func(io.Reader) error) error {
+func (r inferenceFaultRun) Stream(ctx context.Context, args []string, env map[string]string, consume func(io.Reader) error) error {
 	if r.ready != nil {
 		select {
 		case <-r.ready:
@@ -171,5 +171,5 @@ func (r inferenceFaultRun) Stream(ctx context.Context, args []string, consume fu
 			return ctx.Err()
 		}
 	}
-	return r.ProjectedRun.Stream(ctx, args, consume)
+	return r.ProjectedRun.Stream(ctx, args, env, consume)
 }

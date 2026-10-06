@@ -52,10 +52,18 @@ type stubWorkload struct {
 	writes  int
 	removed bool
 	runs    int
+	files   map[string][]byte
+	envs    chan map[string]string
 }
 
 func (s *stubWorkload) Start(context.Context, string) (execution.ProjectedRun, error) { return s, nil }
-func (s *stubWorkload) Write(context.Context, string, []byte) error                   { s.writes++; return nil }
+func (s *stubWorkload) Write(_ context.Context, path string, data []byte) error {
+	s.writes++
+	if s.files != nil {
+		s.files[path] = data
+	}
+	return nil
+}
 func (s *stubWorkload) Execute(ctx context.Context, args []string) error {
 	s.runs++
 	if len(args) >= 3 && !strings.HasPrefix(args[2], "exec ") {
@@ -137,7 +145,10 @@ func TestUncertainRevocationIsNotSafeRejection(t *testing.T) {
 	}
 }
 
-func (s *stubWorkload) Stream(ctx context.Context, args []string, _ func(io.Reader) error) error {
+func (s *stubWorkload) Stream(ctx context.Context, args []string, env map[string]string, _ func(io.Reader) error) error {
+	if s.envs != nil {
+		s.envs <- env
+	}
 	return s.Execute(ctx, args)
 }
 func (s *stubWorkload) Result() execution.Result { return execution.Result{} }

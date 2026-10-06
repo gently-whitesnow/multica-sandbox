@@ -32,13 +32,18 @@ func (e *HTTPError) Error() string {
 	return fmt.Sprintf("Multica HTTP status %d (response body withheld)", e.Status)
 }
 
-func New(base, token string) (*Client, error) {
+func New(base, token string) (*Client, error) { return newClient(base, token, false) }
+
+// NewAllowHTTP is for isolated fixtures whose Multica origin is a private container name.
+func NewAllowHTTP(base, token string) (*Client, error) { return newClient(base, token, true) }
+
+func newClient(base, token string, allowHTTP bool) (*Client, error) {
 	u, err := url.Parse(base)
 	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
 		return nil, fmt.Errorf("server must be an HTTP(S) origin without credentials, query or path")
 	}
 	ip := net.ParseIP(u.Hostname())
-	if u.Scheme != "https" && !(u.Scheme == "http" && ip != nil && ip.IsLoopback()) {
+	if u.Scheme != "https" && !(u.Scheme == "http" && (allowHTTP || ip != nil && ip.IsLoopback())) {
 		return nil, fmt.Errorf("HTTPS required except for literal loopback IPs")
 	}
 	if strings.TrimSpace(token) == "" {

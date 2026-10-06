@@ -5,5 +5,13 @@
     "bearer_file": "/run/secrets/attempt-authority"
   },
   "network": "approved-mcp-template",
-  "peers": ["corporate-mcp", "inference-gateway"]
+  "peers": [
+    "corporate-mcp",
+    "inference-gateway",
+    "multica-sandbox-controller"
+  ],
+  "multica_relay": {
+    "listen": ":8091",
+    "url": "http://multica-relay:8091"
+  }
 }

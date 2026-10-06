@@ -9,6 +9,7 @@ type Agent struct {
 	Model         string          `json:"model"`
 	ThinkingLevel string          `json:"thinking_level"`
 	ID            string          `json:"id"`
+	Name          string          `json:"name"`
 	Instructions  string          `json:"instructions"`
 	MCPConfig     json.RawMessage `json:"mcp_config"`
 }
@@ -25,3 +26,6 @@ func (t Task) ValidAttempt() bool {
 	_, err := time.Parse(time.RFC3339Nano, t.DispatchedAt)
 	return t.ValidAgent() && validID(t.ID) && validID(t.RuntimeID) && t.StartClaimSupported && err == nil
 }
+
+// ValidID reports a canonical Multica UUID reference.
+func ValidID(id string) bool { return validID(id) }

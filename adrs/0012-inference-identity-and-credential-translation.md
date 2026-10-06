@@ -74,7 +74,9 @@ Fingerprint leases use `inference_url`, distinct from `mcp_url`, and share attem
 revocation/recovery. The dependency-free provider hook replaces authorization
 from an atomic token file and leaves global fetch untouched.
 
-The embedded relay is not implemented. Require maintained real issuer/gateway
+The shared forwarding module `internal/relay` exists for the Multica API relay
+(ADR 0014); an inference authorizer that verifies JWTs and attempt leases is not
+implemented. Require maintained real issuer/gateway
 checks, streaming/cancellation, tenant isolation, credential-leakage tests and
 safe offline plugin packaging before advertising production support.
 

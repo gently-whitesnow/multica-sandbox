@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -16,7 +17,8 @@ import (
 )
 
 var networkPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
-var projectionPaths = map[string]bool{"/workspace/opencode.json": true, "/workspace/prompt.txt": true, "/workspace/inference-token.json": true, "/workspace/inference-auth.mjs": true, "/workspace/data/opencode/auth.json": true, "/workspace/data/opencode/mcp-auth.json": true}
+var envPattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,63}$`)
+var projectionPaths = map[string]bool{"/workspace/opencode.json": true, "/workspace/prompt.txt": true, "/workspace/AGENTS.md": true, "/workspace/inference-token.json": true, "/workspace/inference-auth.mjs": true, "/workspace/data/opencode/auth.json": true, "/workspace/data/opencode/mcp-auth.json": true}
 
 type Projected struct {
 	Backend
@@ -215,10 +217,21 @@ func reconcileNetworks(ctx context.Context, owner string) error {
 }
 
 // Stream keeps native stdout out of diagnostics and bounds it in the adapter.
-func (r *projectedRun) Stream(ctx context.Context, args []string, consume func(io.Reader) error) error {
+func (r *projectedRun) Stream(ctx context.Context, args []string, env map[string]string, consume func(io.Reader) error) error {
+	execArgs := []string{"exec"}
+	// Values reach the docker client environment only; argv and diagnostics carry names.
+	environ := os.Environ()
+	for name, value := range env {
+		if !envPattern.MatchString(name) || strings.ContainsAny(value, "\x00\r\n") || len(value) > 4096 {
+			return fmt.Errorf("invalid agent environment")
+		}
+		execArgs = append(execArgs, "--env", name)
+		environ = append(environ, name+"="+value)
+	}
 	execCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	cmd := exec.CommandContext(execCtx, "docker", append([]string{"exec", r.name}, args...)...)
+	cmd := exec.CommandContext(execCtx, "docker", append(append(execArgs, r.name), args...)...)
+	cmd.Env = environ
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return fmt.Errorf("agent output pipe failed")

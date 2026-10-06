@@ -66,40 +66,72 @@ func Select(t multica.Task) (map[string]Remote, error) {
 	return out, nil
 }
 
-func Config(connections map[string]Remote) ([]byte, error) {
+// localTools run inside the disposable container; with the Multica relay the agent needs bash for the CLI.
+var localTools = []string{"bash", "read", "edit", "write", "glob", "grep", "list", "todoread", "todowrite"}
+
+func Config(connections map[string]Remote, local bool) ([]byte, error) {
 	permissions := map[string]string{"*": "deny"}
+	if local {
+		for _, tool := range localTools {
+			permissions[tool] = "allow"
+		}
+	}
 	for name := range connections {
 		permissions[name+"_*"] = "allow"
 	}
 	return json.Marshal(map[string]any{"mcp": connections, "autoupdate": false, "share": "disabled", "permission": permissions})
 }
 
-func Prompt(t multica.Task) ([]byte, error) {
-	if t.Agent == nil || len(t.Repos) > 32 {
-		return nil, ErrDenied
+// Prompt returns the per-turn prompt and, for upstream CLI tasks, the AGENTS.md brief.
+func Prompt(t multica.Task, upstream bool) ([]byte, []byte, error) {
+	if t.Agent == nil {
+		return nil, nil, ErrDenied
+	}
+	sources, err := repositories(t)
+	if err != nil {
+		return nil, nil, err
+	}
+	var prompt, brief string
+	if upstream && upstreamTask(t) {
+		prompt = upstreamPrompt(t)
+		if sources != "" {
+			sources = "Repository references (no local checkout; access through selected authorized MCP):\n" + sources
+		}
+		brief = upstreamBrief(t, sources)
+	} else {
+		sections := []string{t.Agent.Instructions, t.WorkspaceContext, "Assigned issue: " + t.IssueID, t.ProjectTitle, t.ProjectDescription, t.TriggerCommentContent, t.ChatMessage}
+		if sources != "" {
+			sections = append(sections, "Repository references (no local checkout; access through selected authorized MCP):\n"+sources)
+		}
+		prompt = strings.Join(sections, "\n\n")
+	}
+	if t.PriorSessionID != "" {
+		prompt += "\n\nThis disposable attempt starts a fresh native session. Prior session resume is unavailable."
+	}
+	if len(prompt) > 65536 || len(brief) > 65536 {
+		return nil, nil, ErrDenied
+	}
+	if brief == "" {
+		return []byte(prompt), nil, nil
+	}
+	return []byte(prompt), []byte(brief), nil
+}
+
+func repositories(t multica.Task) (string, error) {
+	if len(t.Repos) > 32 {
+		return "", ErrDenied
 	}
 	sources := []string{}
 	for _, repo := range t.Repos {
 		u, err := url.Parse(repo.URL)
 		if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || strings.ContainsAny(repo.URL, "\r\n\x00") {
-			return nil, ErrDenied
+			return "", ErrDenied
 		}
 		encoded, err := json.Marshal(repo)
 		if err != nil {
-			return nil, ErrDenied
+			return "", ErrDenied
 		}
 		sources = append(sources, string(encoded))
 	}
-	sections := []string{t.Agent.Instructions, t.WorkspaceContext, "Assigned issue: " + t.IssueID, t.ProjectTitle, t.ProjectDescription, t.TriggerCommentContent, t.ChatMessage}
-	if len(sources) > 0 {
-		sections = append(sections, "Repository references (no local checkout; access through selected authorized MCP):\n"+strings.Join(sources, "\n"))
-	}
-	if t.PriorSessionID != "" {
-		sections = append(sections, "This disposable attempt starts a fresh native session. Prior session resume is unavailable.")
-	}
-	prompt := strings.Join(sections, "\n\n")
-	if len(prompt) > 65536 {
-		return nil, ErrDenied
-	}
-	return []byte(prompt), nil
+	return strings.Join(sources, "\n"), nil
 }

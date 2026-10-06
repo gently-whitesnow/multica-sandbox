@@ -5,6 +5,7 @@ package docker
 import (
 	"context"
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -61,6 +62,24 @@ func TestProjectedAttemptIsolation(t *testing.T) {
 	ip := invoke("inspect", "--format", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", rB.name)
 	if err := a.Execute(ctx, []string{"/bin/sh", "-c", "! wget -T 1 -q -O /tmp/other http://" + ip + ":8080/prompt.txt"}); err != nil {
 		t.Fatal(err)
+	}
+	// Stream env reaches only that exec process: not container config, sibling execs or argv.
+	const credential = "mat_relay_stream-env-sentinel"
+	var streamed strings.Builder
+	if err := a.Stream(ctx, []string{"/bin/sh", "-c", `printf %s "$MULTICA_TOKEN"`}, map[string]string{"MULTICA_TOKEN": credential}, func(r io.Reader) error {
+		_, err := io.Copy(&streamed, r)
+		return err
+	}); err != nil || streamed.String() != credential {
+		t.Fatalf("stream env not delivered: %v", err)
+	}
+	if strings.Contains(invoke("inspect", rA.name), credential) {
+		t.Fatal("stream env persisted in container configuration")
+	}
+	if err := a.Execute(ctx, []string{"/bin/sh", "-c", `test -z "${MULTICA_TOKEN-}"`}); err != nil {
+		t.Fatal("stream env leaked into a later exec")
+	}
+	if err := a.Stream(ctx, []string{"true"}, map[string]string{"BAD=NAME": "x"}, func(io.Reader) error { return nil }); err == nil {
+		t.Fatal("invalid environment name accepted")
 	}
 	if err := a.Write(ctx, "/etc/forbidden", []byte("secret")); err == nil {
 		t.Fatal("unapproved projection path")

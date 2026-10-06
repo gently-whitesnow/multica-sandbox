@@ -12,11 +12,13 @@ from verified behavior.
   offline execution and recovery (0006), containerized service (0007),
   multi-workspace authority (0008), attempt authorization (0009), external services/adapters (0010),
   managed MCP identity delivery (0011), inference credential translation (0012),
-  identity resolution contract (0013).
+  identity resolution contract (0013), Multica API relay (0014).
 - `examples/end-to-end/`: opt-in real Multica/OpenCode/inference lab.
 - `examples/identity-mcp/`: disposable identity and MCP contract fixture.
 - `internal/inference/`: trusted recipients, advisory model catalogs and renewable inference identity.
 - `internal/identity/`: static/external identity resolution and verified Keycloak issuance.
+- `internal/relay/`: shared credential-translation reverse proxy and per-attempt grants.
+- `examples/agent-image/`: example OpenCode image with the upstream `multica` CLI.
 - `cmd/sandbox-controller`, `internal/service/`: persistent controller service.
 - `Dockerfile`, `compose.yaml`, `deploy/`: controller packaging/configuration.
 - `cmd/sandbox-probe`, `internal/`: test executor, controller and HTTP integration.

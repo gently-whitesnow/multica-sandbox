@@ -15,8 +15,13 @@ type Runtime struct {
 	Provider string `json:"provider"`
 }
 
-// Task deliberately excludes credentials and arbitrary claim payloads.
+// Task excludes arbitrary claim payloads; AuthToken stays redacted and in memory (ADR 0014).
 type Task struct {
+	AuthToken             Secret            `json:"auth_token"`
+	TriggerCommentID      string            `json:"trigger_comment_id"`
+	TriggerThreadID       string            `json:"trigger_thread_id"`
+	TriggerAuthorType     string            `json:"trigger_author_type"`
+	TriggerAuthorName     string            `json:"trigger_author_name"`
 	AgentID               string            `json:"agent_id"`
 	Agent                 *Agent            `json:"agent"`
 	IssueID               string            `json:"issue_id"`
