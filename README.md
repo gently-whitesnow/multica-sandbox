@@ -33,7 +33,7 @@ the runner executes one task through a supported agent adapter.
 Execution backends, agent adapters and inference connections are separate.
 Multica selects the runtime and model; trusted workspace bindings select the gateway
 and key, which stay outside the sandbox with provider credentials. The picker shows
-the workspace runtime's advisory catalog; the gateway enforces the key's grants. Full event/session adapters remain open.
+the workspace's advisory catalog; the gateway enforces the key's grants. See the OpenCode [conformance report](internal/opencode/README.md#conformance).
 
 Containers share the host kernel; isolation depends on policy and granted credentials.
 
