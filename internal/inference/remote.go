@@ -17,21 +17,22 @@ func (s *Service) remote(ctx context.Context, ref identity.Ref) (Target, error) 
 		Agent   identity.Ref `json:"agent"`
 		Target  Target       `json:"target"`
 	}
-	if s.remoteJSON(ctx, ref, s.config.External, &out) != nil || out.Version != 1 || out.Agent != ref {
+	request := struct {
+		Version int          `json:"version"`
+		Agent   identity.Ref `json:"agent"`
+	}{1, ref}
+	if s.remoteJSON(ctx, request, s.config.External, &out) != nil || out.Version != 1 || out.Agent != ref {
 		return Target{}, ErrDenied
 	}
 	return out.Target, nil
 }
-func (s *Service) remoteJSON(ctx context.Context, ref identity.Ref, c *identity.ExternalConfig, out any) error {
+func (s *Service) remoteJSON(ctx context.Context, request any, c *identity.ExternalConfig, out any) error {
 	b, err := readFile(c.BearerFile, 4096)
 	bearer := strings.TrimSpace(string(b))
 	if err != nil || bearer == "" || strings.ContainsAny(bearer, "\r\n\x00") {
 		return ErrDenied
 	}
-	data, _ := json.Marshal(struct {
-		Version int          `json:"version"`
-		Agent   identity.Ref `json:"agent"`
-	}{1, ref})
+	data, _ := json.Marshal(request)
 	req, err := http.NewRequestWithContext(ctx, "POST", c.URL, bytes.NewReader(data))
 	if err != nil {
 		return ErrDenied

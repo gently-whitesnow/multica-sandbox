@@ -67,6 +67,6 @@ func TestInferenceOutageAndChangedGrantStopAttempt(t *testing.T) {
 	}
 }
 
-func (s *changingInference) Catalog(context.Context, identity.Ref) (inference.Catalog, error) {
+func (s *changingInference) Catalog(context.Context, inference.Scope) (inference.Catalog, error) {
 	return inference.Catalog{DefaultModel: "demo", Models: map[string]inference.Model{"demo": {Context: 64000, Output: 4096}}}, nil
 }

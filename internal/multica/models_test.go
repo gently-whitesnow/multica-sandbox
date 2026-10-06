@@ -10,34 +10,40 @@ import (
 	"testing"
 )
 
-func TestDiscoveryRequiresAgentScope(t *testing.T) {
-	for _, agent := range []string{"", testID, "invalid"} {
-		t.Run("agent="+agent, func(t *testing.T) {
+func TestRuntimeScopedDiscoveryReportsUpstreamShape(t *testing.T) {
+	for _, mode := range []string{"completed", "outage", "empty", "idle"} {
+		t.Run(mode, func(t *testing.T) {
 			calls, reports := 0, 0
 			requestID := "0123456789abcdef0123456789abcdef"
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/api/daemon/heartbeat" {
-					fmt.Fprintf(w, `{"pending_model_list":{"id":%q,"agent_id":%q}}`, requestID, agent)
+					if mode != "idle" {
+						// Upstream sends only the request ID; discovery is runtime-scoped.
+						fmt.Fprintf(w, `{"pending_model_list":{"id":%q}}`, requestID)
+					} else {
+						_, _ = w.Write([]byte(`{}`))
+					}
 					return
 				}
 				if r.URL.Path != "/api/daemon/runtimes/"+testID+"/models/"+requestID+"/result" {
 					t.Error("unexpected endpoint")
 				}
-				var report struct {
-					Status  string       `json:"status"`
-					AgentID string       `json:"agent_id"`
-					Models  []ModelEntry `json:"models"`
-				}
+				var report map[string]json.RawMessage
 				if json.NewDecoder(r.Body).Decode(&report) != nil {
 					t.Fatal("bad report")
 				}
 				reports++
-				if agent == testID {
-					if report.Status != "completed" || report.AgentID != agent || len(report.Models) != 1 || report.Models[0].Thinking.DefaultLevel != "high" || report.Models[0].Context != 64000 {
-						t.Error("catalog metadata dropped")
+				if mode == "completed" {
+					var models []map[string]any
+					if string(report["status"]) != `"completed"` || string(report["supported"]) != "true" || json.Unmarshal(report["models"], &models) != nil || len(models) != 1 || report["agent_id"] != nil {
+						t.Error("completed report differs from upstream shape", report)
 					}
-				} else if report.Status != "failed" || len(report.Models) != 0 {
-					t.Error("unscoped catalog disclosed")
+					thinking, _ := models[0]["thinking"].(map[string]any)
+					if models[0]["id"] != "managed-inference/demo" || models[0]["default"] != true || thinking["default_level"] != "high" {
+						t.Error("model metadata dropped", models)
+					}
+				} else if string(report["status"]) != `"failed"` || report["models"] != nil || report["error"] == nil {
+					t.Error("failure hidden or catalog disclosed", report)
 				}
 				_, _ = w.Write([]byte(`{}`))
 			}))
@@ -46,15 +52,22 @@ func TestDiscoveryRequiresAgentScope(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			err = c.HeartbeatModels(context.Background(), testID, func(_ context.Context, id string) ([]ModelEntry, error) {
+			err = c.HeartbeatModels(context.Background(), testID, func(context.Context) ([]ModelEntry, error) {
 				calls++
-				if id != testID {
-					t.Error("wrong agent")
+				switch mode {
+				case "outage":
+					return nil, fmt.Errorf("private detail")
+				case "empty":
+					return nil, nil
 				}
-				return []ModelEntry{{ID: "managed-inference/demo", Provider: "managed-inference", Context: 64000, Output: 4096, Thinking: &ModelThinking{DefaultLevel: "high", SupportedLevels: []ThinkingLevel{{Value: "high", Label: "High"}}}}}, nil
+				return []ModelEntry{{ID: "managed-inference/demo", Provider: "managed-inference", Default: true, Thinking: &ModelThinking{DefaultLevel: "high", SupportedLevels: []ThinkingLevel{{Value: "high", Label: "High"}}}}}, nil
 			})
-			if err != nil || reports != 1 || (calls == 1) != (agent == testID) {
-				t.Fatal("discovery scope failed", err)
+			want := 1
+			if mode == "idle" {
+				want = 0
+			}
+			if err != nil || reports != want || calls != want {
+				t.Fatal("discovery failed", err, reports, calls)
 			}
 		})
 	}

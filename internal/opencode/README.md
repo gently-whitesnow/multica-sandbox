@@ -98,8 +98,8 @@ OpenCode 1.18.34 `aec0b9a6d8898f68f923aaf08b7306d931fd9d76`.
 
 Unsupported adapter capabilities/dependencies: skills, project resource materialization, broker-managed MCP connections and connected apps,
 private Git/artifact delivery without controller credentials in workloads, retained
-native sessions and artifact publication, task-scoped Multica tools, agent-scoped
-model discovery (#29), production egress enforcement. Do not replace these with a
+native sessions and artifact publication, task-scoped Multica tools, agent-specific
+picker catalogs (upstream discovery is runtime-scoped), production egress enforcement. Do not replace these with a
 sandbox Git service, session store, IAM, tools or policy engine. New Kubernetes
 ownership/deadlines remain #6; image/tool work remains #4.
 

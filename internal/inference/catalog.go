@@ -3,8 +3,6 @@ package inference
 import (
 	"context"
 	"path/filepath"
-
-	"github.com/gently-whitesnow/multica-sandbox/internal/identity"
 )
 
 func (s *Service) configureCatalogs() error {
@@ -13,11 +11,11 @@ func (s *Service) configureCatalogs() error {
 		return ErrDenied
 	}
 	for _, b := range c.Catalogs {
-		ref := identity.Ref{Server: s.server, WorkspaceID: b.WorkspaceID, AgentID: b.AgentID}
-		if _, exists := s.catalogs[ref]; exists || !s.validRef(ref) || !validCatalog(b.Catalog) {
+		scope := Scope{Server: s.server, WorkspaceID: b.WorkspaceID}
+		if _, exists := s.catalogs[scope]; exists || !s.validScope(scope) || !validCatalog(b.Catalog) {
 			return ErrDenied
 		}
-		s.catalogs[ref] = cloneCatalog(b.Catalog)
+		s.catalogs[scope] = cloneCatalog(b.Catalog)
 	}
 	if c.CatalogExternal != nil {
 		external := *c.CatalogExternal
@@ -84,23 +82,32 @@ func cloneCatalog(c Catalog) Catalog {
 	return c
 }
 
-// Catalog describes capabilities for discovery; it never issues identity or grants access.
-func (s *Service) Catalog(ctx context.Context, ref identity.Ref) (Catalog, error) {
-	if !s.validRef(ref) || ctx.Err() != nil {
+func (s *Service) validScope(scope Scope) bool {
+	return scope.Server == s.server && uuid.MatchString(scope.WorkspaceID)
+}
+
+// Catalog describes a runtime's capabilities for discovery; it never issues
+// identity or grants access. Per-agent access stays with the gateway.
+func (s *Service) Catalog(ctx context.Context, scope Scope) (Catalog, error) {
+	if !s.validScope(scope) || ctx.Err() != nil {
 		return Catalog{}, ErrDenied
 	}
 	if s.config.CatalogExternal != nil {
 		var out struct {
-			Version int          `json:"version"`
-			Agent   identity.Ref `json:"agent"`
-			Catalog Catalog      `json:"catalog"`
+			Version   int     `json:"version"`
+			Workspace Scope   `json:"workspace"`
+			Catalog   Catalog `json:"catalog"`
 		}
-		if s.remoteJSON(ctx, ref, s.config.CatalogExternal, &out) != nil || out.Version != 1 || out.Agent != ref || !validCatalog(out.Catalog) {
+		request := struct {
+			Version   int   `json:"version"`
+			Workspace Scope `json:"workspace"`
+		}{1, scope}
+		if s.remoteJSON(ctx, request, s.config.CatalogExternal, &out) != nil || out.Version != 1 || out.Workspace != scope || !validCatalog(out.Catalog) {
 			return Catalog{}, ErrDenied
 		}
 		return cloneCatalog(out.Catalog), nil
 	}
-	c, ok := s.catalogs[ref]
+	c, ok := s.catalogs[scope]
 	if !ok {
 		return Catalog{}, ErrDenied
 	}

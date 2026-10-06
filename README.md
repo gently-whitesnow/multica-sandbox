@@ -32,8 +32,8 @@ the runner executes one task through a supported agent adapter.
 
 Execution backends, agent adapters and inference connections are separate.
 Multica selects the runtime and model; trusted bindings select the inference gateway.
-Provider credentials stay outside the sandbox. Agent-scoped discovery needs upstream
-support; full task/event/session adapters remain separate verification work.
+Provider credentials stay outside the sandbox. The picker shows each workspace runtime's
+advisory catalog; the gateway enforces per-agent access. Full event/session adapters remain open.
 
 Containers share the host kernel; isolation depends on policy and granted credentials.
 

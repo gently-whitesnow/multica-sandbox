@@ -16,27 +16,33 @@ import (
 	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
 )
 
-type scopedCatalog struct{ ref agentidentity.Ref }
+type scopedCatalog struct{ scope inference.Scope }
 
 func (s *scopedCatalog) Acquire(context.Context, agentidentity.Ref) (inference.Session, error) {
 	return inference.Session{}, fmt.Errorf("discovery must not issue JWT")
 }
-func (s *scopedCatalog) Catalog(_ context.Context, ref agentidentity.Ref) (inference.Catalog, error) {
-	s.ref = ref
-	return inference.Catalog{DefaultModel: "demo", Models: map[string]inference.Model{"demo": {Context: 64000, Output: 4096}}}, nil
+func (s *scopedCatalog) Catalog(_ context.Context, scope inference.Scope) (inference.Catalog, error) {
+	s.scope = scope
+	return inference.Catalog{DefaultModel: "demo", Models: map[string]inference.Model{"demo": {Context: 64000, Output: 4096, Thinking: &inference.Thinking{DefaultLevel: "high", SupportedLevels: []inference.ThinkingLevel{{Value: "high", Label: "High"}}}}, "other": {Label: "Other", Context: 8000, Output: 1000}}}, nil
 }
-func TestDiscoveryUsesRegisteredWorkspaceAndControllerOrigin(t *testing.T) {
+func TestDiscoveryWithoutAgentUsesRegisteredWorkspaceAndControllerOrigin(t *testing.T) {
 	const id = "10000000-0000-4000-8000-000000000001"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/daemon/heartbeat" {
-			fmt.Fprintf(w, `{"pending_model_list":{"id":%q,"agent_id":%q,"server":"https://spoof.invalid","workspace_id":"spoof"}}`, id, id)
+			fmt.Fprintf(w, `{"pending_model_list":{"id":%q,"server":"https://spoof.invalid","workspace_id":"spoof"}}`, id)
 			return
 		}
 		var result struct {
-			Models []multica.ModelEntry `json:"models"`
+			Status    string               `json:"status"`
+			Supported bool                 `json:"supported"`
+			Models    []multica.ModelEntry `json:"models"`
 		}
-		if json.NewDecoder(r.Body).Decode(&result) != nil || len(result.Models) != 1 || result.Models[0].ID != "managed-inference/demo" || !result.Models[0].Default {
-			t.Error("bad scoped discovery result")
+		if json.NewDecoder(r.Body).Decode(&result) != nil || result.Status != "completed" || !result.Supported || len(result.Models) != 2 {
+			t.Fatal("bad runtime discovery result")
+		}
+		demo, other := result.Models[0], result.Models[1]
+		if demo.ID != "managed-inference/demo" || demo.Provider != "managed-inference" || !demo.Default || demo.Thinking == nil || demo.Thinking.DefaultLevel != "high" || other.ID != "managed-inference/other" || other.Label != "Other" || other.Default || other.Thinking != nil {
+			t.Error("catalog not mapped to upstream model entries", result.Models)
 		}
 		_, _ = w.Write([]byte(`{}`))
 	}))
@@ -48,10 +54,11 @@ func TestDiscoveryUsesRegisteredWorkspaceAndControllerOrigin(t *testing.T) {
 	source := &scopedCatalog{}
 	api := &agentFleetAPI{Client: client, inference: source, server: "https://trusted.example.invalid"}
 	api.scopes.Store(id, "registered-workspace")
+	// Upstream sends no agent reference; discovery must not need one.
 	if err = api.Heartbeat(context.Background(), id); err != nil {
 		t.Fatal(err)
 	}
-	if source.ref.Server != api.server || source.ref.WorkspaceID != "registered-workspace" || source.ref.AgentID != id {
+	if source.scope != (inference.Scope{Server: api.server, WorkspaceID: "registered-workspace"}) {
 		t.Fatal("untrusted discovery selectors accepted")
 	}
 }

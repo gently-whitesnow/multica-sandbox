@@ -23,7 +23,7 @@ type Service struct {
 	issuer   Issuer
 	gateways map[string]string
 	bindings map[identity.Ref]Target
-	catalogs map[identity.Ref]Catalog
+	catalogs map[Scope]Catalog
 	client   *http.Client
 }
 
@@ -36,7 +36,7 @@ func New(c Config, server string, issuer Issuer) (*Service, error) {
 		external := *c.External
 		c.External = &external
 	}
-	s := &Service{config: c, server: server, issuer: issuer, gateways: map[string]string{}, bindings: map[identity.Ref]Target{}, catalogs: map[identity.Ref]Catalog{}, client: &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+	s := &Service{config: c, server: server, issuer: issuer, gateways: map[string]string{}, bindings: map[identity.Ref]Target{}, catalogs: map[Scope]Catalog{}, client: &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 	for _, g := range c.Gateways {
 		if !endpoint(g.URL, c.AllowHTTP) || g.Issuer == "" || s.gateways[g.URL] != "" {
 			return nil, ErrDenied

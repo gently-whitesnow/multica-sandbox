@@ -50,10 +50,18 @@ type Catalog struct {
 	DefaultModel string           `json:"default_model,omitempty"`
 	Models       map[string]Model `json:"models"`
 }
+
+// CatalogBinding is runtime-scoped: Multica discovers and caches models per runtime,
+// and the controller registers one runtime per workspace.
 type CatalogBinding struct {
 	WorkspaceID string `json:"workspace_id"`
-	AgentID     string `json:"agent_id"`
 	Catalog
+}
+
+// Scope selects an advisory catalog. It is not an identity reference.
+type Scope struct {
+	Server      string `json:"server"`
+	WorkspaceID string `json:"workspace_id"`
 }
 type Target struct{ Gateway }
 type Binding struct {

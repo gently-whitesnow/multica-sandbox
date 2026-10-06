@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gently-whitesnow/multica-sandbox/internal/identity"
 	"github.com/gently-whitesnow/multica-sandbox/internal/inference"
 )
 
@@ -27,8 +26,8 @@ func safeSelection(s string, limit int) bool {
 	return true
 }
 func (r *running) selectInference(ctx context.Context) (selection, error) {
-	ref := identity.Ref{Server: r.adapter.Server, WorkspaceID: r.task.WorkspaceID, AgentID: r.task.AgentID}
-	catalog, err := r.adapter.Inference.Catalog(ctx, ref)
+	// The runtime catalog is the one Multica's picker showed; per-agent access stays with the gateway.
+	catalog, err := r.adapter.Inference.Catalog(ctx, inference.Scope{Server: r.adapter.Server, WorkspaceID: r.task.WorkspaceID})
 	if ctx.Err() != nil {
 		return selection{}, ctx.Err()
 	}

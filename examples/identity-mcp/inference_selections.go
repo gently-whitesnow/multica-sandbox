@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/gently-whitesnow/multica-sandbox/internal/execution"
-	"github.com/gently-whitesnow/multica-sandbox/internal/identity"
 	"github.com/gently-whitesnow/multica-sandbox/internal/inference"
 	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
 	"github.com/gently-whitesnow/multica-sandbox/internal/opencode"
@@ -18,7 +17,7 @@ import (
 
 type staleCatalogSource struct{ opencode.Inference }
 
-func (s staleCatalogSource) Catalog(context.Context, identity.Ref) (inference.Catalog, error) {
+func (s staleCatalogSource) Catalog(context.Context, inference.Scope) (inference.Catalog, error) {
 	return inference.Catalog{}, inference.ErrDenied
 }
 func inferenceSelections(ctx context.Context, base *opencode.Adapter, states *rotationStatus, task multica.Task) error {

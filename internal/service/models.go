@@ -8,7 +8,7 @@ import (
 	"sync"
 
 	"github.com/gently-whitesnow/multica-sandbox/internal/execution"
-	agentidentity "github.com/gently-whitesnow/multica-sandbox/internal/identity"
+	"github.com/gently-whitesnow/multica-sandbox/internal/inference"
 	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
 	"github.com/gently-whitesnow/multica-sandbox/internal/opencode"
 )
@@ -31,12 +31,13 @@ func (a *agentFleetAPI) Heartbeat(ctx context.Context, rt string) error {
 	if a.inference == nil {
 		return a.Client.Heartbeat(ctx, rt)
 	}
-	return a.HeartbeatModels(ctx, rt, func(ctx context.Context, agent string) ([]multica.ModelEntry, error) {
+	return a.HeartbeatModels(ctx, rt, func(ctx context.Context) ([]multica.ModelEntry, error) {
+		// Scope comes from the registered runtime and controller origin, never the request.
 		workspace, ok := a.scopes.Load(rt)
 		if !ok {
 			return nil, fmt.Errorf("runtime scope unavailable")
 		}
-		catalog, err := a.inference.Catalog(ctx, agentidentity.Ref{Server: a.server, WorkspaceID: workspace.(string), AgentID: agent})
+		catalog, err := a.inference.Catalog(ctx, inference.Scope{Server: a.server, WorkspaceID: workspace.(string)})
 		if err != nil {
 			return nil, err
 		}
@@ -46,7 +47,7 @@ func (a *agentFleetAPI) Heartbeat(ctx context.Context, rt string) error {
 			if label == "" {
 				label = name
 			}
-			entry := multica.ModelEntry{ID: "managed-inference/" + name, Provider: "managed-inference", Label: label, Default: name == catalog.DefaultModel, Context: m.Context, Output: m.Output}
+			entry := multica.ModelEntry{ID: "managed-inference/" + name, Provider: "managed-inference", Label: label, Default: name == catalog.DefaultModel}
 			if m.Thinking != nil {
 				entry.Thinking = &multica.ModelThinking{DefaultLevel: m.Thinking.DefaultLevel}
 				for _, level := range m.Thinking.SupportedLevels {
