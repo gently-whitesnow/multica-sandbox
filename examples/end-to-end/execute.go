@@ -112,7 +112,11 @@ func execute(ctx context.Context) error {
 	if _, err = time.Parse(time.RFC3339Nano, t.DispatchedAt); err != nil {
 		return fmt.Errorf("invalid dispatch timestamp")
 	}
-	inference, err := identity(ctx, c, "inference")
+	grants, err := startRelay(ctx)
+	if err != nil {
+		return err
+	}
+	inference, err := grantInference(grants, t.ID)
 	if err != nil {
 		return err
 	}
@@ -123,7 +127,7 @@ func execute(ctx context.Context) error {
 	if err = control(ctx, c, "POST", "/api/daemon/tasks/"+t.ID+"/start", map[string]any{"runtime_id": rt.ID, "dispatched_at": t.DispatchedAt, "capabilities": []string{}}, nil); err != nil {
 		return err
 	}
-	fmt.Println("START real Multica task; short-lived identity issued outside sandbox")
+	fmt.Println("START real Multica task; opaque inference credential and short-lived MCP identity issued outside sandbox")
 	var outcome result
 	runErr := checkActive(ctx, inference, mcp)
 	if runErr == nil {
@@ -150,6 +154,7 @@ func execute(ctx context.Context) error {
 	if runErr != nil {
 		return runErr
 	}
+	grants.Revoke(t.ID)
 	if err = checkEnded(ctx, inference, mcp); err != nil {
 		return err
 	}

@@ -25,8 +25,10 @@ new operations. Revoke on completion, cancellation and recovery. Define bounded
 leases for controller outages before enabling external access in the controller.
 
 Tools use trusted remote MCP services. Inference uses a protected OpenAI-compatible
-HTTP gateway with a distinct audience, model policy and budgets. This resolves
-ADR 0003's open inference transport decision: MCP is not required for model calls.
+HTTP gateway with workspace model policy and budgets, reached through the
+controller relay (ADR 0012). Its per-attempt grant lives in controller memory, so
+attempt leases cover MCP only. This resolves ADR 0003's open inference transport
+decision: MCP is not required for model calls.
 Provider and tool credentials remain external. Reuse an existing inference gateway;
 this project integrates the execution boundary, not provider routing or IAM.
 An OpenAI-compatible API alone does not imply support for run authorization.

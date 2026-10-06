@@ -1,28 +1,32 @@
 package service
 
 import (
+	"context"
+	"fmt"
 	"strings"
 
-	agentidentity "github.com/gently-whitesnow/multica-sandbox/internal/identity"
 	"github.com/gently-whitesnow/multica-sandbox/internal/inference"
-	"github.com/gently-whitesnow/multica-sandbox/internal/opencode"
+	"github.com/gently-whitesnow/multica-sandbox/internal/relay"
 )
 
-func openCodeInference(c Config) (opencode.Inference, error) {
+// openCodeInference reads workspace gateway bindings and serves the inference relay
+// (ADR 0012); keys stay in controller-only files or the external resolver.
+func openCodeInference(ctx context.Context, c Config) (*inference.Service, *relay.Grants, error) {
+	if (c.OpenCode.InferenceFile == "") != (c.OpenCode.InferenceRelay == nil) {
+		return nil, nil, fmt.Errorf("inference_file and inference_relay must be configured together")
+	}
 	if c.OpenCode.InferenceFile == "" {
-		return nil, nil
+		return nil, nil, nil
 	}
 	config, err := inference.ReadConfig(c.OpenCode.InferenceFile)
 	if err != nil {
-		return nil, inference.ErrDenied
+		return nil, nil, err
 	}
-	credentials, err := agentidentity.ReadConfig(config.IdentityFile)
+	source, err := inference.New(config, strings.TrimRight(c.Server, "/"))
 	if err != nil {
-		return nil, inference.ErrDenied
+		return nil, nil, err
 	}
-	issuer, err := agentidentity.New(credentials, strings.TrimRight(c.Server, "/"))
-	if err != nil {
-		return nil, err
-	}
-	return inference.New(config, strings.TrimRight(c.Server, "/"), issuer)
+	policy := relay.Policy{Allow: inference.RelayPath, Reserved: inference.ReservedHeaders, Withhold: true, HeaderTimeout: inference.HeaderTimeout}
+	grants, err := serveRelay(ctx, "inference", inference.RelayPrefix, *c.OpenCode.InferenceRelay, policy)
+	return source, grants, err
 }

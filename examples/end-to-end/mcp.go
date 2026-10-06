@@ -2,13 +2,11 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"net/http"
-	"strings"
 	"time"
 )
 
@@ -77,19 +75,6 @@ func serveMCP() error {
 	handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true})
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", auth.RequireBearerToken(p.verify("sandbox-mcp", "fixture-reader"), nil)(handler))
-	mux.HandleFunc("/authorize-inference", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "POST" {
-			w.WriteHeader(405)
-			return
-		}
-		_, err := p.verify("sandbox-inference", "inference-demo")(r.Context(), strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "), r)
-		if err != nil {
-			w.WriteHeader(403)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"agent": agentID, "workspace": workspace, "model": "demo"})
-	})
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(204) })
 	httpServer := &http.Server{Addr: ":8080", Handler: mux, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 20 * time.Second, MaxHeaderBytes: 16 << 10}
 	return httpServer.ListenAndServe()

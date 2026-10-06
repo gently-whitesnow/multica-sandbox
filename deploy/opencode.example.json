@@ -7,11 +7,15 @@
   "network": "approved-mcp-template",
   "peers": [
     "corporate-mcp",
-    "inference-gateway",
     "multica-sandbox-controller"
   ],
   "multica_relay": {
     "listen": ":8091",
     "url": "http://multica-relay:8091"
+  },
+  "inference_file": "/etc/multica-sandbox/inference.json",
+  "inference_relay": {
+    "listen": ":8092",
+    "url": "http://inference-relay:8092"
   }
 }

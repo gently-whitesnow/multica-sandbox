@@ -15,23 +15,18 @@ import (
 func testCatalog() Catalog {
 	return Catalog{DefaultModel: "demo", Models: map[string]Model{"demo": {Context: 64000, Output: 4096, Thinking: &Thinking{DefaultLevel: "high", SupportedLevels: []ThinkingLevel{{Value: "high", Label: "High"}}}}}}
 }
-func testScope() Scope {
-	return Scope{Server: testRef().Server, WorkspaceID: testRef().WorkspaceID}
-}
-func TestCatalogIsolationCopiesAndSeparateIdentity(t *testing.T) {
-	c := testConfig()
-	ref := testRef()
-	issuer := &testIssuer{}
-	scope := Scope{Server: ref.Server, WorkspaceID: ref.WorkspaceID}
-	c.Catalogs = []CatalogBinding{{WorkspaceID: ref.WorkspaceID, Catalog: testCatalog()}}
-	s, err := New(c, ref.Server, issuer)
+func TestCatalogIsolationCopiesAndSeparateBinding(t *testing.T) {
+	c := testConfig(t)
+	scope := testScope()
+	c.Catalogs = []CatalogBinding{{WorkspaceID: scope.WorkspaceID, Catalog: testCatalog()}}
+	s, err := New(c, scope.Server)
 	if err != nil {
 		t.Fatal(err)
 	}
 	c.Catalogs[0].Models["demo"].Thinking.SupportedLevels[0].Value = "changed"
 	got, err := s.Catalog(context.Background(), scope)
-	if err != nil || got.Models["demo"].Thinking.SupportedLevels[0].Value != "high" || issuer.calls != 0 {
-		t.Fatal("catalog changed or issued identity", err)
+	if err != nil || got.Models["demo"].Thinking.SupportedLevels[0].Value != "high" {
+		t.Fatal("catalog changed", err)
 	}
 	got.Models["demo"].Thinking.SupportedLevels[0].Value = "changed"
 	got, err = s.Catalog(context.Background(), scope)
@@ -43,8 +38,8 @@ func TestCatalogIsolationCopiesAndSeparateIdentity(t *testing.T) {
 			t.Fatal("cross-workspace or cross-server catalog accepted", other)
 		}
 	}
-	if _, err = s.Acquire(context.Background(), testRef()); err != nil || issuer.calls != 1 {
-		t.Fatal("identity required a selected model", err)
+	if _, err = s.Acquire(context.Background(), scope); err != nil {
+		t.Fatal("binding required a selected model", err)
 	}
 }
 func TestExternalCatalogContract(t *testing.T) {
@@ -84,20 +79,19 @@ func TestExternalCatalogContract(t *testing.T) {
 				_ = json.NewEncoder(w).Encode(response)
 			}))
 			defer server.Close()
-			c := testConfig()
+			c := testConfig(t)
 			c.AllowHTTP = true
 			c.CatalogExternal = &identity.ExternalConfig{URL: server.URL, BearerFile: secret}
-			issuer := &testIssuer{}
-			s, err := New(c, testRef().Server, issuer)
+			s, err := New(c, testScope().Server)
 			if err != nil {
 				t.Fatal(err)
 			}
 			_, err = s.Catalog(context.Background(), testScope())
-			if (err == nil) != (mode == "valid") || issuer.calls != 0 {
+			if (err == nil) != (mode == "valid") {
 				t.Fatal("catalog boundary failed", err)
 			}
-			if _, err = s.Acquire(context.Background(), testRef()); err != nil || issuer.calls != 1 {
-				t.Fatal("catalog outage denied independent identity", err)
+			if _, err = s.Acquire(context.Background(), testScope()); err != nil {
+				t.Fatal("catalog outage denied the independent binding", err)
 			}
 		})
 	}

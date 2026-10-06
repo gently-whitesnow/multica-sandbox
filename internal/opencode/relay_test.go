@@ -39,16 +39,16 @@ func authorized(grants *relay.Grants, bearer string) bool {
 }
 
 func TestRelayAttemptDeliversOnlyOpaqueCredential(t *testing.T) {
-	grants := relay.NewGrants()
+	grants := relay.NewGrants(multica.RelayPrefix)
 	workload := &stubWorkload{files: map[string][]byte{}, envs: make(chan map[string]string, 1)}
-	a := Adapter{Issuer: &stubIssuer{}, Authority: &stubAuthority{}, Workloads: workload, Status: stubStatus{}, Relay: grants, RelayURL: "http://multica-relay:8091"}
+	a := Adapter{Server: "https://multica.example.invalid", Issuer: &stubIssuer{}, Authority: &stubAuthority{}, Workloads: workload, Status: stubStatus{}, Relay: grants, RelayURL: "http://multica-relay:8091"}
 	run, err := a.Start(context.Background(), relayTask(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	env := <-workload.envs
 	opaque := env["MULTICA_TOKEN"]
-	if !strings.HasPrefix(opaque, relay.Prefix) || env["MULTICA_SERVER_URL"] != "http://multica-relay:8091" || env["MULTICA_TASK_ID"] != safeTask().ID || env["MULTICA_AGENT_NAME"] != "Fixture agent" || !authorized(grants, opaque) {
+	if !strings.HasPrefix(opaque, multica.RelayPrefix) || env["MULTICA_SERVER_URL"] != "http://multica-relay:8091" || env["MULTICA_TASK_ID"] != safeTask().ID || env["MULTICA_AGENT_NAME"] != "Fixture agent" || !authorized(grants, opaque) {
 		t.Fatalf("unexpected agent environment: %v", env)
 	}
 	for name, value := range env {
@@ -85,7 +85,7 @@ func TestRelayRequiresTaskToken(t *testing.T) {
 			_ = json.Unmarshal([]byte(token), &task.AuthToken)
 		}
 		workload := &stubWorkload{}
-		a := Adapter{Issuer: &stubIssuer{}, Authority: &stubAuthority{}, Workloads: workload, Status: stubStatus{}, Relay: relay.NewGrants(), RelayURL: "http://multica-relay:8091"}
+		a := Adapter{Server: "https://multica.example.invalid", Issuer: &stubIssuer{}, Authority: &stubAuthority{}, Workloads: workload, Status: stubStatus{}, Relay: relay.NewGrants(multica.RelayPrefix), RelayURL: "http://multica-relay:8091"}
 		_, err := a.Start(context.Background(), task)
 		var rejected *execution.RejectedError
 		if !errors.As(err, &rejected) || workload.writes != 0 || workload.runs != 0 {

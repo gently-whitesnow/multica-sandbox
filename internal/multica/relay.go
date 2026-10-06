@@ -2,6 +2,9 @@ package multica
 
 import "strings"
 
+// RelayPrefix keeps the upstream CLI's task-token check; the suffix is longer than a real mat_ token.
+const RelayPrefix = "mat_relay_"
+
 // Credential, session, daemon and account surfaces at UpstreamRevision. A task
 // token reaching them could mint or exchange longer-lived credentials (for
 // example POST /api/tokens) or act as the daemon; the relay never forwards them.

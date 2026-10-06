@@ -33,12 +33,10 @@ func main() {
 		err = gateway()
 	case "evidence":
 		err = printEvidence()
-	case "inference-rotation":
-		err = rotation(false)
-	case "inference-selections":
-		err = rotation(true)
+	case "inference":
+		err = inferenceScenario()
 	case "rotation":
-		err = rotation(false)
+		err = rotation()
 	case "scenario":
 		err = scenario()
 	default:
@@ -58,7 +56,7 @@ func randomSecret() string {
 }
 func initialize() error {
 	if _, err := os.Stat("/realm/realm.json"); err == nil {
-		for _, name := range []string{"client", "admin"} {
+		for _, name := range []string{"client", "admin", "upstream"} {
 			if _, err := os.Stat("/secrets/" + name); err != nil {
 				return fmt.Errorf("incomplete fixture: remove example volumes")
 			}
@@ -70,16 +68,9 @@ func initialize() error {
 		"clientId": "example-agent", "secret": secret, "enabled": true, "publicClient": false, "serviceAccountsEnabled": true, "standardFlowEnabled": false, "directAccessGrantsEnabled": false,
 		"protocolMappers": []any{map[string]any{"name": "mcp-audience", "protocol": "openid-connect", "protocolMapper": "oidc-audience-mapper", "config": map[string]string{"included.custom.audience": "sandbox-mcp", "access.token.claim": "true", "id.token.claim": "false"}}},
 	}}}
-	if os.Getenv("INFERENCE_FIXTURE") == "1" {
-		infSecret := randomSecret()
-		realm["users"] = append(realm["users"].([]any), map[string]any{"id": inferenceSubject, "username": "service-account-example-inference", "enabled": true, "serviceAccountClientId": "example-inference"})
-		realm["clients"] = append(realm["clients"].([]any), map[string]any{"clientId": "example-inference", "secret": infSecret, "enabled": true, "publicClient": false, "serviceAccountsEnabled": true, "standardFlowEnabled": false, "directAccessGrantsEnabled": false, "protocolMappers": []any{map[string]any{"name": "inference-audience", "protocol": "openid-connect", "protocolMapper": "oidc-audience-mapper", "config": map[string]string{"included.custom.audience": "sandbox-inference", "access.token.claim": "true", "id.token.claim": "false"}}}})
-		if err := os.WriteFile("/secrets/inference", []byte(infSecret), 0600); err != nil {
-			return err
-		}
-		if err := os.WriteFile("/secrets/upstream", []byte(randomSecret()), 0600); err != nil {
-			return err
-		}
+	// The provider key exists only in LiteLLM and the mock provider; agents never receive it.
+	if err := os.WriteFile("/secrets/upstream", []byte(randomSecret()), 0600); err != nil {
+		return err
 	}
 	data, _ := json.Marshal(realm)
 	if err := os.WriteFile("/realm/realm.json", data, 0644); err != nil {

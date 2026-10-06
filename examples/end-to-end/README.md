@@ -1,6 +1,6 @@
 # End-to-end integration lab
 
-Real Multica → one OpenCode container → LiteLLM → CLIProxyAPI → a subscription.
+Real Multica → one OpenCode container → controller relay → LiteLLM → CLIProxyAPI → a subscription.
 Keycloak issues identity outside the sandbox. Remote MCP reads the assigned real
 Multica issue and a generated reference word. The agent must write that word to
 `result.txt`; the trusted runner verifies it before completing the Multica task.
@@ -18,24 +18,26 @@ flowchart LR
     K[External Keycloak] --> C
     C --> A[One task container]
     A --> T[External MCP service]
-    A --> L[External LiteLLM]
+    A --> R[Controller inference relay]
+    R --> L[External LiteLLM]
     T --> M
     T --> K
-    L --> T
     L --> P[CLIProxyAPI]
     P --> S[Subscription provider]
 ```
 
-Only short-lived, audience-specific access tokens enter the agent. Client secrets,
-Multica credentials, LiteLLM master key, proxy bridge key and subscription refresh
-credentials stay in trusted services. The controller configures neither model
-routing nor tool permissions; Compose assembles example infrastructure for testing.
+Only a short-lived MCP access token and an opaque per-attempt inference credential
+enter the agent. Client secrets, Multica credentials, the LiteLLM master and
+workspace keys, the proxy bridge key and subscription refresh credentials stay in
+trusted services. The controller configures neither model routing nor tool
+permissions; Compose assembles example infrastructure for testing.
 
 MCP checks issuer, signature, expiry, audience, agent subject, client, role and
-running task state. LiteLLM's **example custom-auth plugin** asks that external
-service for an inference decision and rejects other models/routes and provider
-credential/endpoint overrides. Native LiteLLM JWT auth requires Enterprise.
-This fixed policy is fixture code, not a production policy engine or IAM API.
+running task state. Inference follows ADR 0012: `setup` creates a LiteLLM virtual
+key for the lab workspace (model `demo`, rate limits). The lab controller serves
+`internal/relay` as `inference-relay` on the sandbox network and swaps the agent's
+credential for that key. LiteLLM is not on the sandbox network; it rejects other
+models and provider credential/endpoint overrides.
 Inference remains ordinary HTTP; models may request tool calls which the agent
 executes through MCP. MCP is not required as an inference transport.
 
@@ -83,10 +85,10 @@ a production deployment must give each service only its own credentials.
 
 ## Follow one task in code
 
-1. `initialize.go:initialize`: fixture secrets, realm, roles and separate MCP/
-   inference audiences. `setup.go:setup`: seed records and register OpenCode.
-2. `execute.go:execute`: claim real task, select the configured external identity
-   and issue short-lived tokens. Pass only the explicit safe task projection.
+1. `initialize.go:initialize`: fixture secrets, realm, roles and the MCP audience.
+   `setup.go:setup`: seed records, register OpenCode, create the workspace key.
+2. `execute.go:execute`: claim real task, issue an MCP token and a relay grant
+   (`relay.go`). Pass only the explicit safe task projection.
    Claim payload credentials and arbitrary environment/MCP settings are ignored.
 3. `execute.go:sandbox`: fresh non-root container, read-only root, bounded tmpfs,
    resources and internal network. Deliver JSON through stdin, monitor task state,
@@ -95,7 +97,7 @@ a production deployment must give each service only its own credentials.
    and short-lived bearer identities, run the CLI, parse output and verify the
    result artifact. Provider credentials are absent from its image/input.
 5. `mcp.go:verify`: external role/task-state checks; `readTask` reads real Multica
-   context. `litellm_auth.py:authorize`: gateway integration, separate from sandbox.
+   context. `relay.go`: workspace-key inference relay, separate from the sandbox.
 
 ## Agent choice and custom images
 
@@ -116,11 +118,11 @@ The example stdin/result envelope is experimental, not a stable public ABI.
 ## Limits
 
 No repository checkout, retained sessions, cache, multi-workspace inference,
-Kubernetes or full CLI event/usage mapping is implemented. Tokens last 180 seconds;
+Kubernetes or full CLI event/usage mapping is implemented. MCP tokens last 180 seconds;
 the run deadline is 150 seconds. This lab maps one principal to one fixed task;
 concurrent attempts need external attempt binding/leases under ADR 0009.
-Task-state authorization denies new calls after termination; in-flight requests
-are not automatically cancelled. Docker network topology blocks direct upstream
+Task-state authorization denies new MCP calls after termination; ending the relay
+grant denies and cancels inference requests. Docker network topology blocks direct upstream
 access, but host/metadata isolation and adversarial conformance still require
 verification before production use. The controller has host Docker authority.
 Images/libraries are real; successful provider execution requires a working login.

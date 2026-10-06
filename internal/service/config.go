@@ -58,16 +58,18 @@ func ReadConfig(path string) (Config, error) {
 }
 
 type OpenCodeConfig struct {
-	InferenceFile string         `json:"inference_file,omitempty"`
-	IdentityFile  string         `json:"identity_file"`
-	Authority     attempt.Config `json:"authority"`
-	Network       string         `json:"network"`
-	Peers         []string       `json:"peers"`
-	MulticaRelay  *RelayConfig   `json:"multica_relay,omitempty"`
+	IdentityFile string         `json:"identity_file"`
+	Authority    attempt.Config `json:"authority"`
+	Network      string         `json:"network"`
+	Peers        []string       `json:"peers"`
+	MulticaRelay *RelayConfig   `json:"multica_relay,omitempty"`
+	// InferenceFile holds workspace gateway bindings; InferenceRelay is required with it.
+	InferenceFile  string       `json:"inference_file,omitempty"`
+	InferenceRelay *RelayConfig `json:"inference_relay,omitempty"`
 }
 
-// RelayConfig enables the embedded Multica API relay (ADR 0014). URL is what agents
-// receive as MULTICA_SERVER_URL; the controller must be an approved peer answering it.
+// RelayConfig enables an embedded relay: Multica API (ADR 0014) or inference (ADR 0012).
+// URL is what agents receive; the controller must be an approved peer answering it.
 type RelayConfig struct {
 	Listen string `json:"listen"`
 	URL    string `json:"url"`

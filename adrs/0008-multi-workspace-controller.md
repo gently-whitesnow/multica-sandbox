@@ -64,9 +64,9 @@ must not require rebuilding images, and cancellation must revoke inference acces
 Keep external actions MCP-mediated as in ADR 0003. Evaluate maintained gateways
 and identity components, but do not assume an OpenAI-compatible gateway supplies
 MCP inference, run attestation or immediate revocation. ADRs 0009/0012 select
-native provider HTTP through an external gateway with independent inference
-identity and active-attempt checks. Do not build a general LLM proxy or identity
-issuer inside the controller.
+native provider HTTP through a narrow controller relay that swaps a per-attempt
+credential for the workspace's gateway key. Do not build a general LLM proxy or
+identity issuer inside the controller.
 
 ### Implementation bounds
 
@@ -94,8 +94,8 @@ Multi-workspace discovery, isolation and bounded capacity precede the first real
 agent integration. Acceptance covers claim scope, revoked membership, manual
 visibility, restart cleanup and workspace fairness. Integration measurements
 belong to issue #12; a 100-workspace fixture is not a production capacity guarantee.
-Then prove two workspaces use distinct inference credentials without exposing
-those credentials to either sandbox. Shared worker trust is explicit; stronger
+`VERIFY_INFERENCE=1` proves two workspaces use distinct gateway keys without
+exposing those keys to either sandbox (ADR 0012). Shared worker trust is explicit; stronger
 host/tenant isolation remains a deployment and backend concern.
 
 ## References

@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func assertNativeReports(t *testing.T, id string, usage bool) {
+func assertNativeReports(t *testing.T, id string) {
 	t.Helper()
 	session := sql(t, fmt.Sprintf("SELECT coalesce(session_id,'') || ':' || session_rollout_missing::text || ':' || coalesce(work_dir,'') FROM agent_task_queue WHERE id='%s';", id))
 	if session != ":true:" {
@@ -29,11 +29,5 @@ func assertNativeReports(t *testing.T, id string, usage bool) {
 	if leaks != "0" {
 		t.Fatal("claim environment leaked into reporting")
 	}
-	if usage {
-		counters := sql(t, fmt.Sprintf("SELECT provider || ':' || model || ':' || input_tokens || ':' || output_tokens FROM task_usage WHERE task_id='%s';", id))
-		if counters != "opencode:managed-inference/fixture:275:175" {
-			t.Fatalf("native cumulative usage mismatch: %s", counters)
-		}
-	}
-	t.Log("native text/tool pairs/missing-session marker and cumulative fixture usage persisted through pinned Multica APIs")
+	t.Log("native text/tool pairs/missing-session marker persisted through pinned Multica APIs")
 }

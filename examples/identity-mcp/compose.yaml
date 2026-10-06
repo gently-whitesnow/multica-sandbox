@@ -37,6 +37,43 @@ services:
       interval: 2s
       timeout: 2s
       retries: 60
+  # Inference profile: LiteLLM with virtual keys; reachable only from trusted services.
+  litellm-db:
+    image: pgvector/pgvector@sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f
+    profiles: [inference]
+    networks: [fixture]
+    environment:
+      POSTGRES_DB: litellm
+      POSTGRES_USER: litellm
+      POSTGRES_PASSWORD: fixture-only
+    healthcheck:
+      test: [CMD, pg_isready, -U, litellm, -d, litellm]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  litellm:
+    image: ghcr.io/berriai/litellm:v1.104.0@sha256:625981c83410a3ea68eb0697590a57ec1d764d634514d54fa5db0591077ee839
+    profiles: [inference]
+    mem_limit: 768m
+    cpus: 0.5
+    networks: [fixture]
+    depends_on:
+      gateway:
+        condition: service_healthy
+      litellm-db:
+        condition: service_healthy
+    entrypoint: [/bin/sh, -c, 'export LITELLM_MASTER_KEY="sk-$$(cat /secrets/admin)"; export FIXTURE_UPSTREAM_KEY="$$(cat /secrets/upstream)"; exec litellm --config /fixture/litellm.yaml --port 4000']
+    environment:
+      DATABASE_URL: postgresql://litellm:fixture-only@litellm-db:5432/litellm
+      LITELLM_LOCAL_MODEL_COST_MAP: "True"
+    volumes:
+      - credentials:/secrets:ro
+      - ./litellm.yaml:/fixture/litellm.yaml:ro
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness')"]
+      interval: 2s
+      timeout: 2s
+      retries: 90
   scenario:
     <<: *example
     command: [scenario]

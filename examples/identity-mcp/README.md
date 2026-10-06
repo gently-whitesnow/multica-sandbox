@@ -17,17 +17,18 @@ flowchart LR
     C --> G[Attempt grant authority]
     C --> A[One sandbox per attempt]
     A --> T[Remote MCP tools]
-    A --> F[Protected inference gateway]
+    A --> R[Controller inference relay]
+    R --> F[LiteLLM with workspace keys]
     T --> G
-    F --> G
     S[External credential store] --> T
-    S --> F
+    S --> R
     F --> P[Model providers]
 ```
 
-The sandbox receives short-lived identity only. Tool and provider credentials
-stay in trusted services. Inference uses an OpenAI-compatible HTTP contract;
-tool operations use MCP. Network policy must enforce these destinations outside
+The sandbox receives short-lived MCP identity and an opaque inference credential
+only. Tool, gateway and provider credentials stay in trusted services. Inference
+uses an OpenAI-compatible HTTP contract through the relay (ADR 0012); tool
+operations use MCP. Network policy must enforce these destinations outside
 the sandbox. Multica public runtime visibility is not downstream authorization.
 
 ## Run
@@ -93,15 +94,19 @@ It verifies at least three successfully used JWTs, multiple expiries,
 issuer/resolver outages and cancellation, then denies ended tokens before their expiry.
 It exposes no host ports. Only its trusted scenario mounts the Docker socket.
 `VERIFY_SERVICE=1 VERIFY_OPENCODE=1 ./verify.sh` also tests a real Multica claim
-through the persistent Compose controller. Optional inference identity follows ADR 0012. See [ADR 0009](../../adrs/0009-attempt-authorization.md).
+through the persistent Compose controller. See [ADR 0009](../../adrs/0009-attempt-authorization.md).
 
-`VERIFY_INFERENCE=1 ./verify.sh` adds pinned LiteLLM with a gateway-only fixture
-key and independent inference JWTs. The same native OpenCode process rotates MCP
-and inference identity across real expiries. Static/external bindings, external
-model grants, streaming, outages, cancellation and invalid-token behavior are
-checked without contacting a real provider or requiring a subscription.
+`VERIFY_INFERENCE=1 ./verify.sh` enables the `inference` Compose profile: pinned
+LiteLLM with Postgres-backed virtual keys and a provider key known only to LiteLLM
+and the mock provider. `inference.go` serves the real `internal/relay` from the
+trusted scenario container (alias `inference-relay`, the only template peer) and
+runs native OpenCode attempts in two workspaces. It checks spoofed attribution,
+cross-workspace, upstream, forged and ended credentials, key absence inside
+attempts, key change, stream cancellation, explicit selections and gateway
+refusals, without a real provider or subscription. Attribution evidence comes
+from LiteLLM's own end-user spend records.
 
-LiteLLM's upstream and authorization calls use `fixture-provider`, an alias only
+LiteLLM's upstream calls use `fixture-provider`, an alias only
 on the stable fixture network. The generic `gateway` service name can resolve to
 an attempt network while peers are attached there; those addresses disappear on
 attempt cleanup and must not be retained by an upstream connection pool. Agent

@@ -75,7 +75,7 @@ func (p fixtureProjection) Write(ctx context.Context, path string, data []byte) 
 	return p.ProjectedRun.Write(ctx, path, data)
 }
 
-func rotation(selectionsOnly bool) error {
+func rotation() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
 	defer cancel()
 	config := resolverConfig()
@@ -94,9 +94,6 @@ func rotation(selectionsOnly bool) error {
 	owner := sha256.Sum256([]byte(os.Getenv("EXECUTION_NETWORK")))
 	controller := fmt.Sprintf("90000000-0000-4000-8000-%x", owner[:6])
 	peers := []string{os.Getenv("MCP_PEER")}
-	if os.Getenv("INFERENCE_FIXTURE") == "1" {
-		peers = append(peers, os.Getenv("INFERENCE_PEER"))
-	}
 	backend := &docker.Projected{Backend: docker.Backend{Image: opencodeImage, Owner: controller, Command: []string{"/bin/sh"}}, Network: os.Getenv("EXECUTION_NETWORK"), Peers: peers}
 	if err := backend.Reconcile(ctx); err != nil {
 		return err
@@ -107,31 +104,14 @@ func rotation(selectionsOnly bool) error {
 	}
 	states := &rotationStatus{states: map[string]string{}}
 	adapter := &opencode.Adapter{Server: fixtureServer, Controller: controller, Issuer: issuer, Authority: authority, Status: states, Workloads: fixtureWorkloads{backend}}
-	var recordedInference *recordingInference
-	if os.Getenv("INFERENCE_FIXTURE") == "1" {
-		adapter.Workloads = backend
-		var closeSource func()
-		recordedInference, closeSource, err = configureRotationInference(ctx, adapter)
-		if err != nil {
-			return err
-		}
-		defer closeSource()
-	}
 	tasks := []multica.Task{}
 	for i, binding := range config.Bindings {
 		task := multica.Task{StartClaimSupported: true, WorkspaceID: binding.WorkspaceID, AgentID: binding.AgentID, ID: fmt.Sprintf("40000000-0000-4000-8000-%012d", i+1), RuntimeID: fmt.Sprintf("50000000-0000-4000-8000-%012d", i+1), DispatchedAt: time.Now().UTC().Format(time.RFC3339Nano), Agent: &multica.Agent{ID: binding.AgentID, Instructions: "Read document repeatedly using fixture MCP.", MCPConfig: json.RawMessage(`{"mcpServers":{"fixture":{"url":"http://gateway:8080/mcp"}}}`)}}
-		if recordedInference != nil && i == 0 {
-			task.Agent.Model = "managed-inference/fixture"
-			task.Agent.ThinkingLevel = "high"
-		}
 		if i == 1 {
 			task.Agent.Instructions += " workspace-two"
 		}
 		tasks = append(tasks, task)
 		states.set(task.ID, "running")
-	}
-	if selectionsOnly {
-		return inferenceSelections(ctx, adapter, states, tasks[0])
 	}
 	results := make(chan execution.Result, 2)
 	done := make(chan error, 2)
@@ -151,11 +131,6 @@ func rotation(selectionsOnly bool) error {
 	for range tasks {
 		if err := <-ready; err != nil {
 			cancel()
-		}
-	}
-	if recordedInference != nil {
-		if err := checkInferencePolicy(ctx, recordedInference, tasks[0]); err != nil {
-			return err
 		}
 	}
 	if err := checkCrossWorkspace(ctx, issuer, tasks); err != nil {
@@ -188,20 +163,6 @@ func rotation(selectionsOnly bool) error {
 		latest := tokens[len(tokens)-1]
 		if err := call(ctx, latest.Bearer(), task.WorkspaceID, "document", false); err != nil {
 			return fmt.Errorf("ended attempt retained access: %w", err)
-		}
-	}
-	if recordedInference != nil {
-		if err := checkInferenceEvidence(ctx, recordedInference, tasks, issuer); err != nil {
-			return err
-		}
-		if err := inferenceSelections(ctx, adapter, states, tasks[0]); err != nil {
-			return err
-		}
-		if err := inferenceFailures(ctx, adapter, states, tasks[0]); err != nil {
-			return err
-		}
-		if err := inferenceFaults(ctx, adapter, states, tasks[0]); err != nil {
-			return err
 		}
 	}
 	if err := rotationFailures(ctx, adapter, states, tasks); err != nil {

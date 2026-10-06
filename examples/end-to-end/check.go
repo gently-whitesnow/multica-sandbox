@@ -10,7 +10,11 @@ func check(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	inference, err := identity(ctx, c, "inference")
+	grants, err := startRelay(ctx)
+	if err != nil {
+		return err
+	}
+	inference, err := grantInference(grants, "check")
 	if err != nil {
 		return err
 	}
@@ -22,9 +26,9 @@ func check(ctx context.Context) error {
 		name, address, token string
 		body                 any
 	}{
-		{"unauthenticated inference denied", "http://litellm:4000/v1/chat/completions", "", map[string]any{"model": "demo", "messages": []any{}}},
-		{"MCP audience cannot authorize inference", "http://litellm:4000/v1/chat/completions", mcpToken, map[string]any{"model": "demo", "messages": []any{}}},
-		{"inference identity cannot authorize MCP", "http://mcp:8080/mcp", inference, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}},
+		{"unauthenticated inference denied", relayLocal + "/v1/chat/completions", "", map[string]any{"model": "demo", "messages": []any{}}},
+		{"MCP identity cannot authorize inference", relayLocal + "/v1/chat/completions", mcpToken, map[string]any{"model": "demo", "messages": []any{}}},
+		{"inference credential cannot authorize MCP", "http://mcp:8080/mcp", inference, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}},
 		{"inactive task cannot authorize MCP", "http://mcp:8080/mcp", mcpToken, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}},
 	}
 	for _, item := range checks {
@@ -56,7 +60,7 @@ func checkActive(ctx context.Context, token, mcpToken string) error {
 		{"provider credential override denied", "/v1/chat/completions", map[string]any{"model": "demo", "messages": message, "api_key": "forbidden"}},
 		{"unsupported inference route denied", "/v1/responses", map[string]any{"model": "demo", "input": "fixture check"}},
 	} {
-		if err := denied(ctx, item.name, "http://litellm:4000"+item.path, token, item.body); err != nil {
+		if err := denied(ctx, item.name, relayLocal+item.path, token, item.body); err != nil {
 			return err
 		}
 	}
@@ -73,7 +77,7 @@ func checkActive(ctx context.Context, token, mcpToken string) error {
 	return nil
 }
 func checkEnded(ctx context.Context, inference, mcpToken string) error {
-	if err := denied(ctx, "ended task inference denied with its original token", "http://litellm:4000/v1/chat/completions", inference, map[string]any{"model": "demo", "messages": []map[string]string{{"role": "user", "content": "fixture check"}}, "max_tokens": 1}); err != nil {
+	if err := denied(ctx, "ended task inference denied with its original credential", relayLocal+"/v1/chat/completions", inference, map[string]any{"model": "demo", "messages": []map[string]string{{"role": "user", "content": "fixture check"}}, "max_tokens": 1}); err != nil {
 		return err
 	}
 	return denied(ctx, "ended task MCP denied with its original token", "http://mcp:8080/mcp", mcpToken, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/list"})

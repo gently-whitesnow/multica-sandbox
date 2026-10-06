@@ -3,7 +3,7 @@
 The persistent controller's opt-in OpenCode path projects trusted Multica task
 context, acquires verified identity and rotates the native MCP OAuth store during
 one disposable attempt. OpenCode is pinned to 1.18.34 (source `aec0b9a6`); a version
-check precedes execution, including for user-supplied images. Optional inference identity follows ADR 0012. The verified scope and upstream dependencies are listed below.
+check precedes execution, including for user-supplied images. Optional inference uses the workspace-key relay from ADR 0012. The verified scope and upstream dependencies are listed below.
 
 ```mermaid
 flowchart TD
@@ -30,8 +30,8 @@ The default command is `opencode run --format json` with the projected prompt.
 An operator-supplied command may use the same `/workspace/prompt.txt` and
 `/workspace/opencode.json`; only controller configuration chooses that command.
 Images may include their own tools and credential-free provider configuration.
-No permanent inference/provider credential is permitted in an image or command;
-renewable inference configuration uses the optional `inference_file`; see
+No inference/provider credential is permitted in an image or command; managed
+inference uses `inference_file` and `inference_relay`; see
 [`internal/inference`](../inference/README.md). The fixture supplies a mock provider from
 trusted test configuration solely to exercise tool turns without a subscription.
 
@@ -48,8 +48,7 @@ The authority is external; this repository contains only a fixture implementatio
 
 `renew` includes `controller`, the dispatch-fenced `attempt`, `server`,
 `workspace_id`, `agent_id`, `task_id`, `mcp_url`, SHA-256 `token_hash`, and epoch-second
-`expires_at`. Exactly one of `mcp_url` and `inference_url` identifies the recipient.
-It contains no bearer JWT. The authority authenticates the controller,
+`expires_at`. It contains no bearer JWT. Inference grants live in the controller relay, not here. The authority authenticates the controller,
 validates references/recipients, and registers or renews a bounded active grant.
 `revoke` ends every fingerprint for an attempt; `recover` ends the controller's
 previous grants. Both must be idempotent. Ended attempts cannot be re-enrolled and
@@ -70,8 +69,8 @@ Add `VERIFY_SERVICE=1` for a real Multica claim through the actual Compose contr
 
 Native JSON events follow the upstream OpenCode backend: text/status/thinking and paired tool-use/results are reported in 500 ms best-effort batches with ordered sequence numbers and unchanged call IDs. Tool results use the upstream 8 KiB UTF-8 preview with `output_truncated`; lines up to 32 MiB are read and unknown or non-JSON lines are skipped. Multica's server masks secret-shaped message content; native error bodies are withheld. A 10-minute silent stream is stopped by the upstream idle watchdog. Complete/fail callbacks use the upstream retry schedule and a durable state-volume queue; delivery is at-least-once and Multica treats repeated terminal callbacks idempotently. MCP roles, resource permissions and model routing remain external. CI remains paused.
 
-`opencode.inference_file` enables the separate inference binding and token path.
-See [inference configuration](../inference/README.md) and
+`opencode.inference_file` with `opencode.inference_relay` enables workspace-key
+inference through the controller relay. See [inference configuration](../inference/README.md) and
 [`deploy/inference.example.json`](../../deploy/inference.example.json).
 
 ## First adapter contract (issue #24)
@@ -88,7 +87,7 @@ OpenCode 1.18.34 `aec0b9a6d8898f68f923aaf08b7306d931fd9d76`.
 | Usage | Multica usage upserts cumulative provider/model totals | Summed step_finish input/output/reasoning/cache counters reported once as provider `opencode`, applied model or `unknown`; no estimates, pricing or budgets |
 | Errors/completion | Native CLI error event may accompany exit 0 | Upstream terminal-signal rules and error wording, so Multica classifies and retries; numeric HTTP status or error name only; complete with native text only after cleanup |
 | Sessions | Native sessionID; Multica session/complete/fail fields | Report observed native ID, no work_dir; fresh attempt, terminal session_rollout_missing=true clears resume pointer; resume unsupported |
-| Identity | Native OAuth store/provider auth-loader | Existing verified issuance, exact recipient, atomic renewal, external leases/revocation |
+| Identity | Native MCP OAuth store; provider `apiKey` | Verified MCP issuance, exact recipient, atomic renewal, external leases/revocation; opaque per-attempt inference relay credential |
 | Cancellation/recovery | Multica start/dispatch/status/cancel-ack/recover APIs | Existing fencing, joined exec/renewal, cleanup before terminal callback, restart resource reconciliation |
 | Isolation/egress | Maintained Docker internal bridge/read-only/non-root/limits | Disposable per-attempt container/network; fixture isolation evidence, no production hostile host/metadata/destination guarantee |
 | Other adapters/images | Native contracts differ | OpenCode 1.18.34 only; image/provider/backend configuration independent |

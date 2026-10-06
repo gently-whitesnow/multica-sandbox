@@ -19,18 +19,21 @@ token that outlives the task.
 
 Keep the agent working like upstream: the unmodified upstream CLI and
 upstream-equivalent instructions. Translate the credential outside the sandbox
-with the same mechanism as ADR 0012's embedded inference relay. One shared module,
-`internal/relay`, is a reverse proxy, not a redirect, for a single trusted origin.
-It validates an active grant before forwarding and replaces `Authorization`.
+with the same mechanism as ADR 0012's inference relay. One shared module,
+`internal/relay`, is a reverse proxy, not a redirect. Each grant fixes one trusted
+origin, credential and optional attribution headers; credentials carry a
+relay-specific prefix. It validates an active grant before forwarding and
+replaces `Authorization`.
 It removes cookies, forwarding and identity headers. It refuses upgrades,
 absolute-form targets, encoded or traversing paths and upstream redirects. It
 bounds bodies and in-flight requests, cancels in-flight requests on revocation
-and returns fixed error bodies without logging. Caller fields never select the
-upstream or the credential. Inference (#23) can reuse it with a JWT-verifying
-authorizer instead of opaque grants.
+and returns fixed error bodies for its own failures without logging. A policy can
+reserve header prefixes and withhold upstream error bodies; the Multica relay
+passes API errors through. Caller fields never select the upstream or the
+credential.
 
 The Multica relay is explicitly enabled per controller (`multica_relay`). Its
-upstream is the controller's configured Multica origin. The claim's `mat_` token
+grants use the controller's configured Multica origin. The claim's `mat_` token
 is decoded into a redacted type that formats and marshals as nothing. It stays in
 controller memory, never in logs, results, the terminal-report outbox or JSON.
 A claim without a `mat_` token is rejected before the workload starts, matching
