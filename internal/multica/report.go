@@ -15,6 +15,8 @@ type Message struct {
 	Input     map[string]any `json:"input,omitempty"`
 	Output    string         `json:"output,omitempty"`
 	CreatedAt time.Time      `json:"created_at"`
+	// OutputTruncated follows the upstream 8 KiB tool-output preview.
+	OutputTruncated *bool `json:"output_truncated,omitempty"`
 }
 type Usage struct {
 	Provider   string `json:"provider"`

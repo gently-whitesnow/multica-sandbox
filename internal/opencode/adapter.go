@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strings"
 	"sync"
 	"time"
 
@@ -55,9 +54,7 @@ type running struct {
 	cleanupErr  error
 	inference   inference.Session
 	events      *eventStream
-	eventsModel string
-	secretMu    sync.Mutex
-	secrets     []string
+	model       string
 }
 
 func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, error) {
@@ -84,7 +81,8 @@ func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, 
 	if err = r.initialize(runCtx, prompt); err != nil {
 		return nil, r.reject(err)
 	}
-	r.events = &eventStream{reporter: a.Reporter, task: task.ID, seq: 1, redact: r.redact, usage: multica.Usage{Provider: inferenceProvider, Model: r.eventsModel}}
+	r.events = &eventStream{reporter: a.Reporter, task: task.ID, model: r.model}
+	r.events.touch()
 	r.started = true
 	go r.loop(runCtx)
 	return r, nil
@@ -163,7 +161,6 @@ func (r *running) refresh(ctx context.Context) error {
 		if err := r.adapter.Authority.Apply(ctx, grant); err != nil {
 			return err
 		}
-		r.remember(token.Bearer())
 		r.tokens[name] = token
 	}
 	inferenceChanged, err := r.refreshInference(ctx, ref)
@@ -204,6 +201,10 @@ loop:
 			agentDone = true
 			break loop
 		case <-ticker.C:
+			if r.events.idle(idleWatchdog) {
+				err = &execution.IdleError{After: idleWatchdog}
+				break loop
+			}
 			if err = r.refresh(ctx); err != nil {
 				break loop
 			}
@@ -255,26 +256,4 @@ func (r *running) reject(cause error) error {
 		return errors.Join(cause, err)
 	}
 	return &execution.RejectedError{Err: cause}
-}
-
-func (r *running) remember(value string) {
-	if value == "" {
-		return
-	}
-	r.secretMu.Lock()
-	defer r.secretMu.Unlock()
-	for _, known := range r.secrets {
-		if known == value {
-			return
-		}
-	}
-	r.secrets = append(r.secrets, value)
-}
-func (r *running) redact(value string) string {
-	r.secretMu.Lock()
-	defer r.secretMu.Unlock()
-	for _, secret := range r.secrets {
-		value = strings.ReplaceAll(value, secret, "[redacted]")
-	}
-	return value
 }

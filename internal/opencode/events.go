@@ -4,14 +4,25 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
-	"math"
+	"regexp"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gently-whitesnow/multica-sandbox/internal/execution"
 	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
+)
+
+// Upstream daemon values for OpenCode transcripts.
+const (
+	maxNativeLine     = 32 << 20
+	toolOutputPreview = 8192
+	reportInterval    = 500 * time.Millisecond
+	reportTimeout     = 5 * time.Second
+	idleWatchdog      = 10 * time.Minute
 )
 
 type Reporter interface {
@@ -19,36 +30,47 @@ type Reporter interface {
 	ReportUsage(context.Context, string, multica.Usage) error
 	ReportSession(context.Context, string, string) error
 }
+
+// eventStream maps `opencode run --format json` like the upstream OpenCode backend.
 type eventStream struct {
-	reporter      Reporter
-	task, session string
-	seq           int
-	output        strings.Builder
-	usage         multica.Usage
-	redact        func(string) string
+	reporter Reporter
+	task     string
+	model    string
+	output   strings.Builder
+	session  string
+	usage    multica.Usage
+	active   atomic.Int64
+
+	mu      sync.Mutex
+	seq     int
+	batch   []multica.Message
+	pending string
 }
+
 type nativeEvent struct {
 	Type      string `json:"type"`
 	Session   string `json:"sessionID"`
 	Timestamp int64  `json:"timestamp"`
 	Part      struct {
-		ID        string `json:"id"`
-		MessageID string `json:"messageID"`
-		Session   string `json:"sessionID"`
-		Text      string `json:"text"`
-		Tool      string `json:"tool"`
-		CallID    string `json:"callID"`
-		Reason    string `json:"reason"`
-		State     *struct {
+		Text     string `json:"text"`
+		Tool     string `json:"tool"`
+		CallID   string `json:"callID"`
+		Reason   string `json:"reason"`
+		Metadata *struct {
+			ProviderExecuted bool `json:"providerExecuted"`
+		} `json:"metadata"`
+		State *struct {
 			Status string          `json:"status"`
 			Input  map[string]any  `json:"input"`
 			Output json.RawMessage `json:"output"`
 			Error  string          `json:"error"`
 		} `json:"state"`
+		Cost   float64 `json:"cost"`
 		Tokens *struct {
 			Input     int64 `json:"input"`
 			Output    int64 `json:"output"`
 			Reasoning int64 `json:"reasoning"`
+			Total     int64 `json:"total"`
 			Cache     struct {
 				Read  int64 `json:"read"`
 				Write int64 `json:"write"`
@@ -63,163 +85,211 @@ type nativeEvent struct {
 	} `json:"error"`
 }
 
-// CLI JSON is an observation stream, never a second reasoning or retry loop.
+var errorName = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,63}$`)
+
+// read observes the CLI stream; it is never a second reasoning or retry loop.
+// Unknown and non-JSON lines are skipped, as upstream does.
 func (s *eventStream) read(ctx context.Context, reader io.Reader) error {
+	s.touch()
+	stop := s.flushEvery(reportInterval)
+	defer stop()
 	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, 4096), 1<<20)
-	seen := map[string]bool{}
-	open, terminal, productive := false, false, false
+	scanner.Buffer(make([]byte, 64<<10), maxNativeLine)
+	var failure error
+	// Step bracketing is the only terminal signal in OpenCode's JSON stream.
+	open, continuation, awaiting, finished, produced, void := false, false, false, false, false, false
 	for scanner.Scan() {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		line := scanner.Text()
-		if strings.TrimSpace(line) == "" {
+		s.touch()
+		var e nativeEvent
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || json.Unmarshal([]byte(line), &e) != nil {
 			continue
 		}
-		if s.redact != nil {
-			line = s.redact(line)
-		}
-		var e nativeEvent
-		if json.Unmarshal([]byte(line), &e) != nil || len(e.Session) > 256 || !strings.HasPrefix(e.Session, "ses_") {
-			return fmt.Errorf("invalid native event")
-		}
-		if e.Type != "error" && (e.Part.ID == "" || len(e.Part.ID) > 256) {
-			return fmt.Errorf("invalid native part identity")
-		}
-		if s.session == "" {
-			s.session = e.Session
-			if s.reporter != nil {
-				if err := s.reporter.ReportSession(ctx, s.task, s.session); err != nil {
-					return err
-				}
-			}
-		}
-		if e.Session != s.session || (e.Part.Session != "" && e.Part.Session != s.session) {
-			return fmt.Errorf("native session mismatch")
-		}
-		key := e.Type + ":" + e.Part.ID
-		if e.Part.ID != "" {
-			if seen[key] {
-				continue
-			}
-			if len(seen) >= 10000 {
-				return fmt.Errorf("native event count exceeds limit")
-			}
-			seen[key] = true
+		if e.Session != "" && s.session == "" {
+			s.mu.Lock()
+			s.session, s.pending = e.Session, e.Session
+			s.mu.Unlock()
 		}
 		when := time.Now().UTC()
 		if e.Timestamp > 0 {
 			when = time.UnixMilli(e.Timestamp).UTC()
 		}
-		msg := multica.Message{CreatedAt: when}
-		messages := []multica.Message{}
 		switch e.Type {
-		case "step_start":
-			open, terminal, productive = true, false, false
-			msg.Type = "status"
-			msg.Content = "running"
-			messages = append(messages, msg)
-		case "text", "reasoning":
-			msg.Type = e.Type
-			if e.Type == "reasoning" {
-				msg.Type = "thinking"
+		case "text":
+			if e.Part.Text != "" {
+				s.output.WriteString(e.Part.Text)
+				s.add(multica.Message{Type: "text", Content: e.Part.Text, CreatedAt: when})
+				produced = true
 			}
-			msg.Content = e.Part.Text
-			if len(msg.Content) > 65536 {
-				return fmt.Errorf("native text exceeds report limit")
-			}
-			if msg.Content != "" {
-				productive = true
-				messages = append(messages, msg)
-			}
-			if e.Type == "text" {
-				if s.output.Len()+len(msg.Content) > 65536 {
-					return fmt.Errorf("native result exceeds report limit")
-				}
-				s.output.WriteString(msg.Content)
+		case "reasoning":
+			if e.Part.Text != "" {
+				s.add(multica.Message{Type: "thinking", Content: e.Part.Text, CreatedAt: when})
 			}
 		case "tool_use":
-			if e.Part.State == nil || e.Part.CallID == "" || len(e.Part.CallID) > 256 || len(e.Part.Tool) > 256 {
-				return fmt.Errorf("invalid native tool event")
+			s.tool(e, when)
+			produced = true
+			if e.Part.Metadata == nil || !e.Part.Metadata.ProviderExecuted {
+				continuation = true
 			}
-			state := e.Part.State
-			if state.Status != "completed" && state.Status != "error" {
-				return fmt.Errorf("nonterminal native tool event")
-			}
-			msg.Type = "tool_use"
-			msg.Tool = e.Part.Tool
-			msg.CallID = e.Part.CallID
-			msg.Input = state.Input
-			messages = append(messages, msg)
-			result := msg
-			result.Type = "tool_result"
-			result.Input = nil
-			if state.Status == "error" {
-				result.Output = state.Error
-			} else if len(state.Output) > 0 {
-				if json.Unmarshal(state.Output, &result.Output) != nil {
-					result.Output = string(state.Output)
-				}
-			}
-			if len(result.Output) > 65536 {
-				return fmt.Errorf("native tool result exceeds report limit")
-			}
-			messages = append(messages, result)
-			productive = true
-		case "step_finish":
-			if !open {
-				return fmt.Errorf("native finish without start")
-			}
-			if t := e.Part.Tokens; t != nil {
-				fields := [][2]int64{{s.usage.Input, t.Input}, {s.usage.Output, t.Output}, {s.usage.Output, t.Reasoning}, {s.usage.CacheRead, t.Cache.Read}, {s.usage.CacheWrite, t.Cache.Write}}
-				for _, f := range fields {
-					if f[1] < 0 || f[0] > math.MaxInt64-f[1] {
-						return fmt.Errorf("invalid native usage")
-					}
-				}
-				if t.Output > math.MaxInt64-t.Reasoning || s.usage.Output > math.MaxInt64-t.Output-t.Reasoning {
-					return fmt.Errorf("invalid native usage")
-				}
-				s.usage.Input += t.Input
-				s.usage.Output += t.Output + t.Reasoning
-				s.usage.CacheRead += t.Cache.Read
-				s.usage.CacheWrite += t.Cache.Write
-				productive = productive || (t.Input > 0 || t.Output > 0 || t.Reasoning > 0) || t.Cache.Read > 0 || t.Cache.Write > 0
-				// CLI does not emit model IDs. Only attribute when trusted configuration applied one.
-				if s.reporter != nil && s.usage.Model != "" {
-					if err := s.reporter.ReportUsage(ctx, s.task, s.usage); err != nil {
-						return err
-					}
-				}
-			}
-			open = false
-			terminal = e.Part.Reason == "stop" && productive
 		case "error":
-			status := 0
-			if e.Error.Name == "APIError" && e.Error.Data.Status >= 400 && e.Error.Data.Status <= 599 {
-				status = e.Error.Data.Status
+			if failure == nil {
+				failure = nativeFailure(e)
 			}
-			// Native error bodies/headers/messages can contain authorization; report numeric status only.
-			return &execution.AgentFailure{Status: status}
-		default:
-			return fmt.Errorf("unsupported native event")
-		}
-		for i := range messages {
-			s.seq++
-			messages[i].Seq = s.seq
-		}
-		if len(messages) > 0 && s.reporter != nil {
-			if err := s.reporter.ReportMessages(ctx, s.task, messages); err != nil {
-				return err
+		case "step_start":
+			open, continuation, awaiting, produced = true, false, false, false
+			s.add(multica.Message{Type: "status", Content: "running", CreatedAt: when})
+		case "step_finish":
+			open, finished = false, true
+			awaiting = e.Part.Reason == "tool-calls" || (e.Part.Reason != "" && continuation)
+			continuation = false
+			if t := e.Part.Tokens; t != nil {
+				// OpenCode 1.18 counts reasoning separately; Multica includes it in output.
+				s.usage.Input += max(t.Input, 0)
+				s.usage.Output += max(t.Output, 0) + max(t.Reasoning, 0)
+				s.usage.CacheRead += max(t.Cache.Read, 0)
+				s.usage.CacheWrite += max(t.Cache.Write, 0)
+				produced = produced || t.Input > 0 || t.Output > 0 || t.Reasoning > 0 || t.Total > 0 || t.Cache.Read > 0 || t.Cache.Write > 0
 			}
+			produced = produced || e.Part.Cost > 0
+			void = !produced
 		}
 	}
-	if scanner.Err() != nil {
-		return fmt.Errorf("native event stream read failed")
-	}
-	if open || !terminal {
-		return fmt.Errorf("native stream ended without completion")
+	s.reportUsage()
+	// Upstream wording lets Multica classify a cut stream as retryable provider_network.
+	switch {
+	case failure != nil:
+		return failure
+	case scanner.Err() != nil:
+		return &execution.AgentFailure{Message: "opencode stdout read error"}
+	case open:
+		return &execution.AgentFailure{Message: "opencode stream ended without a terminal signal (step still open at EOF)"}
+	case awaiting:
+		return &execution.AgentFailure{Message: "opencode stream ended without a terminal signal (last step required a continuation that never started)"}
+	case void:
+		return &execution.AgentFailure{Message: "opencode stream ended on an empty step (no text, no tool call, no reported usage) — the provider produced nothing"}
+	case !finished:
+		// Stricter than upstream: exit 0 without any finished step is not a completion.
+		return &execution.AgentFailure{Message: "opencode stream ended without a terminal signal (no step finished)"}
 	}
 	return nil
+}
+
+func (s *eventStream) tool(e nativeEvent, when time.Time) {
+	call := multica.Message{Type: "tool_use", Tool: e.Part.Tool, CallID: e.Part.CallID, CreatedAt: when}
+	state := e.Part.State
+	if state == nil {
+		s.add(call)
+		return
+	}
+	call.Input = state.Input
+	if state.Status != "completed" && state.Status != "error" {
+		s.add(call)
+		return
+	}
+	result := multica.Message{Type: "tool_result", Tool: e.Part.Tool, CallID: e.Part.CallID, CreatedAt: when}
+	output := ""
+	if state.Status == "error" && state.Error != "" {
+		output = state.Error
+	} else if len(state.Output) > 0 && json.Unmarshal(state.Output, &output) != nil {
+		output = string(state.Output)
+	}
+	truncated := len(output) > toolOutputPreview
+	if truncated {
+		end := toolOutputPreview
+		for !utf8.RuneStart(output[end]) {
+			end--
+		}
+		output = output[:end]
+	}
+	result.Output, result.OutputTruncated = output, &truncated
+	s.add(call, result)
+}
+
+// Native error bodies and headers can carry authorization; report status and error name only.
+func nativeFailure(e nativeEvent) error {
+	status := 0
+	if e.Error.Name == "APIError" && e.Error.Data.Status >= 400 && e.Error.Data.Status <= 599 {
+		status = e.Error.Data.Status
+	}
+	failure := &execution.AgentFailure{Status: status}
+	if status == 0 && errorName.MatchString(e.Error.Name) {
+		failure.Message = "opencode reported " + e.Error.Name
+	}
+	return failure
+}
+
+func (s *eventStream) touch() { s.active.Store(time.Now().UnixNano()) }
+
+// idle reports silence longer than the upstream OpenCode idle watchdog.
+func (s *eventStream) idle(window time.Duration) bool {
+	return time.Since(time.Unix(0, s.active.Load())) > window
+}
+
+// add sequences transcript rows; seq 1 is the controller's start message.
+func (s *eventStream) add(messages ...multica.Message) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, m := range messages {
+		s.seq++
+		m.Seq = s.seq + 1
+		s.batch = append(s.batch, m)
+	}
+}
+
+// flushEvery reports batches in the background; stop sends the tail before the terminal callback.
+func (s *eventStream) flushEvery(interval time.Duration) func() {
+	done := make(chan struct{})
+	exited := make(chan struct{})
+	go func() {
+		defer close(exited)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				s.flush()
+			case <-done:
+				return
+			}
+		}
+	}()
+	return func() {
+		close(done)
+		<-exited
+		s.flush()
+	}
+}
+
+// flush is best-effort, like the upstream daemon: reporting outages never fail the task.
+func (s *eventStream) flush() {
+	s.mu.Lock()
+	session, batch := s.pending, s.batch
+	s.pending, s.batch = "", nil
+	s.mu.Unlock()
+	if s.reporter == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), reportTimeout)
+	defer cancel()
+	if session != "" {
+		_ = s.reporter.ReportSession(ctx, s.task, session)
+	}
+	if len(batch) > 0 {
+		_ = s.reporter.ReportMessages(ctx, s.task, batch)
+	}
+}
+
+// reportUsage sends the cumulative total once; OpenCode emits no model, so attribution is the applied model.
+func (s *eventStream) reportUsage() {
+	u := s.usage
+	if s.reporter == nil || u.Input == 0 && u.Output == 0 && u.CacheRead == 0 && u.CacheWrite == 0 {
+		return
+	}
+	u.Provider, u.Model = "opencode", s.model
+	if u.Model == "" {
+		u.Model = "unknown"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), reportTimeout)
+	defer cancel()
+	_ = s.reporter.ReportUsage(ctx, s.task, u)
 }

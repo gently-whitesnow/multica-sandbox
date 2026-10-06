@@ -62,6 +62,8 @@ func TestFailureReasonsMatchUpstreamDaemon(t *testing.T) {
 		message, reason string
 	}{
 		{&execution.TimeoutError{After: time.Minute}, "opencode timed out after 1m0s", "timeout"},
+		{&execution.IdleError{After: time.Minute}, "agent produced no new messages for 1m0s; force-stopped by idle watchdog", "idle_watchdog"},
+		{&execution.AgentFailure{Message: "opencode stream ended without a terminal signal (step still open at EOF)"}, "opencode stream ended without a terminal signal (step still open at EOF)", ""},
 		{&execution.RejectedError{Err: errors.New("private detail")}, "Sandbox rejected the task before OpenCode started", "environment_prepare_failed"},
 		{fmt.Errorf("wrapped: %w", &execution.AgentFailure{Status: 429}), "Agent inference request failed (HTTP 429)", ""},
 		{errors.New("private detail"), "OpenCode execution or identity delivery failed", ""},
