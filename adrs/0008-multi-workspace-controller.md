@@ -74,7 +74,8 @@ The first fleet uses HTTP batch claims (one task per fair workspace round), a
 configurable global limit of 1–32, and one active attempt per workspace. Discovery
 runs every 10 seconds, idle heartbeats every 15 seconds, and claims every second.
 Membership loss cancels its local attempt. HTTP 403/404 scope failures remove that
-runtime; transport, protocol and cleanup uncertainty stop the entire controller.
+runtime; transient transport, 5xx, 408 and 429 errors defer that round, while
+protocol and cleanup uncertainty stop the entire controller.
 Revocation is eventually observed, not instantaneous. Active tasks also check
 server status every second; upstream membership caches can delay rejection.
 

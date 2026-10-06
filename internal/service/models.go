@@ -61,9 +61,24 @@ func (a *agentFleetAPI) Heartbeat(ctx context.Context, rt string) error {
 }
 
 func (a *agentFleetAPI) Fail(ctx context.Context, id string, cause error, result execution.Result) error {
-	var failure *execution.AgentFailure
-	if errors.As(cause, &failure) {
-		return a.AgentFail(ctx, id, failure.Status, result)
+	message, reason := failure(cause)
+	return a.AgentFail(ctx, id, message, reason, result)
+}
+
+// failure sends only safe text. Like the upstream daemon, it names structural
+// causes and leaves agent errors to Multica's classifier (empty reason).
+func failure(cause error) (string, string) {
+	var timeout *execution.TimeoutError
+	var rejected *execution.RejectedError
+	var agent *execution.AgentFailure
+	switch {
+	case errors.As(cause, &timeout):
+		return "opencode " + timeout.Error(), "timeout"
+	case errors.As(cause, &rejected):
+		return "Sandbox rejected the task before OpenCode started", "environment_prepare_failed"
+	case errors.As(cause, &agent):
+		return agent.Error(), ""
+	default:
+		return "OpenCode execution or identity delivery failed", ""
 	}
-	return a.AgentFail(ctx, id, 0, result)
 }

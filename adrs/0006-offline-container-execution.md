@@ -50,8 +50,8 @@ same daemon identity, Docker endpoint, backend configuration and lock path on
 restart. Multiple hosts or alternate lock paths are unsupported.
 
 On completion, cancellation or timeout, reap execution before the terminal API
-callback. On control-plane uncertainty or local shutdown, attempt cleanup using
-an independent bounded context and exit. Never retry or requeue locally. Backend
+callback. On unrecoverable control-plane errors or local shutdown, attempt cleanup
+using an independent bounded context and exit. Never rerun or requeue tasks locally. Backend
 start errors leave Multica recovery to the next invocation. Forced removal also
 reaps descendants and ephemeral state; unrelated owners are untouched.
 

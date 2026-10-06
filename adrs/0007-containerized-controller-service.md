@@ -19,9 +19,12 @@ the controller; workload containers retain restart=no and never serve two attemp
 
 The service discovers accessible workspaces and processes attempts through one
 shared scheduler. Global concurrency limits capacity; one accessible workspace
-uses the same execution path as many. A slot becomes available only after a
-terminal callback and confirmed cleanup. A control-plane or cleanup error exits
-rather than continuing in an uncertain state. A normal termination signal stops active execution before exit;
+uses the same execution path as many. A slot becomes available only after
+confirmed cleanup and a terminal callback that Multica acknowledged or that is
+durably queued in the state volume. Queued callbacks hold no credentials and are
+replayed with backoff, before workspace recovery on start, so recovery does not
+rerun finished work. Like the upstream daemon, transient Multica errors are retried
+or deferred; protocol violations and cleanup uncertainty exit. A normal termination signal stops active execution before exit;
 Multica reconciles the interrupted task on the next service start.
 
 Persist a shared lock and identity binding in a named volume. Configure a stable

@@ -3,6 +3,7 @@ package multica
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/gently-whitesnow/multica-sandbox/internal/execution"
 	"net/http"
@@ -98,8 +99,12 @@ func (c *Client) RenewPreparation(ctx context.Context, t Task) error {
 	}
 	return c.runtimePost(ctx, t.RuntimeID, "/tasks/"+t.ID+"/prepare-lease", nil)
 }
+
+// Start is fenced by dispatched_at, so the upstream daemon replays it on transient failure.
 func (c *Client) Start(ctx context.Context, t Task) error {
-	return c.taskPost(ctx, t.ID, "start", map[string]any{"runtime_id": t.RuntimeID, "dispatched_at": t.DispatchedAt, "capabilities": []string{}})
+	return retry(ctx, startRetry, func() error {
+		return c.taskPost(ctx, t.ID, "start", map[string]any{"runtime_id": t.RuntimeID, "dispatched_at": t.DispatchedAt, "capabilities": []string{}})
+	})
 }
 func (c *Client) Status(ctx context.Context, id string) (string, error) {
 	if !validID(id) {
@@ -114,14 +119,19 @@ func (c *Client) Status(ctx context.Context, id string) (string, error) {
 func (c *Client) Message(ctx context.Context, id string) error {
 	return c.taskPost(ctx, id, "messages", map[string]any{"messages": []map[string]any{{"seq": 1, "type": "text", "content": "Test execution started; this runtime does not implement an agent adapter.", "created_at": time.Now().UTC()}}})
 }
-func (c *Client) Complete(ctx context.Context, id string, result execution.Result) error {
-	return c.taskPost(ctx, id, "complete", map[string]string{"output": "Test execution completed; this does not complete the requested agent work."})
+func (c *Client) Complete(ctx context.Context, id string, _ execution.Result) error {
+	return c.Deliver(ctx, Terminal{Task: id, Output: "Test execution completed; this does not complete the requested agent work."})
 }
-func (c *Client) Fail(ctx context.Context, id string, _ error, _ execution.Result) error {
-	return c.taskPost(ctx, id, "fail", map[string]string{"error": "Lifecycle probe failure", "failure_reason": "execution_failed"})
+func (c *Client) Fail(ctx context.Context, id string, cause error, _ execution.Result) error {
+	t := Terminal{Task: id, Failed: true, Error: "Lifecycle probe failure"}
+	var timeout *execution.TimeoutError
+	if errors.As(cause, &timeout) {
+		t.Error, t.Reason = "Probe execution "+timeout.Error(), "timeout"
+	}
+	return c.Deliver(ctx, t)
 }
 func (c *Client) CancelAck(ctx context.Context, id string) error {
-	return c.taskPost(ctx, id, "cancel-ack", map[string]any{})
+	return retry(ctx, terminalRetry, func() error { return c.taskPost(ctx, id, "cancel-ack", map[string]any{}) })
 }
 func (c *Client) runtimePost(ctx context.Context, id, suffix string, out any) error {
 	if !validID(id) {
@@ -140,15 +150,12 @@ func (c *Client) AgentMessage(ctx context.Context, id string) error {
 	return c.taskPost(ctx, id, "messages", map[string]any{"messages": []map[string]any{{"seq": 1, "type": "text", "content": "Experimental OpenCode attempt started.", "created_at": time.Now().UTC()}}})
 }
 func (c *Client) AgentComplete(ctx context.Context, id string, result execution.Result) error {
-	return c.taskPost(ctx, id, "complete", map[string]any{"output": result.Output, "session_id": result.SessionID, "session_rollout_missing": result.Disposable})
+	return c.Deliver(ctx, Terminal{Task: id, Output: result.Output, Session: result.SessionID, Disposable: result.Disposable})
 }
 
-func (c *Client) AgentFail(ctx context.Context, id string, status int, result execution.Result) error {
-	message := "OpenCode execution or identity delivery failed"
-	if status >= 400 && status <= 599 {
-		message = fmt.Sprintf("Inference gateway request failed (HTTP %d)", status)
-	}
-	return c.taskPost(ctx, id, "fail", map[string]any{"error": message, "failure_reason": "execution_failed", "session_id": result.SessionID, "session_rollout_missing": result.Disposable})
+// AgentFail sends safe text; an empty reason lets Multica classify it as it does for its own daemon.
+func (c *Client) AgentFail(ctx context.Context, id, message, reason string, result execution.Result) error {
+	return c.Deliver(ctx, Terminal{Task: id, Failed: true, Error: message, Reason: reason, Session: result.SessionID, Disposable: result.Disposable})
 }
 
 type Repository struct {

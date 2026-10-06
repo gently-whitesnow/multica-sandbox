@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -17,12 +18,15 @@ const UpstreamRevision = "b4ca5b4a23e68b26292a680dca7689a952bb1cd5"
 const ProbeProvider = "sandbox-probe"
 
 type Client struct {
-	base  string
-	token string
-	http  *http.Client
+	base   string
+	token  string
+	http   *http.Client
+	outbox *Outbox
 }
 
 type HTTPError struct{ Status int }
+
+var errTransport = errors.New("Multica transport failed")
 
 func (e *HTTPError) Error() string {
 	return fmt.Sprintf("Multica HTTP status %d (response body withheld)", e.Status)
@@ -40,7 +44,7 @@ func New(base, token string) (*Client, error) {
 	if strings.TrimSpace(token) == "" {
 		return nil, fmt.Errorf("controller token required")
 	}
-	return &Client{strings.TrimRight(base, "/"), token, &http.Client{
+	return &Client{base: strings.TrimRight(base, "/"), token: token, http: &http.Client{
 		Timeout:       10 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}}, nil
@@ -67,7 +71,7 @@ func (c *Client) call(ctx context.Context, method, path string, body, out any) e
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		return fmt.Errorf("Multica transport failed")
+		return errTransport
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -105,4 +109,54 @@ func validID(id string) bool {
 		}
 	}
 	return true
+}
+
+// Transient mirrors the upstream daemon retry predicate: transport, 5xx, 408 and 429.
+func Transient(err error) bool {
+	var status *HTTPError
+	if errors.As(err, &status) {
+		return status.Status >= 500 || status.Status == http.StatusRequestTimeout || status.Status == http.StatusTooManyRequests
+	}
+	return errors.Is(err, errTransport)
+}
+
+func statusIs(err error, code int) bool {
+	var status *HTTPError
+	return errors.As(err, &status) && status.Status == code
+}
+
+// Conflict reports Multica's rejection of a start for a claim it no longer dispatches to us.
+func Conflict(err error) bool { return statusIs(err, http.StatusConflict) }
+
+// Missing reports a task Multica no longer has; the attempt is interrupted without a callback.
+func Missing(err error) bool { return statusIs(err, http.StatusNotFound) }
+
+// Upstream daemon schedules; N delays give N+1 attempts.
+var (
+	terminalRetry = []time.Duration{4 * time.Second, 8 * time.Second, 16 * time.Second, 32 * time.Second, 64 * time.Second}
+	startRetry    = []time.Duration{500 * time.Millisecond, 2 * time.Second}
+	retrySleep    = func(ctx context.Context, d time.Duration) error {
+		timer := time.NewTimer(d)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+)
+
+func retry(ctx context.Context, schedule []time.Duration, call func() error) error {
+	err := call()
+	for _, delay := range schedule {
+		if !Transient(err) {
+			return err
+		}
+		if waitErr := retrySleep(ctx, delay); waitErr != nil {
+			return waitErr
+		}
+		err = call()
+	}
+	return err
 }

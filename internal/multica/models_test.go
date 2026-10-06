@@ -7,7 +7,6 @@ import (
 	"github.com/gently-whitesnow/multica-sandbox/internal/execution"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 )
 
@@ -60,22 +59,25 @@ func TestDiscoveryRequiresAgentScope(t *testing.T) {
 		})
 	}
 }
-func TestFailureReportContainsOnlySafeStatus(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body struct {
-			Error string `json:"error"`
+func TestFailurePayloadLeavesClassificationToMultica(t *testing.T) {
+	for _, reason := range []string{"", "timeout"} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var body map[string]any
+			if json.NewDecoder(r.Body).Decode(&body) != nil || body["error"] != "Agent inference request failed (HTTP 403)" || body["session_id"] != "ses_fixture" {
+				t.Error("unsafe or incomplete failure payload", body)
+			}
+			if got, ok := body["failure_reason"]; ok != (reason != "") || (ok && got != reason) {
+				t.Error("failure reason not delegated", body)
+			}
+			_, _ = w.Write([]byte(`{}`))
+		}))
+		c, err := New(server.URL, "fixture")
+		if err != nil {
+			t.Fatal(err)
 		}
-		if json.NewDecoder(r.Body).Decode(&body) != nil || !strings.Contains(body.Error, "HTTP 403") {
-			t.Error("status not surfaced")
+		if err = c.AgentFail(context.Background(), testID, "Agent inference request failed (HTTP 403)", reason, execution.Result{SessionID: "ses_fixture"}); err != nil {
+			t.Fatal(err)
 		}
-		_, _ = w.Write([]byte(`{}`))
-	}))
-	defer server.Close()
-	c, err := New(server.URL, "fixture")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = c.AgentFail(context.Background(), testID, 403, execution.Result{}); err != nil {
-		t.Fatal(err)
+		server.Close()
 	}
 }

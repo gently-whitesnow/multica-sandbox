@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -27,7 +28,15 @@ func (p *Probe) launch(ctx context.Context, t multica.Task) (<-chan error, func(
 	}
 	done := make(chan error, 1)
 	waited := make(chan struct{})
-	go func() { defer close(waited); done <- run.Wait(waitCtx) }()
+	go func() {
+		defer close(waited)
+		err := run.Wait(waitCtx)
+		// The execution deadline is Multica's retryable timeout, whichever select case observes it.
+		if errors.Is(waitCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
+			err = &execution.TimeoutError{After: p.Duration}
+		}
+		done <- err
+	}()
 	var once sync.Once
 	var cleanupErr error
 	stop := func() error {

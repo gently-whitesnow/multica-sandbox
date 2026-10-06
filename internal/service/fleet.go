@@ -17,6 +17,7 @@ type fleetAPI interface {
 	Recover(context.Context, string) (multica.Recovery, error)
 	Heartbeat(context.Context, string) error
 	ClaimBatch(context.Context, string, map[string]string, int) ([]multica.Task, error)
+	Replay(context.Context) (int, error)
 }
 type completion struct {
 	runtime string
@@ -57,16 +58,20 @@ func (f *fleet) serve(ctx context.Context, capacity int, execute func(context.Co
 			}
 		}
 	}()
-	if err := f.sync(ctx); err != nil {
+	// Queued terminal reports go first, so recovery cannot rerun finished attempts.
+	f.replay(ctx)
+	if err := f.tolerate("sync", f.sync(ctx)); err != nil {
 		return err
 	}
 	fmt.Fprintf(f.out, "ready workspaces=%d capacity=%d\n", len(f.ready), capacity)
 	poll := time.NewTicker(time.Second)
 	discovery := time.NewTicker(10 * time.Second)
 	heartbeat := time.NewTicker(15 * time.Second)
+	replay := time.NewTicker(replayInterval)
 	defer poll.Stop()
 	defer discovery.Stop()
 	defer heartbeat.Stop()
+	defer replay.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -78,17 +83,19 @@ func (f *fleet) serve(ctx context.Context, capacity int, execute func(context.Co
 				return err
 			}
 		case <-discovery.C:
-			if err := f.sync(ctx); err != nil {
+			if err := f.tolerate("sync", f.sync(ctx)); err != nil {
 				return err
 			}
 		case <-heartbeat.C:
-			if err := f.beat(ctx); err != nil {
+			if err := f.tolerate("heartbeat", f.beat(ctx)); err != nil {
 				return err
 			}
 		case <-poll.C:
-			if err := f.claim(ctx, capacity, execute); err != nil {
+			if err := f.tolerate("claim", f.claim(ctx, capacity, execute)); err != nil {
 				return err
 			}
+		case <-replay.C:
+			f.replay(ctx)
 		}
 	}
 }
@@ -123,11 +130,35 @@ func (f *fleet) claim(ctx context.Context, capacity int, execute func(context.Co
 	return nil
 }
 
+const replayInterval = 5 * time.Second
+
+func (f *fleet) replay(ctx context.Context) {
+	delivered, err := f.api.Replay(ctx)
+	if delivered > 0 {
+		fmt.Fprintf(f.out, "replayed terminal reports=%d\n", delivered)
+	}
+	if err != nil && ctx.Err() == nil {
+		fmt.Fprintf(f.out, "terminal report replay failed: %v\n", err)
+	}
+}
+
+// tolerate keeps the controller serving through transient Multica errors, as the upstream daemon does.
+func (f *fleet) tolerate(stage string, err error) error {
+	if err == nil || !multica.Transient(err) {
+		return err
+	}
+	fmt.Fprintf(f.out, "deferred %s: %v\n", stage, err)
+	return nil
+}
+
 func (f *fleet) completed(done completion) error {
 	if done.err == nil || done.err == context.Canceled {
 		return nil
 	}
 	var cleanup *controller.CleanupError
+	if !errors.As(done.err, &cleanup) && f.tolerate("attempt runtime="+done.runtime, done.err) == nil {
+		return nil
+	}
 	if inaccessible(done.err) && !errors.As(done.err, &cleanup) {
 		for ws, rt := range f.ready {
 			if rt == done.runtime {
