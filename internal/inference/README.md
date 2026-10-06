@@ -4,8 +4,6 @@ The optional external OpenAI-compatible gateway owns model access, quotas, budge
 and provider routing. The controller delivers short-lived identity and maps trusted
 Multica `agent.model` / `agent.thinking_level` from the claim into native OpenCode.
 Those fields express selection, not permission. MCP uses its separate OAuth store.
-Migration: remove `server` from identity/inference files and move binding `model` /
-`models` into a separate catalog/default entry; recipient bindings keep URL/issuer.
 
 Set `opencode.inference_file` to an absolute configuration path. It names an
 `identity_file`, approved `gateways` (URL/issuer pairs), and either static `bindings`
@@ -23,7 +21,7 @@ access, and catalog changes do not interrupt identity renewal.
 Recipient sources receive `{version: 1, agent: {server, workspace_id, agent_id}}`
 and return the exact echoed reference and `target: {url, issuer}`. Catalog sources
 receive `{version: 1, workspace: {server, workspace_id}}` and return the echoed
-`workspace` and `catalog`. Agent-scoped catalog entries are rejected.
+`workspace` and `catalog`.
 Unknown fields, credentials, mismatched references, oversized responses and
 redirects fail the relevant resolution. The approved URL/issuer boundary remains
 mandatory for identity delivery; the catalog is advisory.

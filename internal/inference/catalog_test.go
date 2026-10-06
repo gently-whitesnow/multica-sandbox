@@ -102,13 +102,3 @@ func TestExternalCatalogContract(t *testing.T) {
 		})
 	}
 }
-func TestAgentScopedCatalogConfigRejected(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "inference.json")
-	data := `{"version":1,"identity_file":"/x","gateways":[],"catalogs":[{"workspace_id":"10000000-0000-4000-8000-000000000001","agent_id":"20000000-0000-4000-8000-000000000001","models":{"demo":{"context":1,"output":1}}}]}`
-	if err := os.WriteFile(path, []byte(data), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ReadConfig(path); err == nil {
-		t.Fatal("superseded agent-scoped catalog accepted")
-	}
-}

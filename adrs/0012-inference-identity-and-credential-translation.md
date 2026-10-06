@@ -98,8 +98,7 @@ both from trusted configuration and registration, never from the request. This
 avoids an upstream fork and a union of agent catalogs: agent-specific grants stay in
 the gateway, which refuses an ungranted selection at task time; Multica shows the
 refusal and the adapter does not substitute a model. Results use upstream's report
-shape; context/output stay native OpenCode metadata. Agent-scoped catalog bindings
-and the external `agent` catalog request are rejected. Agent-specific picker lists
+shape; context/output stay native OpenCode metadata. Agent-specific picker lists
 would need upstream request, cache and UI scoping and remain out of scope.
 
 The adapter separates catalog/defaults from task selections and identity renewal.

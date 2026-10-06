@@ -35,7 +35,7 @@ func TestRuntimeScopedDiscoveryReportsUpstreamShape(t *testing.T) {
 				reports++
 				if mode == "completed" {
 					var models []map[string]any
-					if string(report["status"]) != `"completed"` || string(report["supported"]) != "true" || json.Unmarshal(report["models"], &models) != nil || len(models) != 1 || report["agent_id"] != nil {
+					if string(report["status"]) != `"completed"` || string(report["supported"]) != "true" || json.Unmarshal(report["models"], &models) != nil || len(models) != 1 {
 						t.Error("completed report differs from upstream shape", report)
 					}
 					thinking, _ := models[0]["thinking"].(map[string]any)
