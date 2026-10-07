@@ -18,7 +18,7 @@ import (
 	"github.com/gently-whitesnow/multica-sandbox/internal/opencode"
 )
 
-const opencodeImage = "ghcr.io/anomalyco/opencode:1.18.34@sha256:b34342987ca889fc2cc19cbc046eefc2418e5980a3d696e209fbb401a288f631"
+const opencodeImage = "ghcr.io/anomalyco/opencode:1.18.35@sha256:ae90ec960c871b0ea6df9abc1c2ec1e6b36464e8eca9b0e71e1ed3b553f47aa2"
 
 type rotationStatus struct {
 	sync.Mutex

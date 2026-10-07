@@ -34,6 +34,7 @@ func (b *Backend) Validate(ctx context.Context) error {
 		return err
 	}
 	var info struct {
+		Architecture                                                 string
 		OSType, CgroupVersion                                        string
 		MemoryLimit, SwapLimit, PidsLimit, CpuCfsPeriod, CpuCfsQuota bool
 		SecurityOptions                                              []string
@@ -44,18 +45,44 @@ func (b *Backend) Validate(ctx context.Context) error {
 	if info.OSType != "linux" || info.CgroupVersion != "2" || !info.MemoryLimit || !info.SwapLimit || !info.PidsLimit || !info.CpuCfsPeriod || !info.CpuCfsQuota || !strings.Contains(strings.Join(info.SecurityOptions, ","), "name=seccomp,profile=builtin") {
 		return fmt.Errorf("Linux cgroup v2, resource controllers and builtin seccomp required")
 	}
-	data, err = command(ctx, "image", "inspect", b.Image, "--format", "{{json .Config}}")
+	data, err = command(ctx, "image", "inspect", b.Image, "--format", "{{json .}}")
 	if err != nil {
 		return fmt.Errorf("preload the pinned image: %w", err)
 	}
-	var config struct{ Volumes map[string]json.RawMessage }
-	if err = json.Unmarshal(data, &config); err != nil {
+	var image struct {
+		Os, Architecture string
+		Config           struct{ Volumes map[string]json.RawMessage }
+	}
+	if err = json.Unmarshal(data, &image); err != nil {
 		return err
 	}
-	if len(config.Volumes) > 0 {
+	if host := engineArchitectures[info.Architecture]; image.Os != "linux" || host == "" || image.Architecture != host {
+		return fmt.Errorf("image platform %.16s/%.16s does not match the Docker engine %.16s", image.Os, image.Architecture, info.Architecture)
+	}
+	if len(image.Config.Volumes) > 0 {
 		return fmt.Errorf("image-declared volumes are unsupported")
 	}
 	return nil
+}
+
+// engineArchitectures maps Docker engine (uname) names to OCI platform names; emulation is unsupported.
+var engineArchitectures = map[string]string{"x86_64": "amd64", "aarch64": "arm64"}
+
+// Output inspects the image in a hardened, offline, short-lived container and returns its bounded stdout.
+func (b *Backend) Output(ctx context.Context, args []string) ([]byte, error) {
+	probe := Backend{Image: b.Image, Owner: b.Owner, Command: args}
+	if err := probe.Validate(ctx); err != nil {
+		return nil, err
+	}
+	r := &run{name: probe.name("image-inspection")}
+	if _, err := command(ctx, probe.createArgs(r.name)...); err != nil {
+		return nil, errors.Join(err, probe.cleanupUncertainCreate(r))
+	}
+	if err := r.check(ctx); err != nil {
+		return nil, errors.Join(err, r.cleanup())
+	}
+	data, err := command(ctx, "start", "--attach", r.name)
+	return data, errors.Join(err, r.cleanup())
 }
 func (b *Backend) Reconcile(ctx context.Context) error {
 	if !ownerPattern.MatchString(b.Owner) {

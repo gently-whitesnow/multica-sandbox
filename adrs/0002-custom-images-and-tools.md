@@ -38,9 +38,24 @@ With the Multica relay (ADR 0014), the OpenCode adapter also requires the upstre
 `multica` CLI from the pinned Multica revision on `PATH`; `examples/agent-image`
 adds it to the pinned OpenCode image without credentials.
 
+Refinement (#4, 2026-10-07). Upstream Multica has no image concept: its daemon
+runs on the user's host and executes agent CLIs from `PATH` above a minimum version,
+branching on major versions (`pkg/agent/version.go`, `opencode_v2.go` at `b4ca5b4`).
+We keep that ownership: the image contains the agent and its runtime. Injecting
+agents into foreign images is rejected because every future agent would bring its
+own libc and runtime constraints. Adapters list conformance-verified agent versions,
+starting from the latest stable release, and refuse others; there is no override.
+The controller never builds Dockerfiles; images come from the user's build system by
+digest. It inspects the image once at startup in a hardened offline container and
+reports every incompatibility; the digest makes per-attempt checks redundant. Image
+`ENV`, files and metadata that would override adapter projection are incompatibilities,
+not policy inputs. The `multica` CLI belongs to the controller's Multica contract
+and moves from the image to controller delivery in a later slice.
+
 ## Consequences
 
 Users can bring their own images and tools without modifying the runtime. We own
 the default image, manifest validation and runner compatibility checks; users own
-their custom artifacts and dependencies. These are planned contracts, not yet an
-implemented configuration schema or published image.
+their custom artifacts and dependencies. The OpenCode image contract is implemented
+(`internal/opencode/README.md`); the environment manifest, tool bundles and
+published base image remain planned.

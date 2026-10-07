@@ -37,7 +37,7 @@ func setup(ctx context.Context) error {
 	var registered struct {
 		Runtimes []runtime `json:"runtimes"`
 	}
-	err = control(ctx, c, "POST", "/api/daemon/register", map[string]any{"workspace_id": workspace, "daemon_id": daemonID, "device_name": "E2E fixture", "runtimes": []map[string]string{{"name": "OpenCode E2E example", "type": "opencode", "version": "1.18.34", "status": "online"}}}, &registered)
+	err = control(ctx, c, "POST", "/api/daemon/register", map[string]any{"workspace_id": workspace, "daemon_id": daemonID, "device_name": "E2E fixture", "runtimes": []map[string]string{{"name": "OpenCode E2E example", "type": "opencode", "version": "1.18.35", "status": "online"}}}, &registered)
 	if err != nil {
 		return err
 	}

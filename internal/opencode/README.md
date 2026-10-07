@@ -2,8 +2,8 @@
 
 The persistent controller's opt-in OpenCode path projects trusted Multica task
 context, acquires verified identity and rotates the native MCP OAuth store during
-one disposable attempt. OpenCode is pinned to 1.18.34 (source `aec0b9a6`); a version
-check precedes execution, including for user-supplied images. Optional inference uses the workspace-key relay from ADR 0012. The [conformance](#conformance) section lists pinned versions, verified behavior with its tests and explicit limitations.
+one disposable attempt. Images are user-owned; the controller
+inspects the digest-pinned image once at startup against the [image contract](#image-contract). Optional inference uses the workspace-key relay from ADR 0012. The [conformance](#conformance) section lists pinned versions, verified behavior with its tests and explicit limitations.
 
 ```mermaid
 flowchart TD
@@ -34,6 +34,24 @@ No inference/provider credential is permitted in an image or command; managed
 inference uses `inference_file` and `inference_relay`; see
 [`internal/inference`](../inference/README.md). The fixture supplies a mock provider from
 trusted test configuration solely to exercise tool turns without a subscription.
+
+## Image contract
+
+Users build images in their own CI; the controller never builds Dockerfiles or pulls.
+At startup it runs `ImageProbe` in a hardened offline container and fails closed
+with every incompatibility. A compatible image:
+
+- matches the Docker engine platform (`linux/amd64` or `linux/arm64`) and declares no volumes;
+- has `/bin/sh` with `sleep`, `mkdir`, `cat`, `chmod`, `mv`, and `opencode` on `PATH`
+  reporting a verified version (`Supported` in `image.go`); `multica` too with `multica_relay`;
+- ships no `/etc/opencode`, `/opencode.json[c]` or `/.opencode`, which OpenCode merges
+  over the projected configuration, and no `OPENCODE_*` or `MULTICA_*` image `ENV`;
+- runs as uid 65532 on a read-only rootfs without network: `HOME` and `XDG_*` are
+  in the `/workspace` tmpfs, `/tmp` is `noexec`; install tools at build time;
+- carries no secrets: everything in the image is visible to the agent.
+
+Entrypoint, command, `USER` and `HEALTHCHECK` are ignored. The version check is a
+compatibility contract, not a security boundary: host policy holds for any image.
 
 ## Multica API relay
 
@@ -77,7 +95,7 @@ cleanup and use a durable at-least-once queue.
 Supported means this path only: persistent controller, Docker projected backend,
 native OpenCode. Evidence is fixture-based for the pinned stack, not production
 certification. Pins: Multica `b4ca5b4a23e68b26292a680dca7689a952bb1cd5`
-(unmodified); OpenCode 1.18.34 (`aec0b9a6`, image digest); LiteLLM v1.104.0 with
+(unmodified); OpenCode 1.18.34 (`aec0b9a6`) and 1.18.35 (`53d1eabb`), image digests; LiteLLM v1.104.0 with
 Postgres virtual keys; Keycloak 26.8.0; MCP Go SDK 1.8.0; go-oidc 3.21.0; Docker
 Engine 29.2.1 (runc, cgroup v2). Reproduce with `MULTICA_SOURCE=<checkout>` and
 `VERIFY_CONTAINERS=1 VERIFY_SERVICE=1 VERIFY_OPENCODE=1 VERIFY_INFERENCE=1 VERIFY_IDENTITY=1 ./verify.sh`.
@@ -97,6 +115,7 @@ Engine 29.2.1 (runc, cgroup v2). Reproduce with `MULTICA_SOURCE=<checkout>` and
 | Multica relay: opaque credential, token-minting denied | `internal/relay` tests; `integration/multica_relay_test.go` |
 | Workspace keys: spoofing, cross-workspace, forged/ended, key change, stream revocation, 403/422 without substitution | `internal/inference`, `internal/relay` tests; `inference.go` (INFERENCE); `integration/inference_test.go` |
 | No `mat_`/gateway/provider key in attempt env/files, logs, transcript, comments, results | `integration/multica_relay_test.go`, `inferenceCredential` |
+| User images: unsupported version, OpenCode config overrides, reserved `ENV`, missing CLI, volumes and platform rejected; `USER`, setuid and entrypoint cannot change identity | `image_test.go`, `create_failure_test.go` (CONTAINERS) |
 | Hostile workload: no capabilities/sockets/secrets/metadata, limits, no route, external DNS, IPv6 or other attempt | `internal/docker/backend_test.go`, `projected_test.go` (CONTAINERS) |
 
 Deployment-owned, verified only as integration contracts: production egress
@@ -107,7 +126,8 @@ routing. Revocation denies new MCP operations but does not cancel MCP work in
 flight; relay streams are cancelled. While the controller is down no backend
 deadline exists; Kubernetes deadlines and distributed ownership are #6.
 
-Limitations: OpenCode 1.18.34 only; other agents need their own conformance.
+Limitations: verified OpenCode releases only (`Supported`); 2.x is unsupported
+because upstream cannot deliver MCP to it safely; other agents need their own conformance.
 Every attempt has a fresh session; resume is unsupported. Only issue tasks use the
 upstream prompt and `multica` CLI; chat and other kinds use the bounded legacy
 prompt. Unsupported: repository checkout, project resources, skills, broker MCP
@@ -120,7 +140,7 @@ attempt minus denied routes. Tests seed tasks in the database, not the UI.
 Local digest-pinned images need the containerd image store. External DNS denial
 on internal networks is engine behavior: re-run `VERIFY_CONTAINERS=1` after
 Docker upgrades. Do not fill gaps with a sandbox Git service, session store, IAM,
-tools or policy engine; images/tools are #4.
+tools or policy engine; tool bundles are #4.
 
 Inspection sources: Multica `server/internal/daemon/{types,client,prompt}.go`,
 `server/internal/handler/daemon.go`, `server/pkg/agent/opencode.go`; OpenCode
