@@ -35,8 +35,7 @@ the runner version and effective environment manifest in preparation cache keys.
 Keep registry credentials and runtime secrets outside images, manifests and caches.
 Docker and Kubernetes backends implement the same environment contract.
 With the Multica relay (ADR 0014), the OpenCode adapter also requires the upstream
-`multica` CLI from the pinned Multica revision on `PATH`; `examples/agent-image`
-adds it to the pinned OpenCode image without credentials.
+`multica` CLI from the pinned Multica revision; the controller delivers it as a bundle.
 
 Refinement (#4, 2026-10-07). Upstream Multica has no image concept: its daemon
 runs on the user's host and executes agent CLIs from `PATH` above a minimum version,
@@ -49,13 +48,35 @@ The controller never builds Dockerfiles; images come from the user's build syste
 digest. It inspects the image once at startup in a hardened offline container and
 reports every incompatibility; the digest makes per-attempt checks redundant. Image
 `ENV`, files and metadata that would override adapter projection are incompatibilities,
-not policy inputs. The `multica` CLI belongs to the controller's Multica contract
-and moves from the image to controller delivery in a later slice.
+not policy inputs. The `multica` CLI belongs to the controller's Multica contract,
+not to the image.
+
+Refinement (#41, 2026-10-07). Controller artifacts are digest-pinned OCI images
+mounted read-only with Docker image mounts (`--mount type=image`) under the reserved
+`/opt/multica-sandbox/<name>`; each `bin` directory precedes the image `PATH`. The
+first artifact is the `multica` CLI (`deploy/multica-cli.Dockerfile`); tool bundles
+reuse the mechanism. Verified on Docker Engine 29.2.1 (containerd store, arm64):
+with `--pull=never`, an absent digest fails at create and references resolve only
+as `repository@digest`; the mount is always read-only, ignoring `readonly=false`;
+binaries execute as the attempt user; `inspect` reports exactly the requested image
+mount, so the policy accepts only that mount and its `PATH`. Docker sets neither
+`nosuid` nor `nodev`: without `no-new-privileges` a setuid artifact binary gained
+euid 0, with the attempt policy it did not. Zero capabilities and the device cgroup
+cover devices. The CLI marks image mounts experimental; re-run conformance on engine
+upgrades. Startup inspection runs with the mounts and requires `multica` to resolve
+to the artifact built from the pinned revision.
+Rejected: a named volume populated from the image (mutable, not bound to a digest
+at mount time, needs its own lifecycle); streaming into `/workspace` (writable by
+the agent, copied per attempt into the size-limited tmpfs, unsuitable for bundles);
+`--volumes-from` (needs image `VOLUME`, yields writable copies); host bind mounts
+(the controller runs in a container). Kubernetes `image` volumes (stable in 1.36,
+read-only, `pullPolicy: Never`) are the counterpart for #6; their exec and `nosuid`
+semantics must be verified on the selected runtime.
 
 ## Consequences
 
 Users can bring their own images and tools without modifying the runtime. We own
 the default image, manifest validation and runner compatibility checks; users own
-their custom artifacts and dependencies. The OpenCode image contract is implemented
-(`internal/opencode/README.md`); the environment manifest, tool bundles and
-published base image remain planned.
+their custom artifacts and dependencies. The OpenCode image contract and the
+controller-delivered CLI are implemented (`internal/opencode/README.md`); the
+environment manifest, user tool bundles and published base image remain planned.

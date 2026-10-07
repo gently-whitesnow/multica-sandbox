@@ -19,6 +19,9 @@ import (
 	"github.com/gently-whitesnow/multica-sandbox/internal/service"
 )
 
+// officialImage is the verified upstream OpenCode image, used without changes.
+const officialImage = "ghcr.io/anomalyco/opencode:1.18.35@sha256:ae90ec960c871b0ea6df9abc1c2ec1e6b36464e8eca9b0e71e1ed3b553f47aa2"
+
 func managedMCPService(t *testing.T, api *multica.Client) {
 	if os.Getenv("VERIFY_OPENCODE") != "1" || os.Getenv("VERIFY_SERVICE") != "1" {
 		t.Skip("set VERIFY_SERVICE=1 VERIFY_OPENCODE=1 for real controller/MCP tasks")
@@ -44,7 +47,7 @@ func managedMCPService(t *testing.T, api *multica.Client) {
 	writeJSON(t, filepath.Join(dir, "identity.json"), binding)
 	// This credential-free mock model is trusted fixture configuration, outside claim data.
 	command := `OPENCODE_CONFIG_CONTENT='{"model":"fixture/fixture","enabled_providers":["fixture"],"provider":{"fixture":{"npm":"@ai-sdk/openai-compatible","name":"Fixture","options":{"baseURL":"http://gateway:8080/v1"},"models":{"fixture":{"name":"Fixture","limit":{"context":64000,"output":4096}}}}}}' exec opencode run --format json "$(cat /workspace/prompt.txt)"`
-	c := service.Config{Server: "http://127.0.0.1:8080", Daemon: controller, Image: "ghcr.io/anomalyco/opencode:1.18.35@sha256:ae90ec960c871b0ea6df9abc1c2ec1e6b36464e8eca9b0e71e1ed3b553f47aa2", Command: []string{"/bin/sh", "-c", command}, Timeout: "180s", OpenCode: &service.OpenCodeConfig{IdentityFile: "/etc/multica-sandbox/identity.json", Authority: attempt.Config{URL: "http://gateway:8080/attempts", BearerFile: "/identity-secrets/admin", AllowHTTP: true}, Network: project + "_execution", Peers: []string{project + "-gateway-1"}}}
+	c := service.Config{Server: "http://127.0.0.1:8080", Daemon: controller, Image: officialImage, Command: []string{"/bin/sh", "-c", command}, Timeout: "180s", OpenCode: &service.OpenCodeConfig{IdentityFile: "/etc/multica-sandbox/identity.json", Authority: attempt.Config{URL: "http://gateway:8080/attempts", BearerFile: "/identity-secrets/admin", AllowHTTP: true}, Network: project + "_execution", Peers: []string{project + "-gateway-1"}}}
 	f := prepareManagedService(t, dir, c, project+"_credentials")
 	cid := f.compose("ps", "-q", "controller")
 	eventually(t, "OpenCode runtime registration", func() bool { return strings.Contains(dockerTest(t, "logs", cid), "ready workspaces=") })

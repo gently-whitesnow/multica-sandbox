@@ -26,7 +26,8 @@ func TestProjectedAttemptIsolation(t *testing.T) {
 	}
 	invoke("network", "create", "--internal", template)
 	invoke("run", "-d", "--name", peer, "--network", template, "--network-alias", "gateway", testImage, "sleep", "600")
-	backend := &Projected{Backend: Backend{Image: testImage, Owner: owner, Command: []string{"/bin/sh"}}, Network: template, Peers: []string{peer}}
+	backend := &Projected{Backend: Backend{Image: testImage, Owner: owner, Command: []string{"/bin/sh"}}, Network: template, Peers: []string{peer},
+		Bundles: []Bundle{{Image: cliBundle(t, pinnedCLI), Target: "/opt/multica-sandbox/multica"}}}
 	t.Cleanup(func() {
 		_ = backend.Reconcile(context.Background())
 		_, _ = command(context.Background(), "rm", "-fv", peer)
@@ -42,6 +43,10 @@ func TestProjectedAttemptIsolation(t *testing.T) {
 	}
 	if err := a.Write(ctx, "/workspace/data/opencode/mcp-auth.json", []byte(`{"a":"private-a"}`)); err != nil {
 		t.Fatal(err)
+	}
+	// Exec sessions inherit the controller PATH; the mounted CLI stays read-only.
+	if err := b.Execute(ctx, []string{"/bin/sh", "-c", `set -e; test "$(command -v multica)" = /opt/multica-sandbox/multica/bin/multica; multica >/dev/null; ! touch /opt/multica-sandbox/multica/bin/x`}); err != nil {
+		t.Fatal("controller CLI is not the read-only PATH entry:", err)
 	}
 	if err := b.Execute(ctx, []string{"/bin/sh", "-c", `test ! -e /workspace/data/opencode/mcp-auth.json; test ! -e /var/run/docker.sock; test ! -e /run/secrets; ! wget -T 1 -q -O /tmp/leak http://169.254.169.254/; ! wget -T 1 -q -O /tmp/leak http://1.1.1.1/`}); err != nil {
 		t.Fatal(err)

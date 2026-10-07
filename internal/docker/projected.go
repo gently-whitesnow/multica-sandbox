@@ -24,6 +24,7 @@ type Projected struct {
 	Backend
 	Network string
 	Peers   []string
+	Bundles []Bundle
 }
 
 func (b *Projected) ValidateNetwork(ctx context.Context) error {
@@ -65,7 +66,8 @@ func (b *Projected) ValidateNetwork(ctx context.Context) error {
 }
 
 func (b *Projected) Start(ctx context.Context, attempt string) (execution.ProjectedRun, error) {
-	if err := b.Validate(ctx); err != nil {
+	bundles, path, err := b.prepare(ctx)
+	if err != nil {
 		return nil, err
 	}
 	if err := b.ValidateNetwork(ctx); err != nil {
@@ -82,7 +84,7 @@ func (b *Projected) Start(ctx context.Context, attempt string) (execution.Projec
 		defer cancel()
 		return projection.Remove(cleanCtx)
 	}
-	args := attemptLimits(b.createArgs(r.name), isolated)
+	args := attemptLimits(b.createArgs(r.name, bundles...), isolated)
 	// The holding process never handles tokens or executes task-supplied shell text.
 	args = args[:len(args)-len(b.Command)-2]
 	args = append(args, "--env=XDG_DATA_HOME=/workspace/data", "--env=XDG_CONFIG_HOME=/workspace/config", "--env=XDG_CACHE_HOME=/workspace/cache", "--env=XDG_STATE_HOME=/workspace/state", "--env=OPENCODE_DISABLE_AUTOUPDATE=true", "--env=OPENCODE_DISABLE_MODELS_FETCH=true", "--env=OPENCODE_DISABLE_DEFAULT_PLUGINS=true", "--env=OPENCODE_DISABLE_LSP_DOWNLOAD=true", "--entrypoint", "/bin/sh", b.Image, "-c", "exec sleep 86400")
@@ -91,7 +93,7 @@ func (b *Projected) Start(ctx context.Context, attempt string) (execution.Projec
 	}
 	data, err := command(ctx, "inspect", r.name)
 	if err == nil {
-		err = checkProjectedPolicy(data, isolated)
+		err = checkProjectedPolicy(data, isolated, b.Bundles, path)
 	}
 	if err != nil {
 		return nil, errors.Join(err, cleanup())
@@ -104,17 +106,18 @@ func (b *Projected) Start(ctx context.Context, attempt string) (execution.Projec
 
 // Output inspects the agent image offline within attempt resource limits and returns its bounded stdout.
 func (b *Projected) Output(ctx context.Context, args []string) ([]byte, error) {
-	probe := Backend{Image: b.Image, Owner: b.Owner, Command: args}
-	if err := probe.Validate(ctx); err != nil {
+	probe := Projected{Backend: Backend{Image: b.Image, Owner: b.Owner, Command: args}, Bundles: b.Bundles}
+	bundles, path, err := probe.prepare(ctx)
+	if err != nil {
 		return nil, err
 	}
 	r := &run{name: probe.name("image-inspection")}
-	if _, err := command(ctx, attemptLimits(probe.createArgs(r.name), "none")...); err != nil {
+	if _, err := command(ctx, attemptLimits(probe.createArgs(r.name, bundles...), "none")...); err != nil {
 		return nil, errors.Join(err, probe.cleanupUncertainCreate(r))
 	}
 	data, err := command(ctx, "inspect", r.name)
 	if err == nil {
-		err = checkProjectedPolicy(data, "none")
+		err = checkProjectedPolicy(data, "none", b.Bundles, path)
 	}
 	if err != nil {
 		return nil, errors.Join(err, r.cleanup())

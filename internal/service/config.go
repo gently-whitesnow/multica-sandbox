@@ -63,6 +63,8 @@ type OpenCodeConfig struct {
 	Network      string         `json:"network"`
 	Peers        []string       `json:"peers"`
 	MulticaRelay *RelayConfig   `json:"multica_relay,omitempty"`
+	// MulticaCLI is the digest-pinned CLI artifact the relay requires (deploy/multica-cli.Dockerfile).
+	MulticaCLI string `json:"multica_cli,omitempty"`
 	// InferenceFile holds workspace gateway bindings; InferenceRelay is required with it.
 	InferenceFile  string       `json:"inference_file,omitempty"`
 	InferenceRelay *RelayConfig `json:"inference_relay,omitempty"`

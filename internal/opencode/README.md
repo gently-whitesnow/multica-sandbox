@@ -44,7 +44,7 @@ unrelated base with the released glibc OpenCode build. A compatible image:
 
 - matches the Docker engine platform (`linux/amd64` or `linux/arm64`) and declares no volumes;
 - has `/bin/sh` with `sleep`, `mkdir`, `cat`, `chmod`, `mv`, and `opencode` on `PATH`
-  reporting a verified version (`Supported` in `image.go`); `multica` too with `multica_relay`;
+  reporting a verified version (`Supported` in `image.go`); `/opt/multica-sandbox` is reserved;
 - ships no `/etc/opencode`, `/opencode.json[c]` or `/.opencode`, which OpenCode merges
   over the projected configuration, and no `OPENCODE_*` or `MULTICA_*` image `ENV`;
 - runs as uid 65532 on a read-only rootfs without network: `HOME` and `XDG_*` are
@@ -56,7 +56,7 @@ compatibility contract, not a security boundary: host policy holds for any image
 
 ## Multica API relay
 
-`multica_relay` (`listen`, `url`) enables ADR 0014: the controller relays the upstream `multica` CLI to its configured Multica origin, replacing a per-attempt `mat_relay_` credential with the claim's `mat_` token held only in memory. Add the controller container to the template `peers` with the alias named by `url`; Multica stays on the control network. The image must contain `multica` built from the pinned revision (`examples/agent-image`). Issue tasks then receive the upstream prompt, an `AGENTS.md` brief, the `MULTICA_*` environment and in-container `bash`/file tools. Grants end at cleanup or controller restart; credential-minting, daemon and account routes are denied.
+`multica_relay` (`listen`, `url`) enables ADR 0014: the controller relays the upstream `multica` CLI to its configured Multica origin, replacing a per-attempt `mat_relay_` credential with the claim's `mat_` token held only in memory. Add the controller container to the template `peers` with the alias named by `url`; Multica stays on the control network. `multica_cli` names the CLI artifact built by `deploy/multica-cli.Dockerfile` from the pinned revision; preload it by digest like the agent image. The controller mounts it read-only at `/opt/multica-sandbox/multica` (Docker image mount, ADR 0002) first on `PATH`, so image copies or `PATH` cannot shadow it, and requires `multica` to resolve to it at startup; images need no `multica`. Issue tasks then receive the upstream prompt, an `AGENTS.md` brief, the `MULTICA_*` environment and in-container `bash`/file tools. Grants end at cleanup or controller restart; credential-minting, daemon and account routes are denied.
 
 ## External authority adapter
 
@@ -113,36 +113,36 @@ Engine 29.2.1 (runc, cgroup v2). Reproduce with `MULTICA_SOURCE=<checkout>` and
 | Issuer/resolver outage; ended JWTs denied before expiry | `examples/identity-mcp/rotation_failures.go` (OPENCODE) |
 | 15 s outage lease; no fingerprint move or re-enrollment | `examples/identity-mcp/rotation_lease.go` (OPENCODE) |
 | MCP checks resource/attempt/workspace per call | `examples/identity-mcp/scenario.go` (IDENTITY) |
-| Multica relay: opaque credential, token-minting denied | `internal/relay` tests; `integration/multica_relay_test.go` |
+| Multica relay: opaque credential, token-minting denied; controller CLI is a read-only image mount first on `PATH`, image `multica`/`PATH` cannot shadow it; writes, extra or altered mounts, unpinned, absent and wrong-revision artifacts rejected | `internal/relay` tests; `policy_test.go`; `image_test.go`, `projected_test.go` (CONTAINERS); `integration/multica_relay_test.go` |
 | Workspace keys: spoofing, cross-workspace, forged/ended, key change, stream revocation, 403/422 without substitution | `internal/inference`, `internal/relay` tests; `inference.go` (INFERENCE); `integration/inference_test.go` |
 | No `mat_`/gateway/provider key in attempt env/files, logs, transcript, comments, results | `integration/multica_relay_test.go`, `inferenceCredential` |
-| User images: unsupported version, OpenCode config overrides, reserved `ENV`, missing CLI, volumes and platform rejected; `USER`, setuid and entrypoint cannot change identity | `image_test.go`, `create_failure_test.go` (CONTAINERS) |
-| Unrelated base: Debian with released OpenCode completes the relay, inference and restart path; attempt probes run from a sidecar, not image tools | `examples/agent-image/debian.Dockerfile`; `integration/multica_relay_test.go` (SERVICE, OPENCODE) |
+| User images: unsupported version, OpenCode config overrides, reserved `ENV`, volumes and platform rejected; `USER`, setuid and entrypoint cannot change identity | `image_test.go`, `create_failure_test.go` (CONTAINERS) |
+| Unrelated base: Debian with released OpenCode completes the relay, inference and restart path; the unchanged official image completes the relay; neither contains `multica`; attempt probes run from a sidecar, not image tools | `examples/agent-image/debian.Dockerfile`; `integration/multica_relay_test.go` (SERVICE, OPENCODE) |
 | Hostile workload: no capabilities/sockets/secrets/metadata, limits, no route, external DNS, IPv6 or other attempt | `internal/docker/backend_test.go`, `projected_test.go` (CONTAINERS) |
 
-Deployment-owned, verified only as integration contracts: production egress
-policy, attempt-network TLS, host and kernel hardening (gVisor/Kata/Sysbox);
-workload attestation and the attempt authority (this repository ships fixture
-plumbing); MCP tool/role/resource authorization; gateway grants, budgets and
-routing. Revocation denies new MCP operations but does not cancel MCP work in
-flight; relay streams are cancelled. While the controller is down no backend
-deadline exists; Kubernetes deadlines and distributed ownership are #6.
+Deployment-owned, verified only as integration contracts: production egress policy,
+attempt-network TLS, host and kernel hardening (gVisor/Kata/Sysbox); workload
+attestation and the attempt authority (this repository ships fixture plumbing); MCP
+tool/role/resource authorization; gateway grants, budgets and routing. Revocation denies
+new MCP operations but does not cancel MCP work in flight; relay streams are cancelled.
+While the controller is down no backend deadline exists; Kubernetes deadlines and
+distributed ownership are #6.
 
-Limitations: verified OpenCode releases only (`Supported`); 2.x is unsupported
-because upstream cannot deliver MCP to it safely; other agents need their own conformance.
-Every attempt has a fresh session; resume is unsupported. Only issue tasks use the
-upstream prompt and `multica` CLI; chat and other kinds use the bounded legacy
-prompt. Unsupported: repository checkout, project resources, skills, broker MCP
-connections, connected apps, artifact publication, chat/autopilot/quick-create CLI
-workflows. Discovery entries lack context/output; pickers and inference grants
-are per workspace. Native retries, including HTTP 429, stay native; fixture token
-counts are not billing evidence; LiteLLM does not record auth-stage refusals per
-end user. The Multica relay credential keeps upstream agent authority for the
-attempt minus denied routes. Tests seed tasks in the database, not the UI.
-Local digest-pinned images need the containerd image store. External DNS denial
-on internal networks is engine behavior: re-run `VERIFY_CONTAINERS=1` after
-Docker upgrades. Do not fill gaps with a sandbox Git service, session store, IAM,
-tools or policy engine; tool bundles are #4.
+Limitations: verified OpenCode releases only (`Supported`); 2.x is unsupported because
+upstream cannot deliver MCP to it safely; other agents need their own conformance. Every
+attempt has a fresh session; resume is unsupported. Only issue tasks use the upstream
+prompt and `multica` CLI; chat and other kinds use the bounded legacy prompt.
+Unsupported: repository checkout, project resources, skills, broker MCP connections,
+connected apps, artifact publication, chat/autopilot/quick-create CLI workflows.
+Discovery entries lack context/output; pickers and inference grants are per workspace.
+Native retries, including HTTP 429, stay native; fixture token counts are not billing
+evidence; LiteLLM does not record auth-stage refusals per end user. The Multica relay
+credential keeps upstream agent authority for the attempt minus denied routes. Tests
+seed tasks in the database, not the UI. Local digest-pinned images need the containerd
+image store. Image mounts are experimental in Docker and lack `nosuid`/`nodev` (host
+policy covers both); they and external DNS denial on internal networks are engine
+behavior: re-run `VERIFY_CONTAINERS=1` after Docker upgrades. Do not fill gaps with a
+sandbox Git service, session store, IAM, tools or policy engine; tool bundles are #4.
 
 Inspection sources: Multica `server/internal/daemon/{types,client,prompt}.go`,
 `server/internal/handler/daemon.go`, `server/pkg/agent/opencode.go`; OpenCode

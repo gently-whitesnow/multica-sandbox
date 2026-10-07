@@ -94,6 +94,12 @@ func Run(ctx context.Context, c Config, stateDir, tokenPath string, out io.Write
 
 func openCodeAdapter(ctx context.Context, c Config, api *multica.Client, backend *docker.Backend) (*opencode.Adapter, error) {
 	workloads := &docker.Projected{Backend: *backend, Network: c.OpenCode.Network, Peers: c.OpenCode.Peers}
+	if (c.OpenCode.MulticaRelay == nil) != (c.OpenCode.MulticaCLI == "") {
+		return nil, fmt.Errorf("multica_relay and the digest-pinned multica_cli artifact require each other")
+	}
+	if c.OpenCode.MulticaCLI != "" {
+		workloads.Bundles = []docker.Bundle{{Image: c.OpenCode.MulticaCLI, Target: multica.CLIDir}}
+	}
 	// The digest-pinned image cannot change, so one startup inspection covers every attempt.
 	report, err := workloads.Output(ctx, opencode.ImageProbe)
 	if err != nil {

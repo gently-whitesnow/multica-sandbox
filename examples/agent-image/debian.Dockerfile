@@ -1,7 +1,7 @@
 # Example user-owned agent image on an unrelated base (issue #39): Debian with the
-# released glibc OpenCode build, checksum-pinned per architecture. Context: a static
-# linux `multica` binary from the pinned Multica revision. Everything the agent needs
-# is installed here; attempts have no network. No credentials are baked in.
+# released glibc OpenCode build, checksum-pinned per architecture. The context may be
+# empty. Everything the agent needs is installed here; attempts have no network. The
+# controller mounts the `multica` CLI (ADR 0014). No credentials are baked in.
 FROM debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f AS base
 
 FROM base AS opencode-amd64
@@ -17,4 +17,3 @@ FROM base
 # OpenCode searches with ripgrep and would otherwise try to download it at run time.
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates git ripgrep && rm -rf /var/lib/apt/lists/*
 COPY --from=opencode /usr/local/bin/opencode /usr/local/bin/opencode
-COPY multica /usr/local/bin/multica
