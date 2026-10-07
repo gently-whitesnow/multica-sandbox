@@ -115,7 +115,8 @@ func multicaRelayService(t *testing.T, api *multica.Client, agentImage string, n
 		if err != nil {
 			t.Fatal(err)
 		}
-		if state == "running" && opaque == "" {
+		// The fixture agent holds its final step until the probe marks the attempt (mock_inference.go).
+		if state == "running" && (opaque == "" || (w != nil && inferenceOpaque == "")) {
 			if container := dockerTest(t, "ps", "-q", "--filter", "label=io.multica-sandbox.owner="+controller); container != "" {
 				out, err := execOutput(container, attemptProbe, server)
 				var exit *exec.ExitError
@@ -124,6 +125,11 @@ func multicaRelayService(t *testing.T, api *multica.Client, agentImage string, n
 					opaque = out
 					if w != nil {
 						inferenceOpaque = inferenceCredential(t, w, container)
+					}
+					if w == nil || inferenceOpaque != "" {
+						if _, err := execOutput(container, "touch /proc/1/root/workspace/.probed"); err != nil {
+							t.Fatalf("mark probed attempt: %v", err)
+						}
 					}
 				case errors.As(err, &exit) && exit.ExitCode() == 3:
 				default:
@@ -141,7 +147,7 @@ func multicaRelayService(t *testing.T, api *multica.Client, agentImage string, n
 	}
 	status(t, api, id, "completed")
 	if !strings.HasPrefix(opaque, "mat_relay_") || (w != nil && inferenceOpaque == "") {
-		t.Fatal("live attempt credential was not observed")
+		t.Fatalf("live attempt credential was not observed (multica %t, inference %t)", opaque != "", inferenceOpaque != "")
 	}
 	comments := sql(t, fmt.Sprintf("SELECT count(*) || ':' || min(author_type) || ':' || min(author_id::text) FROM comment WHERE issue_id='%s' AND type='comment';", issue))
 	content := sql(t, fmt.Sprintf("SELECT content FROM comment WHERE issue_id='%s' AND type='comment';", issue))

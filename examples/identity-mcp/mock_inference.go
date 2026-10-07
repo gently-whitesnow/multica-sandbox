@@ -76,8 +76,13 @@ func mockInference(w http.ResponseWriter, r *http.Request) {
 		call("bash", map[string]string{"command": "multica issue get " + issue + " --output json", "description": "Read the assigned issue"})
 	case bash && issue != "" && count == 1:
 		if title := titlePattern.FindStringSubmatch(result); title != nil {
+			// Relay fixture tasks hold up to 20 s until the test probe marks the live attempt.
+			hold := ""
+			if title[1] == "Relay fixture issue" {
+				hold = "i=0; while [ ! -e /workspace/.probed ] && [ $i -lt 100 ]; do sleep 0.2; i=$((i+1)); done; "
+			}
 			// A configured tool bundle reports itself; images without jq post only the read.
-			call("bash", map[string]string{"command": "printf '%s\\n' 'Relay fixture read: " + title[1] + "' > reply.md && { ! command -v jq >/dev/null || jq --version >> reply.md; } && multica issue comment add " + issue + " --content-file ./reply.md --output table && rm reply.md", "description": "Post the result"})
+			call("bash", map[string]string{"command": hold + "printf '%s\\n' 'Relay fixture read: " + title[1] + "' > reply.md && { ! command -v jq >/dev/null || jq --version >> reply.md; } && multica issue comment add " + issue + " --content-file ./reply.md --output table && rm reply.md", "description": "Post the result"})
 		}
 	}
 	chunk["choices"] = []any{map[string]any{"index": 0, "delta": delta, "finish_reason": nil}}
