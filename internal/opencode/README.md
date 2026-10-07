@@ -48,7 +48,7 @@ unrelated base with the released glibc OpenCode build. A compatible image:
 - ships no `/etc/opencode`, `/opencode.json[c]` or `/.opencode`, which OpenCode merges
   over the projected configuration, and no `OPENCODE_*` or `MULTICA_*` image `ENV`;
 - runs as uid 65532 on a read-only rootfs without network: `HOME` and `XDG_*` are
-  in the `/workspace` tmpfs, `/tmp` is `noexec`; install tools at build time;
+  in the executable `/workspace` tmpfs, `/tmp` is `noexec`; install tools at build time;
 - carries no secrets: everything in the image is visible to the agent.
 
 Entrypoint, command, `USER` and `HEALTHCHECK` are ignored. The version check is a

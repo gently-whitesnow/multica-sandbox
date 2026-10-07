@@ -141,7 +141,7 @@ func (b *Backend) createArgs(name string, extra ...string) []string {
 		"--cap-drop=ALL", "--security-opt=no-new-privileges=true", "--cgroupns=private", "--ipc=private",
 		"--memory=128m", "--memory-swap=128m", "--cpus=0.5", "--pids-limit=64", "--ulimit=nofile=256:256",
 		"--restart=no", "--no-healthcheck", "--log-driver=none", "--workdir=/workspace",
-		"--tmpfs=/workspace:rw,nosuid,nodev,size=67108864,mode=1777",
+		"--tmpfs=/workspace:rw,exec,nosuid,nodev,size=67108864,mode=1777",
 		"--tmpfs=/tmp:rw,noexec,nosuid,nodev,size=16777216,mode=1777", "--shm-size=8m",
 		"--env=HOME=/workspace"}
 	args = append(append(args, extra...), "--entrypoint", b.Command[0], b.Image)

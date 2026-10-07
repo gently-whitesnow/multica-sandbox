@@ -18,11 +18,11 @@ func (r *run) check(ctx context.Context) error {
 }
 
 func checkPolicy(data []byte) error {
-	return checkExpectedPolicy(data, "none", 128*1024*1024, 64, "rw,nosuid,nodev,size=67108864,mode=1777", nil, "")
+	return checkExpectedPolicy(data, "none", 128*1024*1024, 64, "rw,exec,nosuid,nodev,size=67108864,mode=1777", nil, "")
 }
 
 func checkProjectedPolicy(data []byte, network string, bundles []Bundle, path string) error {
-	return checkExpectedPolicy(data, network, 1024*1024*1024, 256, "rw,nosuid,nodev,size=268435456,mode=1777", bundles, path)
+	return checkExpectedPolicy(data, network, 1024*1024*1024, 256, "rw,exec,nosuid,nodev,size=268435456,mode=1777", bundles, path)
 }
 
 type mount struct {

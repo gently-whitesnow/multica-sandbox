@@ -10,7 +10,7 @@ const safePolicy = `[{"Config":{"User":"65532:65532","WorkingDir":"/workspace","
 "NetworkMode":"none","Runtime":"runc","IpcMode":"private","CgroupnsMode":"private","ReadonlyRootfs":true,
 "CapDrop":["ALL"],"SecurityOpt":["no-new-privileges=true"],"Memory":134217728,"MemorySwap":134217728,
 "NanoCpus":500000000,"PidsLimit":64,"ShmSize":8388608,"RestartPolicy":{"Name":"no"},"LogConfig":{"Type":"none"},
-"Tmpfs":{"/workspace":"rw,nosuid,nodev,size=67108864,mode=1777","/tmp":"rw,noexec,nosuid,nodev,size=16777216,mode=1777"}}}]`
+"Tmpfs":{"/workspace":"rw,exec,nosuid,nodev,size=67108864,mode=1777","/tmp":"rw,noexec,nosuid,nodev,size=16777216,mode=1777"}}}]`
 
 func TestRejectWeakenedPolicy(t *testing.T) {
 	if err := checkPolicy([]byte(safePolicy)); err != nil {
@@ -56,7 +56,7 @@ func TestAcceptOnlyBundleMounts(t *testing.T) {
 			change(c, config, host)
 		}
 		data, _ := json.Marshal(fixture)
-		return checkExpectedPolicy(data, "none", 128*1024*1024, 64, "rw,nosuid,nodev,size=67108864,mode=1777", bundles, path)
+		return checkExpectedPolicy(data, "none", 128*1024*1024, 64, "rw,exec,nosuid,nodev,size=67108864,mode=1777", bundles, path)
 	}
 	if err := check([]Bundle{cli}, nil); err != nil {
 		t.Fatal(err)

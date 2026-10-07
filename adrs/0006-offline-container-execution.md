@@ -42,6 +42,14 @@ Limits are fixed for this first backend. No host mounts, device passthrough,
 Docker sockets, environment forwarding or output/log collection are exposed.
 Inspect the created container before starting it; reject policy mismatches.
 
+Refinement (#43, 2026-10-07). Docker adds `noexec` to `--tmpfs` unless `exec` is
+given, so `/workspace` silently became non-executable and toolchains could not
+run built programs (`go test`, native packages). The agent already executes
+arbitrary code through interpreters; the boundary rests on identity,
+capabilities, seccomp, no-new-privileges, limits and network policy. `/workspace`
+is therefore explicitly `exec,nosuid,nodev`; `/tmp` stays `noexec`. The policy
+check and a containers test pin both.
+
 Use deterministic names from daemon identity, task and dispatch fence; label
 containers by their trusted controller owner. Before registration or Multica
 orphan recovery, remove all owned containers. Abort recovery on cleanup errors.

@@ -41,6 +41,8 @@ func TestOfflineBoundary(t *testing.T) {
  ! mount -t tmpfs tmpfs /workspace
  test ! -e /workspace/other-attempt
  echo private > /workspace/other-attempt
+ cp /bin/busybox /workspace/busybox && /workspace/busybox true
+ cp /bin/busybox /tmp/busybox && ! /tmp/busybox true
  grep -q '^NoNewPrivs:[[:space:]]*1' /proc/self/status
  grep -q '^CapEff:[[:space:]]*0000000000000000' /proc/self/status
  grep -q '^Seccomp:[[:space:]]*2' /proc/self/status
