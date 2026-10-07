@@ -13,6 +13,7 @@
     "listen": ":8091",
     "url": "http://multica-relay:8091"
   },
+  "multica_cli": "registry.example.com/multica-sandbox/multica-cli@sha256:0000000000000000000000000000000000000000000000000000000000000000",
   "inference_file": "/etc/multica-sandbox/inference.json",
   "inference_relay": {
     "listen": ":8092",

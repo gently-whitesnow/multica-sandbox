@@ -2,6 +2,7 @@ package docker
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -35,5 +36,58 @@ func TestRejectWeakenedPolicy(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestAcceptOnlyBundleMounts(t *testing.T) {
+	cli := Bundle{Image: "example.invalid/cli@sha256:" + strings.Repeat("a", 64), Target: "/opt/multica-sandbox/multica"}
+	path := cli.Target + "/bin:/usr/bin:/bin"
+	check := func(bundles []Bundle, change func(c, config, host map[string]any)) error {
+		var fixture []map[string]any
+		if err := json.Unmarshal([]byte(safePolicy), &fixture); err != nil {
+			t.Fatal(err)
+		}
+		c := fixture[0]
+		config, host := c["Config"].(map[string]any), c["HostConfig"].(map[string]any)
+		config["Env"] = []string{"PATH=" + path, "LANG=C"}
+		host["Mounts"] = []any{map[string]any{"Type": "image", "Source": cli.Image, "Target": cli.Target}}
+		c["Mounts"] = []any{map[string]any{"Type": "image", "Name": cli.Image, "Source": "/var/lib/docker/rootfs/overlayfs/x", "Destination": cli.Target, "Mode": "", "RW": false, "Propagation": "rprivate"}}
+		if change != nil {
+			change(c, config, host)
+		}
+		data, _ := json.Marshal(fixture)
+		return checkExpectedPolicy(data, "none", 128*1024*1024, 64, "rw,nosuid,nodev,size=67108864,mode=1777", bundles, path)
+	}
+	if err := check([]Bundle{cli}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if check(nil, nil) == nil {
+		t.Fatal("image mount accepted without a configured bundle")
+	}
+	other := map[string]any{"Type": "image", "Name": cli.Image, "Destination": "/opt/multica-sandbox/other", "RW": false}
+	for name, change := range map[string]func(c, config, host map[string]any){
+		"missing":  func(c, _, host map[string]any) { c["Mounts"], host["Mounts"] = nil, nil },
+		"writable": func(c, _, _ map[string]any) { c["Mounts"].([]any)[0].(map[string]any)["RW"] = true },
+		"wrong digest": func(c, _, _ map[string]any) {
+			c["Mounts"].([]any)[0].(map[string]any)["Name"] = strings.Replace(cli.Image, "aaaa", "bbbb", 1)
+		},
+		"wrong target": func(c, _, _ map[string]any) { c["Mounts"].([]any)[0].(map[string]any)["Destination"] = "/usr/local" },
+		"bind":         func(c, _, _ map[string]any) { c["Mounts"].([]any)[0].(map[string]any)["Type"] = "bind" },
+		"extra":        func(c, _, _ map[string]any) { c["Mounts"] = append(c["Mounts"].([]any), other) },
+		"subpath": func(_, _, host map[string]any) {
+			host["Mounts"].([]any)[0].(map[string]any)["ImageOptions"] = map[string]any{"Subpath": "bin"}
+		},
+		"host extra": func(_, _, host map[string]any) {
+			host["Mounts"] = append(host["Mounts"].([]any), map[string]any{"Type": "volume"})
+		},
+		"path missing":  func(_, config, _ map[string]any) { config["Env"] = []string{"LANG=C"} },
+		"path shadowed": func(_, config, _ map[string]any) { config["Env"] = []string{"PATH=/workspace/bin:" + path} },
+		"path twice":    func(_, config, _ map[string]any) { config["Env"] = []string{"PATH=" + path, "PATH=/usr/bin"} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			if check([]Bundle{cli}, change) == nil {
+				t.Fatal("unexpected mount configuration accepted")
+			}
+		})
 	}
 }

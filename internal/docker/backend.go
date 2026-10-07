@@ -26,12 +26,27 @@ type Backend struct {
 }
 
 func (b *Backend) Validate(ctx context.Context) error {
+	_, _, err := b.validate(ctx)
+	return err
+}
+
+type imageConfig struct {
+	Os, Architecture string
+	Config           struct {
+		Env     []string
+		Volumes map[string]json.RawMessage
+	}
+}
+
+// validate checks the host and the pinned image and returns the engine architecture and image configuration.
+func (b *Backend) validate(ctx context.Context) (string, imageConfig, error) {
+	var image imageConfig
 	if !imagePattern.MatchString(b.Image) || !ownerPattern.MatchString(b.Owner) || len(b.Command) == 0 || !strings.HasPrefix(b.Command[0], "/") {
-		return fmt.Errorf("digest-pinned image, stable daemon UUID and absolute executable required")
+		return "", image, fmt.Errorf("digest-pinned image, stable daemon UUID and absolute executable required")
 	}
 	data, err := command(ctx, "info", "--format", "{{json .}}")
 	if err != nil {
-		return err
+		return "", image, err
 	}
 	var info struct {
 		Architecture                                                 string
@@ -40,29 +55,32 @@ func (b *Backend) Validate(ctx context.Context) error {
 		SecurityOptions                                              []string
 	}
 	if err = json.Unmarshal(data, &info); err != nil {
-		return err
+		return "", image, err
 	}
 	if info.OSType != "linux" || info.CgroupVersion != "2" || !info.MemoryLimit || !info.SwapLimit || !info.PidsLimit || !info.CpuCfsPeriod || !info.CpuCfsQuota || !strings.Contains(strings.Join(info.SecurityOptions, ","), "name=seccomp,profile=builtin") {
-		return fmt.Errorf("Linux cgroup v2, resource controllers and builtin seccomp required")
+		return "", image, fmt.Errorf("Linux cgroup v2, resource controllers and builtin seccomp required")
 	}
-	data, err = command(ctx, "image", "inspect", b.Image, "--format", "{{json .}}")
+	image, err = inspectImage(ctx, b.Image, info.Architecture)
+	return info.Architecture, image, err
+}
+
+// inspectImage requires a preloaded image matching the engine platform without declared volumes.
+func inspectImage(ctx context.Context, ref, engine string) (imageConfig, error) {
+	var image imageConfig
+	data, err := command(ctx, "image", "inspect", ref, "--format", "{{json .}}")
 	if err != nil {
-		return fmt.Errorf("preload the pinned image: %w", err)
-	}
-	var image struct {
-		Os, Architecture string
-		Config           struct{ Volumes map[string]json.RawMessage }
+		return image, fmt.Errorf("preload the pinned image: %w", err)
 	}
 	if err = json.Unmarshal(data, &image); err != nil {
-		return err
+		return image, err
 	}
-	if host := engineArchitectures[info.Architecture]; image.Os != "linux" || host == "" || image.Architecture != host {
-		return fmt.Errorf("image platform %.16s/%.16s does not match the Docker engine %.16s", image.Os, image.Architecture, info.Architecture)
+	if host := engineArchitectures[engine]; image.Os != "linux" || host == "" || image.Architecture != host {
+		return image, fmt.Errorf("image platform %.16s/%.16s does not match the Docker engine %.16s", image.Os, image.Architecture, engine)
 	}
 	if len(image.Config.Volumes) > 0 {
-		return fmt.Errorf("image-declared volumes are unsupported")
+		return image, fmt.Errorf("image-declared volumes are unsupported")
 	}
-	return nil
+	return image, nil
 }
 
 // engineArchitectures maps Docker engine (uname) names to OCI platform names; emulation is unsupported.
@@ -115,7 +133,9 @@ func (b *Backend) cleanupUncertainCreate(r *run) error {
 	}
 	return r.Remove(ctx)
 }
-func (b *Backend) createArgs(name string) []string {
+
+// createArgs places extra controller-owned options before the entrypoint.
+func (b *Backend) createArgs(name string, extra ...string) []string {
 	args := []string{"create", "--name", name, "--label", ownerLabel + "=" + b.Owner,
 		"--pull=never", "--runtime=runc", "--network=none", "--read-only", "--user=65532:65532",
 		"--cap-drop=ALL", "--security-opt=no-new-privileges=true", "--cgroupns=private", "--ipc=private",
@@ -123,7 +143,8 @@ func (b *Backend) createArgs(name string) []string {
 		"--restart=no", "--no-healthcheck", "--log-driver=none", "--workdir=/workspace",
 		"--tmpfs=/workspace:rw,nosuid,nodev,size=67108864,mode=1777",
 		"--tmpfs=/tmp:rw,noexec,nosuid,nodev,size=16777216,mode=1777", "--shm-size=8m",
-		"--env=HOME=/workspace", "--entrypoint", b.Command[0], b.Image}
+		"--env=HOME=/workspace"}
+	args = append(append(args, extra...), "--entrypoint", b.Command[0], b.Image)
 	return append(args, b.Command[1:]...)
 }
 

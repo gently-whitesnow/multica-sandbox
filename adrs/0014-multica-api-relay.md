@@ -57,8 +57,11 @@ configuration. It projects the upstream issue prompt and an `AGENTS.md` brief
 mirrored from `daemon/prompt.go` and `execenv` at the pinned revision. With the
 relay, local in-container tools (`bash`, file tools) are allowed; network tools stay
 denied. Multica still creates a comment from `output` when the agent posted none.
-The agent image must provide `multica` on `PATH`, built from the pinned revision.
-`examples/agent-image` shows one such image.
+The CLI follows the controller's pinned Multica revision, not the image. Refinement
+(#41, 2026-10-07): the controller mounts a digest-pinned CLI artifact (`multica_cli`,
+`deploy/multica-cli.Dockerfile`) read-only at `/opt/multica-sandbox/multica`, first
+on `PATH` (ADR 0002); the relay requires it. Images need no `multica`, and a copy in
+the image cannot shadow it.
 
 ## Consequences
 
@@ -76,10 +79,11 @@ Unit tests cover translation, isolation between attempts, ended/forged/upstream
 credentials, redirects, error withholding, path policy, absolute-form targets, body
 limits and in-flight revocation. A containers test keeps exec env out of container
 configuration. The pinned integration fixture runs a real claim through the
-Compose controller and the upstream CLI. It checks the issue read, one agent
-comment, no `mat_` token in agent env, files, controller logs or transcript, the
-`/api/tokens` denial, Multica unreachable from the attempt and ended-credential
-denial.
+Compose controller and the mounted upstream CLI on the Debian and official images,
+neither containing `multica`. It checks the issue read, one agent comment, the CLI
+first on `PATH`, no `mat_` token in agent env, files, controller logs or transcript,
+the `/api/tokens` denial, Multica unreachable from the attempt and ended-credential
+denial. Containers tests cover read-only mounts, shadowing and artifact rejection.
 
 ## References
 

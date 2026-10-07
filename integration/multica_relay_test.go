@@ -33,12 +33,15 @@ cat /proc/[0-9]*/environ 2>/dev/null | tr '\0' '\n' | grep -qE 'mat_[0-9a-f]{40}
 grep -rqE 'mat_[0-9a-f]{40}([^0-9a-f]|$)' /proc/1/root/workspace /proc/1/root/tmp 2>/dev/null && exit 11
 wget -q -O /dev/null --header "Authorization: Bearer $token" --post-data '{"name":"exfiltrate"}' http://multica-relay:8091/api/tokens 2>&1 | grep -q ' 403 ' || exit 12
 wget -T 2 -q -O /dev/null "http://$1:8080/health" 2>/dev/null && exit 13
+tr '\0' '\n' < /proc/1/environ | grep -qx 'PATH=/opt/multica-sandbox/multica/bin:.*' || exit 14
+test -x /proc/1/root/opt/multica-sandbox/multica/bin/multica || exit 15
 exit 0`
 
-func multicaRelayService(t *testing.T, api *multica.Client) {
-	agentImage := os.Getenv("MULTICA_TEST_AGENT_IMAGE")
-	if os.Getenv("VERIFY_OPENCODE") != "1" || os.Getenv("VERIFY_SERVICE") != "1" || agentImage == "" {
-		t.Skip("set VERIFY_SERVICE=1 VERIFY_OPENCODE=1 for the Multica relay agent image")
+// multicaRelayService runs one relay task on an image without multica; full adds inference and restart.
+func multicaRelayService(t *testing.T, api *multica.Client, agentImage string, n int, full bool) {
+	cli := os.Getenv("MULTICA_TEST_CLI_IMAGE")
+	if os.Getenv("VERIFY_OPENCODE") != "1" || os.Getenv("VERIFY_SERVICE") != "1" || agentImage == "" || cli == "" {
+		t.Skip("set VERIFY_SERVICE=1 VERIFY_OPENCODE=1 for the Multica relay agent and CLI images")
 	}
 	dir := t.TempDir()
 	stamp := time.Now().UnixNano()
@@ -46,7 +49,7 @@ func multicaRelayService(t *testing.T, api *multica.Client) {
 	server := os.Getenv("MULTICA_TEST_SERVER_CONTAINER")
 	network := strings.TrimSuffix(server, "-server")
 	fixture := filepath.Join(dir, "fixture.json")
-	withInference := os.Getenv("VERIFY_INFERENCE") == "1"
+	withInference := full && os.Getenv("VERIFY_INFERENCE") == "1"
 	services := map[string]any{"seed": map[string]any{"environment": map[string]string{"ROTATION_FIXTURE": "1"}}, "gateway": map[string]any{"networks": []string{"fixture", "execution"}}}
 	target := "gateway"
 	if withInference {
@@ -64,16 +67,16 @@ func multicaRelayService(t *testing.T, api *multica.Client) {
 	compose("build", "seed", "gateway")
 	compose("up", "-d", "--wait", "--wait-timeout", "240", target)
 
-	controller := "90000000-0000-4000-8000-000000000014"
-	agent := "a1000000-0000-4000-8000-000000000014"
-	issue := "a2000000-0000-4000-8000-000000000014"
-	id := "a3000000-0000-4000-8000-000000000014"
+	controller := fmt.Sprintf("90000000-0000-4000-8000-%012d", n)
+	agent := fmt.Sprintf("a1000000-0000-4000-8000-%012d", n)
+	issue := fmt.Sprintf("a2000000-0000-4000-8000-%012d", n)
+	id := fmt.Sprintf("a3000000-0000-4000-8000-%012d", n)
 	issuer := "http://keycloak:8080/realms/sandbox-example"
 	writeJSON(t, filepath.Join(dir, "identity.json"), identity.Config{Version: 1, AllowHTTP: true, Issuers: []identity.IssuerConfig{{Name: "fixture", URL: issuer, TokenURL: issuer + "/protocol/openid-connect/token", JWKSURL: issuer + "/protocol/openid-connect/certs", MaxTTLSeconds: 30}}, Bindings: []identity.Binding{{WorkspaceID: workspace, AgentID: agent, Principal: identity.Principal{Issuer: "fixture", ClientID: "example-agent", Subject: "30000000-0000-4000-8000-000000000001"}, SecretFile: "/identity-secrets/client"}}, MCP: []identity.MCPRule{{URL: "http://gateway:8080/mcp", Issuer: "fixture"}}})
 	command := `OPENCODE_CONFIG_CONTENT='{"model":"fixture/fixture","enabled_providers":["fixture"],"provider":{"fixture":{"npm":"@ai-sdk/openai-compatible","name":"Fixture","options":{"baseURL":"http://gateway:8080/v1"},"models":{"fixture":{"name":"Fixture","limit":{"context":64000,"output":4096}}}}}}' exec opencode run --format json "$(cat /workspace/prompt.txt)"`
 	f := serviceFixture{fmt.Sprintf("sandbox-relay-controller-%d", stamp), filepath.Join(dir, "controller.json"), t}
 	controllerName := f.project + "-controller-1"
-	c := service.Config{Server: "http://" + server + ":8080", AllowHTTP: true, Daemon: controller, Image: agentImage, Command: []string{"/bin/sh", "-c", command}, Timeout: "180s", OpenCode: &service.OpenCodeConfig{IdentityFile: "/etc/multica-sandbox/identity.json", Authority: attempt.Config{URL: "http://gateway:8080/attempts", BearerFile: "/identity-secrets/admin", AllowHTTP: true}, Network: project + "_execution", Peers: []string{project + "-gateway-1", controllerName}, MulticaRelay: &service.RelayConfig{Listen: ":8091", URL: "http://multica-relay:8091"}}}
+	c := service.Config{Server: "http://" + server + ":8080", AllowHTTP: true, Daemon: controller, Image: agentImage, Command: []string{"/bin/sh", "-c", command}, Timeout: "180s", OpenCode: &service.OpenCodeConfig{IdentityFile: "/etc/multica-sandbox/identity.json", Authority: attempt.Config{URL: "http://gateway:8080/attempts", BearerFile: "/identity-secrets/admin", AllowHTTP: true}, Network: project + "_execution", Peers: []string{project + "-gateway-1", controllerName}, MulticaRelay: &service.RelayConfig{Listen: ":8091", URL: "http://multica-relay:8091"}, MulticaCLI: cli}}
 	var w *workspaceInference
 	if withInference {
 		w = configureInference(t, dir, project, &c)
@@ -97,9 +100,9 @@ func multicaRelayService(t *testing.T, api *multica.Client) {
 	if runtime == "" {
 		t.Fatal("relay runtime absent")
 	}
-	sql(t, fmt.Sprintf(`INSERT INTO agent(id,workspace_id,name,runtime_mode,runtime_id,owner_id,status,instructions,mcp_config) VALUES('%s','%s','Relay fixture agent','local','%s','%s','idle','Answer through the Multica CLI.','{"mcpServers":{}}');
- INSERT INTO issue(id,workspace_id,title,description,status,creator_type,creator_id,number,assignee_type,assignee_id) VALUES('%s','%s','Relay fixture issue','Read me through the relay.','todo','member','%s',99914,'agent','%s');
- INSERT INTO agent_task_queue(id,agent_id,runtime_id,issue_id,status,max_attempts,originator_user_id,accountable_user_id) VALUES('%s','%s','%s','%s','queued',1,'%s','%s');`, agent, workspace, runtime, user, issue, workspace, user, agent, id, agent, runtime, issue, user, user))
+	sql(t, fmt.Sprintf(`INSERT INTO agent(id,workspace_id,name,runtime_mode,runtime_id,owner_id,status,instructions,mcp_config) VALUES('%s','%s','Relay fixture agent %d','local','%s','%s','idle','Answer through the Multica CLI.','{"mcpServers":{}}');
+ INSERT INTO issue(id,workspace_id,title,description,status,creator_type,creator_id,number,assignee_type,assignee_id) VALUES('%s','%s','Relay fixture issue','Read me through the relay.','todo','member','%s',%d,'agent','%s');
+ INSERT INTO agent_task_queue(id,agent_id,runtime_id,issue_id,status,max_attempts,originator_user_id,accountable_user_id) VALUES('%s','%s','%s','%s','queued',1,'%s','%s');`, agent, workspace, n, runtime, user, issue, workspace, user, 99900+n, agent, id, agent, runtime, issue, user, user))
 
 	opaque, inferenceOpaque := "", ""
 	deadline := time.Now().Add(150 * time.Second)
@@ -158,7 +161,7 @@ func multicaRelayService(t *testing.T, api *multica.Client) {
 		t.Fatal("task credential leaked into controller logs, transcript or comments")
 	}
 	t.Log("pinned Multica claim -> controller relay -> upstream multica CLI read issue and posted one agent comment; mat_ token stayed outside the attempt")
-	if w == nil {
+	if w == nil || !full {
 		return
 	}
 	result := sql(t, fmt.Sprintf("SELECT coalesce(result::text,'') || coalesce(error,'') FROM agent_task_queue WHERE id='%s';", id))

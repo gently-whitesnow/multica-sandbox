@@ -18,7 +18,7 @@ func TestDeployInferenceExamplesDecode(t *testing.T) {
 	var c OpenCodeConfig
 	d := json.NewDecoder(bytes.NewReader(data))
 	d.DisallowUnknownFields()
-	if d.Decode(&c) != nil || c.InferenceFile == "" || c.InferenceRelay == nil || c.MulticaRelay == nil {
+	if d.Decode(&c) != nil || c.InferenceFile == "" || c.InferenceRelay == nil || c.MulticaRelay == nil || c.MulticaCLI == "" {
 		t.Fatal("OpenCode example does not configure both relays")
 	}
 	path, _ := filepath.Abs("../../deploy/inference.example.json")

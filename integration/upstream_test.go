@@ -194,6 +194,7 @@ func TestUpstreamLifecycle(t *testing.T) {
 	t.Run("multi-workspace", func(t *testing.T) { multiWorkspace(t) })
 	t.Run("multi-workspace-restart", func(t *testing.T) { fleetRestart(t) })
 	t.Run("managed-mcp-service", func(t *testing.T) { managedMCPService(t, api) })
-	t.Run("multica-relay-service", func(t *testing.T) { multicaRelayService(t, api) })
+	t.Run("multica-relay-service", func(t *testing.T) { multicaRelayService(t, api, os.Getenv("MULTICA_TEST_AGENT_IMAGE"), 14, true) })
+	t.Run("multica-relay-official-image", func(t *testing.T) { multicaRelayService(t, api, officialImage, 15, false) })
 	t.Run("controller-service", func(t *testing.T) { containerService(t, api, rt) })
 }
