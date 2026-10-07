@@ -137,8 +137,8 @@ func attemptLimits(args []string, network string) []string {
 			args[i] = "--memory-swap=1g"
 		case "--pids-limit=64":
 			args[i] = "--pids-limit=256"
-		case "--tmpfs=/workspace:rw,nosuid,nodev,size=67108864,mode=1777":
-			args[i] = "--tmpfs=/workspace:rw,nosuid,nodev,size=268435456,mode=1777"
+		case "--tmpfs=/workspace:rw,exec,nosuid,nodev,size=67108864,mode=1777":
+			args[i] = "--tmpfs=/workspace:rw,exec,nosuid,nodev,size=268435456,mode=1777"
 		}
 	}
 	return args

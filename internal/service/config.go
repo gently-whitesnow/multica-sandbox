@@ -18,6 +18,7 @@ type Config struct {
 	Concurrency int             `json:"concurrency,omitempty"`
 	Daemon      string          `json:"daemon"`
 	Image       string          `json:"image"`
+	Tools       []Tool          `json:"tools,omitempty"`
 	Command     []string        `json:"command"`
 	Timeout     string          `json:"timeout"`
 }
@@ -50,6 +51,9 @@ func ReadConfig(path string) (Config, error) {
 	duration, err := time.ParseDuration(c.Timeout)
 	if err != nil || duration <= 0 || !uuid.MatchString(c.Daemon) || c.Concurrency < 0 || c.Concurrency > 32 || c.Image == "" || (len(c.Command) == 0 && c.OpenCode == nil) {
 		return c, fmt.Errorf("daemon UUID, capacity 0-32, image, command and positive timeout required")
+	}
+	if len(c.Tools) > 0 && c.OpenCode == nil {
+		return c, fmt.Errorf("tools require the opencode adapter")
 	}
 	if c.Concurrency == 0 {
 		c.Concurrency = 1

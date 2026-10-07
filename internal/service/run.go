@@ -97,8 +97,9 @@ func openCodeAdapter(ctx context.Context, c Config, api *multica.Client, backend
 	if (c.OpenCode.MulticaRelay == nil) != (c.OpenCode.MulticaCLI == "") {
 		return nil, fmt.Errorf("multica_relay and the digest-pinned multica_cli artifact require each other")
 	}
-	if c.OpenCode.MulticaCLI != "" {
-		workloads.Bundles = []docker.Bundle{{Image: c.OpenCode.MulticaCLI, Target: multica.CLIDir}}
+	var err error
+	if workloads.Bundles, err = bundles(c.OpenCode, c.Tools); err != nil {
+		return nil, err
 	}
 	// The digest-pinned image cannot change, so one startup inspection covers every attempt.
 	report, err := workloads.Output(ctx, opencode.ImageProbe)
@@ -106,6 +107,9 @@ func openCodeAdapter(ctx context.Context, c Config, api *multica.Client, backend
 		return nil, fmt.Errorf("inspect agent image: %w", err)
 	}
 	if err = opencode.CheckImage(report, c.OpenCode.MulticaRelay != nil); err != nil {
+		return nil, err
+	}
+	if err = checkTools(ctx, workloads, c.Tools); err != nil {
 		return nil, err
 	}
 	config, err := agentidentity.ReadConfig(c.OpenCode.IdentityFile)

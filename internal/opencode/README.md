@@ -26,14 +26,7 @@ has no corporate identity mounts. Keep all actual configuration outside Git.
 
 `network` names an operator-owned internal bridge template containing exactly the named `peers`. Each attempt gets a new internal network with only those peers and its own container. Template peer aliases preserve the selected MCP hostname. Place Multica, IAM, resolver and credential stores on a separate control network. Only approved MCP/gateway services may be peers. Enforce host/metadata and destination policy outside Docker; internal bridges do not establish a production adversarial egress boundary. Do not attach untrusted workloads/services to the template. Concurrent attempt containers never share a network.
 
-The default command is `opencode run --format json` with the projected prompt.
-An operator-supplied command may use the same `/workspace/prompt.txt` and
-`/workspace/opencode.json`; only controller configuration chooses that command.
-Images may include their own tools and credential-free provider configuration.
-No inference/provider credential is permitted in an image or command; managed
-inference uses `inference_file` and `inference_relay`; see
-[`internal/inference`](../inference/README.md). The fixture supplies a mock provider from
-trusted test configuration solely to exercise tool turns without a subscription.
+The default command is `opencode run --format json` with the projected prompt. An operator-supplied command may use the same `/workspace/prompt.txt` and `/workspace/opencode.json`; only controller configuration chooses that command. Images may include their own tools and credential-free provider configuration; [tool bundles](#image-contract) add tools without rebuilding the image. No inference/provider credential is permitted in an image or command; managed inference uses `inference_file` and `inference_relay`; see [`internal/inference`](../inference/README.md). The fixture supplies a mock provider from trusted test configuration solely to exercise tool turns without a subscription.
 
 ## Image contract
 
@@ -48,11 +41,13 @@ unrelated base with the released glibc OpenCode build. A compatible image:
 - ships no `/etc/opencode`, `/opencode.json[c]` or `/.opencode`, which OpenCode merges
   over the projected configuration, and no `OPENCODE_*` or `MULTICA_*` image `ENV`;
 - runs as uid 65532 on a read-only rootfs without network: `HOME` and `XDG_*` are
-  in the `/workspace` tmpfs, `/tmp` is `noexec`; install tools at build time;
+  in the executable `/workspace` tmpfs, `/tmp` is `noexec`; install tools at build time;
 - carries no secrets: everything in the image is visible to the agent.
 
 Entrypoint, command, `USER` and `HEALTHCHECK` are ignored. The version check is a
 compatibility contract, not a security boundary: host policy holds for any image.
+
+Tool bundles: top-level `tools` lists `{name, image, path?, check?}` (ADR 0002; `examples/tool-bundle`). Each digest-pinned, preloaded bundle is mounted read-only at `/opt/multica-sandbox/tools/<name>`; its `path` directories (default `bin`) follow the `multica` CLI and precede the image `PATH`, in declared order. Startup rejects missing `path` entries, commands provided twice and reserved commands (`opencode`, `multica`, `sh`, `sleep`, `mkdir`, `cat`, `chmod`, `mv`), then runs each `check` argv (first element relative to the bundle) offline in the agent image. Build bundles self-contained (static or with their own loader) and relocatable: a glibc binary on a musl image fails with `ENOENT`, and a shell then silently runs the image command of the same name. Bundles are compatibility inputs; host policy holds for their contents, including setuid files.
 
 ## Multica API relay
 
@@ -116,6 +111,7 @@ Engine 29.2.1 (runc, cgroup v2). Reproduce with `MULTICA_SOURCE=<checkout>` and
 | Multica relay: opaque credential, token-minting denied; controller CLI is a read-only image mount first on `PATH`, image `multica`/`PATH` cannot shadow it; writes, extra or altered mounts, unpinned, absent and wrong-revision artifacts rejected | `internal/relay` tests; `policy_test.go`; `image_test.go`, `projected_test.go` (CONTAINERS); `integration/multica_relay_test.go` |
 | Workspace keys: spoofing, cross-workspace, forged/ended, key change, stream revocation, 403/422 without substitution | `internal/inference`, `internal/relay` tests; `inference.go` (INFERENCE); `integration/inference_test.go` |
 | No `mat_`/gateway/provider key in attempt env/files, logs, transcript, comments, results | `integration/multica_relay_test.go`, `inferenceCredential` |
+| Tool bundles: read-only, declared `PATH` order; reserved, duplicate and missing entries, failing checks and escaping paths rejected; setuid cannot elevate; the agent runs a bundled `jq` | `tools_containers_test.go`, `image_test.go` (CONTAINERS); `integration/multica_relay_test.go` |
 | User images: unsupported version, OpenCode config overrides, reserved `ENV`, volumes and platform rejected; `USER`, setuid and entrypoint cannot change identity | `image_test.go`, `create_failure_test.go` (CONTAINERS) |
 | Unrelated base: Debian with released OpenCode completes the relay, inference and restart path; the unchanged official image completes the relay; neither contains `multica`; attempt probes run from a sidecar, not image tools | `examples/agent-image/debian.Dockerfile`; `integration/multica_relay_test.go` (SERVICE, OPENCODE) |
 | Hostile workload: no capabilities/sockets/secrets/metadata, limits, no route, external DNS, IPv6 or other attempt | `internal/docker/backend_test.go`, `projected_test.go` (CONTAINERS) |

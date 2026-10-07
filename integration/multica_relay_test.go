@@ -77,6 +77,10 @@ func multicaRelayService(t *testing.T, api *multica.Client, agentImage string, n
 	f := serviceFixture{fmt.Sprintf("sandbox-relay-controller-%d", stamp), filepath.Join(dir, "controller.json"), t}
 	controllerName := f.project + "-controller-1"
 	c := service.Config{Server: "http://" + server + ":8080", AllowHTTP: true, Daemon: controller, Image: agentImage, Command: []string{"/bin/sh", "-c", command}, Timeout: "180s", OpenCode: &service.OpenCodeConfig{IdentityFile: "/etc/multica-sandbox/identity.json", Authority: attempt.Config{URL: "http://gateway:8080/attempts", BearerFile: "/identity-secrets/admin", AllowHTTP: true}, Network: project + "_execution", Peers: []string{project + "-gateway-1", controllerName}, MulticaRelay: &service.RelayConfig{Listen: ":8091", URL: "http://multica-relay:8091"}, MulticaCLI: cli}}
+	tool := os.Getenv("MULTICA_TEST_TOOL_IMAGE")
+	if full && tool != "" {
+		c.Tools = []service.Tool{{Name: "jq", Image: tool, Check: []string{"bin/jq", "--version"}}}
+	}
 	var w *workspaceInference
 	if withInference {
 		w = configureInference(t, dir, project, &c)
@@ -143,6 +147,9 @@ func multicaRelayService(t *testing.T, api *multica.Client, agentImage string, n
 	content := sql(t, fmt.Sprintf("SELECT content FROM comment WHERE issue_id='%s' AND type='comment';", issue))
 	if comments != "1:agent:"+agent || !strings.Contains(content, "Relay fixture read: Relay fixture issue") {
 		t.Fatalf("agent did not read the issue and comment through the CLI: %s %q", comments, content)
+	}
+	if c.Tools != nil && !strings.Contains(content, "jq-1.") {
+		t.Fatalf("agent did not run the bundled tool: %q", content)
 	}
 	// The ended attempt's credential is denied by the relay itself, not by network absence.
 	denied := exec.Command("docker", "run", "--rm", "--network", network, "--entrypoint", "/bin/sh", "-e", "T="+opaque, image, "-c", `wget -q -O /dev/null --header "Authorization: Bearer $T" http://`+controllerName+`:8091/api/issues/`+issue+` 2>&1 | grep -q ' 401 '`)

@@ -21,6 +21,7 @@ from verified behavior.
   (Multica API and inference).
 - `examples/agent-image/`: example user-owned OpenCode image on a Debian base; the
   controller mounts the `multica` CLI artifact (`deploy/multica-cli.Dockerfile`).
+- `examples/tool-bundle/`: example user-owned tool bundle (static `jq`).
 - `internal/opencode/`: OpenCode adapter, native reporting and conformance
   (verified behavior, deployment-owned boundaries, limitations).
 - `cmd/sandbox-controller`, `internal/service/`: persistent controller service.
