@@ -82,7 +82,7 @@ the `auth.json` marker and their projection paths, the separate inference
 identity file and the JWT/Keycloak/custom-auth fixtures.
 
 Verified at Multica `b4ca5b4` with LiteLLM v1.104.0 (Postgres-backed virtual keys)
-and OpenCode 1.18.34:
+and OpenCode 1.18.34 and 1.18.35:
 
 - unit: cross-workspace grants, ended, forged and upstream credentials, restart,
   caller attribution stripping, error and header withholding, SSE flushing and

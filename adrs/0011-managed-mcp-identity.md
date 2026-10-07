@@ -42,7 +42,7 @@ a refresh mechanism. No additional renewal process is required.
 
 ## Consequences
 
-The experimental persistent controller registers OpenCode 1.18.34 and consumes
+The experimental persistent controller registers OpenCode (verified releases in `internal/opencode`) and consumes
 its effective remote `mcpServers` claim selection. It rejects unsupported broker
 connections, local commands, supplied headers/OAuth credentials and mismatched
 agent identity. Arbitrary claim environment and host paths are excluded.

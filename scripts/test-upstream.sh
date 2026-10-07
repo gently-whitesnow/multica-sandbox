@@ -51,7 +51,7 @@ if [ "${VERIFY_SERVICE:-0}" = 1 ]; then docker build -t multica-sandbox-controll
 if [ "${VERIFY_SERVICE:-0}" = 1 ] && [ "${VERIFY_OPENCODE:-0}" = 1 ]; then
  mkdir "$TMP/agent"
  (cd "$SOURCE/server" && CGO_ENABLED=0 GOOS=linux GOARCH="$ARCH" go build -trimpath -o "$TMP/agent/multica" ./cmd/multica)
- docker build -q -t multica-sandbox-agent:local -f examples/agent-image/Dockerfile "$TMP/agent" >/dev/null
+ docker build -q -t multica-sandbox-agent:local -f examples/agent-image/debian.Dockerfile "$TMP/agent" >/dev/null
  # Digest references need the containerd image store; the backend accepts only pinned images.
  MULTICA_TEST_AGENT_IMAGE=$(docker image inspect multica-sandbox-agent:local --format '{{index .RepoDigests 0}}')
  export MULTICA_TEST_AGENT_IMAGE

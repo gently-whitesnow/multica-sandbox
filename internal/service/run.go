@@ -93,6 +93,15 @@ func Run(ctx context.Context, c Config, stateDir, tokenPath string, out io.Write
 }
 
 func openCodeAdapter(ctx context.Context, c Config, api *multica.Client, backend *docker.Backend) (*opencode.Adapter, error) {
+	workloads := &docker.Projected{Backend: *backend, Network: c.OpenCode.Network, Peers: c.OpenCode.Peers}
+	// The digest-pinned image cannot change, so one startup inspection covers every attempt.
+	report, err := workloads.Output(ctx, opencode.ImageProbe)
+	if err != nil {
+		return nil, fmt.Errorf("inspect agent image: %w", err)
+	}
+	if err = opencode.CheckImage(report, c.OpenCode.MulticaRelay != nil); err != nil {
+		return nil, err
+	}
 	config, err := agentidentity.ReadConfig(c.OpenCode.IdentityFile)
 	if err != nil {
 		return nil, agentidentity.ErrDenied
@@ -108,7 +117,6 @@ func openCodeAdapter(ctx context.Context, c Config, api *multica.Client, backend
 	if err = authority.Apply(ctx, attempt.Grant{Controller: c.Daemon, Action: "recover"}); err != nil {
 		return nil, err
 	}
-	workloads := &docker.Projected{Backend: *backend, Network: c.OpenCode.Network, Peers: c.OpenCode.Peers}
 	if err = workloads.ValidateNetwork(ctx); err != nil {
 		return nil, err
 	}

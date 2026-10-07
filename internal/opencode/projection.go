@@ -12,7 +12,6 @@ import (
 	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
 )
 
-const Version = "1.18.34"
 const AuthPath = "/workspace/data/opencode/mcp-auth.json"
 
 var ErrDenied = errors.New("OpenCode task projection denied")

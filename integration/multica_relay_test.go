@@ -30,7 +30,7 @@ token=$(cat /proc/[0-9]*/environ 2>/dev/null | tr '\0' '\n' | sed -n 's/^MULTICA
 [ -n "$token" ] || exit 3
 printf '%s' "$token"
 cat /proc/[0-9]*/environ 2>/dev/null | tr '\0' '\n' | grep -qE 'mat_[0-9a-f]{40}([^0-9a-f]|$)' && exit 10
-grep -rqE 'mat_[0-9a-f]{40}([^0-9a-f]|$)' /workspace /tmp 2>/dev/null && exit 11
+grep -rqE 'mat_[0-9a-f]{40}([^0-9a-f]|$)' /proc/1/root/workspace /proc/1/root/tmp 2>/dev/null && exit 11
 wget -q -O /dev/null --header "Authorization: Bearer $token" --post-data '{"name":"exfiltrate"}' http://multica-relay:8091/api/tokens 2>&1 | grep -q ' 403 ' || exit 12
 wget -T 2 -q -O /dev/null "http://$1:8080/health" 2>/dev/null && exit 13
 exit 0`
@@ -110,11 +110,11 @@ func multicaRelayService(t *testing.T, api *multica.Client) {
 		}
 		if state == "running" && opaque == "" {
 			if container := dockerTest(t, "ps", "-q", "--filter", "label=io.multica-sandbox.owner="+controller); container != "" {
-				out, err := exec.Command("docker", "exec", container, "/bin/sh", "-c", attemptProbe, "probe", server).Output()
+				out, err := execOutput(container, attemptProbe, server)
 				var exit *exec.ExitError
 				switch {
 				case err == nil:
-					opaque = string(out)
+					opaque = out
 					if w != nil {
 						inferenceOpaque = inferenceCredential(t, w, container)
 					}
@@ -142,12 +142,12 @@ func multicaRelayService(t *testing.T, api *multica.Client) {
 		t.Fatalf("agent did not read the issue and comment through the CLI: %s %q", comments, content)
 	}
 	// The ended attempt's credential is denied by the relay itself, not by network absence.
-	denied := exec.Command("docker", "run", "--rm", "--network", network, "--entrypoint", "/bin/sh", "-e", "T="+opaque, agentImage, "-c", `wget -q -O /dev/null --header "Authorization: Bearer $T" http://`+controllerName+`:8091/api/issues/`+issue+` 2>&1 | grep -q ' 401 '`)
+	denied := exec.Command("docker", "run", "--rm", "--network", network, "--entrypoint", "/bin/sh", "-e", "T="+opaque, image, "-c", `wget -q -O /dev/null --header "Authorization: Bearer $T" http://`+controllerName+`:8091/api/issues/`+issue+` 2>&1 | grep -q ' 401 '`)
 	if out, err := denied.CombinedOutput(); err != nil {
 		t.Fatalf("ended attempt credential not denied: %v %s", err, out)
 	}
 	if w != nil {
-		denied := exec.Command("docker", "run", "--rm", "--network", network, "--entrypoint", "/bin/sh", "-e", "T="+inferenceOpaque, agentImage, "-c", `wget -q -O /dev/null --header "Authorization: Bearer $T" --post-data '{}' http://`+controllerName+`:8092/v1/chat/completions 2>&1 | grep -q ' 401 '`)
+		denied := exec.Command("docker", "run", "--rm", "--network", network, "--entrypoint", "/bin/sh", "-e", "T="+inferenceOpaque, image, "-c", `wget -q -O /dev/null --header "Authorization: Bearer $T" --post-data '{}' http://`+controllerName+`:8092/v1/chat/completions 2>&1 | grep -q ' 401 '`)
 		if out, err := denied.CombinedOutput(); err != nil {
 			t.Fatalf("ended inference credential not denied: %v %s", err, out)
 		}
@@ -170,6 +170,6 @@ func multicaRelayService(t *testing.T, api *multica.Client) {
 	}
 	w.usage(t, map[string][2]string{attribution(agent, id): {"fixture", "workspace"}})
 	t.Log("the same task used the workspace LiteLLM key through the inference relay; LiteLLM attributes workspace/agent/task")
-	restartFailsClosed(t, w, network, controllerName, agentImage, runtime, agent)
+	restartFailsClosed(t, w, network, controllerName, runtime, agent)
 	controllerModelSelections(t, api, w, runtime, agent)
 }

@@ -82,24 +82,10 @@ func (b *Projected) Start(ctx context.Context, attempt string) (execution.Projec
 		defer cancel()
 		return projection.Remove(cleanCtx)
 	}
-	args := b.createArgs(r.name)
-	for i, arg := range args {
-		switch arg {
-		case "--network=none":
-			args[i] = "--network=" + isolated
-		case "--memory=128m":
-			args[i] = "--memory=1g"
-		case "--memory-swap=128m":
-			args[i] = "--memory-swap=1g"
-		case "--pids-limit=64":
-			args[i] = "--pids-limit=256"
-		case "--tmpfs=/workspace:rw,nosuid,nodev,size=67108864,mode=1777":
-			args[i] = "--tmpfs=/workspace:rw,nosuid,nodev,size=268435456,mode=1777"
-		}
-	}
+	args := attemptLimits(b.createArgs(r.name), isolated)
 	// The holding process never handles tokens or executes task-supplied shell text.
 	args = args[:len(args)-len(b.Command)-2]
-	args = append(args, "--env=XDG_DATA_HOME=/workspace/data", "--env=XDG_CONFIG_HOME=/workspace/config", "--env=XDG_CACHE_HOME=/workspace/cache", "--env=OPENCODE_DISABLE_AUTOUPDATE=true", "--env=OPENCODE_DISABLE_MODELS_FETCH=true", "--env=OPENCODE_DISABLE_DEFAULT_PLUGINS=true", "--env=OPENCODE_DISABLE_LSP_DOWNLOAD=true", "--entrypoint", "/bin/sh", b.Image, "-c", "exec sleep 86400")
+	args = append(args, "--env=XDG_DATA_HOME=/workspace/data", "--env=XDG_CONFIG_HOME=/workspace/config", "--env=XDG_CACHE_HOME=/workspace/cache", "--env=XDG_STATE_HOME=/workspace/state", "--env=OPENCODE_DISABLE_AUTOUPDATE=true", "--env=OPENCODE_DISABLE_MODELS_FETCH=true", "--env=OPENCODE_DISABLE_DEFAULT_PLUGINS=true", "--env=OPENCODE_DISABLE_LSP_DOWNLOAD=true", "--entrypoint", "/bin/sh", b.Image, "-c", "exec sleep 86400")
 	if _, err := command(ctx, args...); err != nil {
 		return nil, errors.Join(err, errors.Join(b.cleanupUncertainCreate(r), cleanup()))
 	}
@@ -114,6 +100,45 @@ func (b *Projected) Start(ctx context.Context, attempt string) (execution.Projec
 		return nil, errors.Join(err, cleanup())
 	}
 	return projection, nil
+}
+
+// Output inspects the agent image offline within attempt resource limits and returns its bounded stdout.
+func (b *Projected) Output(ctx context.Context, args []string) ([]byte, error) {
+	probe := Backend{Image: b.Image, Owner: b.Owner, Command: args}
+	if err := probe.Validate(ctx); err != nil {
+		return nil, err
+	}
+	r := &run{name: probe.name("image-inspection")}
+	if _, err := command(ctx, attemptLimits(probe.createArgs(r.name), "none")...); err != nil {
+		return nil, errors.Join(err, probe.cleanupUncertainCreate(r))
+	}
+	data, err := command(ctx, "inspect", r.name)
+	if err == nil {
+		err = checkProjectedPolicy(data, "none")
+	}
+	if err != nil {
+		return nil, errors.Join(err, r.cleanup())
+	}
+	data, err = command(ctx, "start", "--attach", r.name)
+	return data, errors.Join(err, r.cleanup())
+}
+
+func attemptLimits(args []string, network string) []string {
+	for i, arg := range args {
+		switch arg {
+		case "--network=none":
+			args[i] = "--network=" + network
+		case "--memory=128m":
+			args[i] = "--memory=1g"
+		case "--memory-swap=128m":
+			args[i] = "--memory-swap=1g"
+		case "--pids-limit=64":
+			args[i] = "--pids-limit=256"
+		case "--tmpfs=/workspace:rw,nosuid,nodev,size=67108864,mode=1777":
+			args[i] = "--tmpfs=/workspace:rw,nosuid,nodev,size=268435456,mode=1777"
+		}
+	}
+	return args
 }
 
 type projectedRun struct {

@@ -19,7 +19,8 @@ from verified behavior.
 - `internal/identity/`: static/external identity resolution and verified Keycloak issuance.
 - `internal/relay/`: shared credential-translation reverse proxy and per-attempt grants
   (Multica API and inference).
-- `examples/agent-image/`: example OpenCode image with the upstream `multica` CLI.
+- `examples/agent-image/`: example user-owned OpenCode images (official and Debian bases)
+  with the upstream `multica` CLI.
 - `internal/opencode/`: OpenCode adapter, native reporting and conformance
   (verified behavior, deployment-owned boundaries, limitations).
 - `cmd/sandbox-controller`, `internal/service/`: persistent controller service.

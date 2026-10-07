@@ -3,7 +3,7 @@
 A disposable Keycloak + official MCP Go SDK example. Two attempts share one
 service client but receive distinct short-lived access tokens and resource grants.
 The base scenario is a protocol fixture. `./scripts/test-opencode.sh` adds native
-OpenCode 1.18.34 task containers and real JWT renewal through the controller adapter.
+OpenCode 1.18.35 task containers and real JWT renewal through the controller adapter.
 Neither fixture is a production gateway.
 It also exercises static/external identity resolution against real Keycloak through
 [the controller identity module](../../internal/identity/README.md).

@@ -39,7 +39,7 @@ networks:
   execution:
     internal: true
 EOF_CONFIG
-docker pull ghcr.io/anomalyco/opencode:1.18.34@sha256:b34342987ca889fc2cc19cbc046eefc2418e5980a3d696e209fbb401a288f631 >/dev/null
+docker pull ghcr.io/anomalyco/opencode:1.18.35@sha256:ae90ec960c871b0ea6df9abc1c2ec1e6b36464e8eca9b0e71e1ed3b553f47aa2 >/dev/null
 compose build
 compose up -d --wait --wait-timeout 240 litellm || { compose logs --no-color litellm 2>&1 | tail -20; exit 1; }
 compose up --no-deps --no-log-prefix --abort-on-container-exit --exit-code-from inference inference

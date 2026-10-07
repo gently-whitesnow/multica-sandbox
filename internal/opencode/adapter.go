@@ -116,9 +116,6 @@ func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, 
 }
 
 func (r *running) initialize(ctx context.Context, prompt, brief []byte) error {
-	if err := r.workload.Execute(ctx, []string{"/bin/sh", "-c", `test "$(opencode --version)" = "` + Version + `"`}); err != nil {
-		return fmt.Errorf("OpenCode version: %w", ErrDenied)
-	}
 	if err := r.workload.Execute(ctx, []string{"/bin/sh", "-c", `set -eu; mkdir -p /workspace/config/opencode; printf "{}" > /workspace/config/opencode/opencode.json; printf "*\n" > /workspace/config/opencode/.gitignore; chmod 555 /workspace/config/opencode`}); err != nil {
 		return fmt.Errorf("OpenCode config directory: %w", ErrDenied)
 	}

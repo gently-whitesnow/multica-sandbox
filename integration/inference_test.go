@@ -178,7 +178,7 @@ func attribution(agent, task string) string {
 }
 
 // restartFailsClosed restarts the controller under a live streaming attempt and checks its grant died.
-func restartFailsClosed(t *testing.T, w *workspaceInference, network, controllerName, agentImage, runtime, agent string) {
+func restartFailsClosed(t *testing.T, w *workspaceInference, network, controllerName, runtime, agent string) {
 	id := "a3000000-0000-4000-8000-000000000036"
 	issue := "a2000000-0000-4000-8000-000000000036"
 	sql(t, fmt.Sprintf(`UPDATE agent SET model='',thinking_level='' WHERE id='%s';
@@ -195,7 +195,7 @@ func restartFailsClosed(t *testing.T, w *workspaceInference, network, controller
 		return opaque != ""
 	})
 	relay := func(model string, header ...string) string {
-		args := []string{"run", "--rm", "--network", network, "--entrypoint", "/bin/sh", "-e", "T=" + opaque, agentImage, "-c", `wget -S -q -O /dev/null --header "Authorization: Bearer $T" --header "Content-Type: application/json" ` + strings.Join(header, " ") + ` --post-data '{"model":"` + model + `","stream":true,"messages":[{"role":"user","content":"Fixture reply"}],"user":"spoofed-body","metadata":{"user_id":"spoofed-metadata"}}' http://` + controllerName + `:8092/v1/chat/completions 2>&1 | grep -o 'HTTP/[0-9.]* [0-9][0-9][0-9]' | head -1 | cut -d' ' -f2`}
+		args := []string{"run", "--rm", "--network", network, "--entrypoint", "/bin/sh", "-e", "T=" + opaque, image, "-c", `wget -S -q -O /dev/null --header "Authorization: Bearer $T" --header "Content-Type: application/json" ` + strings.Join(header, " ") + ` --post-data '{"model":"` + model + `","stream":true,"messages":[{"role":"user","content":"Fixture reply"}],"user":"spoofed-body","metadata":{"user_id":"spoofed-metadata"}}' http://` + controllerName + `:8092/v1/chat/completions 2>&1 | grep -o 'HTTP/[0-9.]* [0-9][0-9][0-9]' | head -1 | cut -d' ' -f2`}
 		return dockerTest(t, args...)
 	}
 	if status := relay("fixture-new", `--header "X-Litellm-Customer-Id: spoofed-customer"`, `--header "X-Litellm-End-User-Id: spoofed-end-user"`); status != "200" {
@@ -225,7 +225,7 @@ func restartFailsClosed(t *testing.T, w *workspaceInference, network, controller
 // inferenceCredential checks a live attempt as its own user and returns its opaque provider key.
 func inferenceCredential(t *testing.T, w *workspaceInference, container string) string {
 	t.Helper()
-	ctx := `cat /proc/[0-9]*/environ 2>/dev/null | tr '\0' '\n'; find /workspace /tmp -type f -size -1M -exec cat {} + 2>/dev/null; wget -T 2 -q -O /dev/null http://litellm:4000/health/liveliness 2>/dev/null && echo GATEWAY-REACHABLE; true`
+	ctx := `cat /proc/[0-9]*/environ 2>/dev/null | tr '\0' '\n'; find /proc/1/root/workspace /proc/1/root/tmp -type f -size -1M -exec cat {} + 2>/dev/null; wget -T 2 -q -O /dev/null http://litellm:4000/health/liveliness 2>/dev/null && echo GATEWAY-REACHABLE; true`
 	out, err := execOutput(container, ctx)
 	if err != nil {
 		return ""
@@ -238,7 +238,7 @@ func inferenceCredential(t *testing.T, w *workspaceInference, container string) 
 			Options map[string]string `json:"options"`
 		} `json:"provider"`
 	}
-	raw, err := execOutput(container, "cat /workspace/opencode.json")
+	raw, err := execOutput(container, "cat /proc/1/root/workspace/opencode.json")
 	if err != nil || json.Unmarshal([]byte(raw), &config) != nil {
 		return ""
 	}
@@ -249,9 +249,13 @@ func inferenceCredential(t *testing.T, w *workspaceInference, container string) 
 	return opaque
 }
 
-func execOutput(container, script string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+// execOutput probes an attempt from a sidecar sharing its network and processes as the
+// attempt user, so checks never depend on tools in the user-owned agent image.
+// The attempt filesystem is /proc/1/root.
+func execOutput(container, script string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "docker", "exec", container, "/bin/sh", "-c", script).Output()
+	out, err := exec.CommandContext(ctx, "docker", append([]string{"run", "--rm", "--network=container:" + container, "--pid=container:" + container,
+		"--user=65532:65532", "--cap-drop=ALL", "--security-opt=no-new-privileges=true", "--read-only", "--entrypoint", "/bin/sh", image, "-c", script, "probe"}, args...)...).Output()
 	return string(out), err
 }
