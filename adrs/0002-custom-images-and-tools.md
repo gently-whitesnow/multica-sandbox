@@ -86,11 +86,22 @@ shell then silently runs the image command of the same name. Bundles must be
 self-contained and relocatable; there are no install scripts or tool environment
 variables beyond `PATH`. Every bundle file is visible to the agent.
 
+Refinement (#45, 2026-10-07). The optional base image is the official OpenCode
+image. `internal/opencode/images.txt` lists, oldest first, the release digests
+(multi-platform indexes) that pass conformance; `Supported` derives from it. Every
+listed image runs the relay path unchanged, the full suite runs on the newest, and
+a test rejects unlisted official references in the repository. Users take a listed
+image unchanged, extend it with `FROM`, or build an unrelated base
+(`examples/agent-image`). We publish no project base: the official image already
+meets the contract, and our own would need a rebuild for every OpenCode and OS
+release without closing a gap. Revisit on concrete demand. Adding a release is one
+line plus a verification run. Conformance ran on `linux/arm64`; `amd64` is unverified.
+
 ## Consequences
 
 Users can bring their own images and tools without modifying the runtime. We own
-the default image, manifest validation and runner compatibility checks; users own
+the verified base list, manifest validation and runner compatibility checks; users own
 their custom artifacts and dependencies. The OpenCode image contract and the
 controller-delivered CLI and user tool bundles are implemented
-(`internal/opencode/README.md`); per-workspace selection, a separate environment
-manifest and a published base image remain planned.
+(`internal/opencode/README.md`); per-workspace selection and a separate environment
+manifest remain planned.

@@ -1,0 +1,5 @@
+# Official OpenCode images verified by the conformance suite (README), oldest first.
+# Each line pins the multi-platform index of an upstream release tag. They are the
+# optional base for agent images; Supported holds their versions.
+ghcr.io/anomalyco/opencode:1.18.34@sha256:b34342987ca889fc2cc19cbc046eefc2418e5980a3d696e209fbb401a288f631
+ghcr.io/anomalyco/opencode:1.18.35@sha256:ae90ec960c871b0ea6df9abc1c2ec1e6b36464e8eca9b0e71e1ed3b553f47aa2
