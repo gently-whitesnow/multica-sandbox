@@ -63,7 +63,7 @@ func multicaRelayService(t *testing.T, api *multica.Client, agentImage string, n
 	compose := func(args ...string) string {
 		return dockerTest(t, append([]string{"compose", "-p", project, "--profile", "inference", "-f", "../examples/identity-mcp/compose.yaml", "-f", fixture}, args...)...)
 	}
-	t.Cleanup(func() { compose("down", "-v", "--remove-orphans") })
+	t.Cleanup(func() { compose("down", "-v", "--remove-orphans", "--rmi", "local") })
 	compose("build", "seed", "gateway")
 	compose("up", "-d", "--wait", "--wait-timeout", "240", target)
 

@@ -5,7 +5,7 @@ ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)
 PROJECT="sandbox-inference-$$"
 TMP=$(mktemp -d)
 compose() { docker compose -p "$PROJECT" --profile inference -f "$ROOT/examples/identity-mcp/compose.yaml" -f "$TMP/inference.yaml" "$@"; }
-cleanup() { compose down -v --remove-orphans; rm -rf "$TMP"; }
+cleanup() { compose down -v --remove-orphans --rmi local; rm -rf "$TMP"; }
 trap cleanup EXIT
 cat > "$TMP/inference.yaml" <<EOF_CONFIG
 services:

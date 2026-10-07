@@ -5,7 +5,7 @@ ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)
 PROJECT="sandbox-opencode-$$"
 TMP=$(mktemp -d)
 compose() { docker compose -p "$PROJECT" -f "$ROOT/examples/identity-mcp/compose.yaml" -f "$TMP/rotation.yaml" "$@"; }
-cleanup() { compose down -v --remove-orphans; rm -rf "$TMP"; }
+cleanup() { compose down -v --remove-orphans --rmi local; rm -rf "$TMP"; }
 trap cleanup EXIT
 cat > "$TMP/rotation.yaml" <<EOF_CONFIG
 services:

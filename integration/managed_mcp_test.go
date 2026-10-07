@@ -36,7 +36,7 @@ func managedMCPService(t *testing.T, api *multica.Client) {
 	compose := func(args ...string) string {
 		return dockerTest(t, append([]string{"compose", "-p", project, "-f", "../examples/identity-mcp/compose.yaml", "-f", fixture}, args...)...)
 	}
-	t.Cleanup(func() { compose("down", "-v", "--remove-orphans") })
+	t.Cleanup(func() { compose("down", "-v", "--remove-orphans", "--rmi", "local") })
 	compose("build", "seed", "gateway")
 	compose("up", "-d", "--wait", "--wait-timeout", "180", "gateway")
 	controller := "90000000-0000-4000-8000-000000000029"
