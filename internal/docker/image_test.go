@@ -50,15 +50,16 @@ func TestUserImageCannotOverridePolicy(t *testing.T) {
 chmod 4755 /usr/local/bin/busybox-suid`, "USER root", "HEALTHCHECK CMD true", "ENV BUN_RUNTIME_TRANSPILER_CACHE_PATH=0", "ENTRYPOINT [\"/bin/false\"]")
 	b := testBackend(t, "true")
 	b.Image = image
+	w := &Projected{Backend: *b}
 	ctx := context.Background()
-	report, err := b.Output(ctx, opencode.ImageProbe)
+	report, err := w.Output(ctx, opencode.ImageProbe)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err = opencode.CheckImage(report, true); err != nil {
 		t.Fatal(err)
 	}
-	identity, err := b.Output(ctx, []string{"/bin/sh", "-c", `id -u; busybox-suid id -u; grep '^NoNewPrivs' /proc/self/status`})
+	identity, err := w.Output(ctx, []string{"/bin/sh", "-c", `id -u; busybox-suid id -u; grep '^NoNewPrivs' /proc/self/status`})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +84,8 @@ func TestIncompatibleUserImages(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			b := testBackend(t, "true")
 			b.Image = userImage(t, test.setup, test.changes...)
-			report, err := b.Output(context.Background(), opencode.ImageProbe)
+			w := &Projected{Backend: *b}
+			report, err := w.Output(context.Background(), opencode.ImageProbe)
 			if err == nil {
 				err = opencode.CheckImage(report, true)
 			}

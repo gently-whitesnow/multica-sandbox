@@ -68,22 +68,6 @@ func (b *Backend) Validate(ctx context.Context) error {
 // engineArchitectures maps Docker engine (uname) names to OCI platform names; emulation is unsupported.
 var engineArchitectures = map[string]string{"x86_64": "amd64", "aarch64": "arm64"}
 
-// Output inspects the image in a hardened, offline, short-lived container and returns its bounded stdout.
-func (b *Backend) Output(ctx context.Context, args []string) ([]byte, error) {
-	probe := Backend{Image: b.Image, Owner: b.Owner, Command: args}
-	if err := probe.Validate(ctx); err != nil {
-		return nil, err
-	}
-	r := &run{name: probe.name("image-inspection")}
-	if _, err := command(ctx, probe.createArgs(r.name)...); err != nil {
-		return nil, errors.Join(err, probe.cleanupUncertainCreate(r))
-	}
-	if err := r.check(ctx); err != nil {
-		return nil, errors.Join(err, r.cleanup())
-	}
-	data, err := command(ctx, "start", "--attach", r.name)
-	return data, errors.Join(err, r.cleanup())
-}
 func (b *Backend) Reconcile(ctx context.Context) error {
 	if !ownerPattern.MatchString(b.Owner) {
 		return fmt.Errorf("valid daemon owner required for reconciliation")

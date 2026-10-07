@@ -38,8 +38,9 @@ trusted test configuration solely to exercise tool turns without a subscription.
 ## Image contract
 
 Users build images in their own CI; the controller never builds Dockerfiles or pulls.
-At startup it runs `ImageProbe` in a hardened offline container and fails closed
-with every incompatibility. A compatible image:
+At startup it runs `ImageProbe` offline within attempt limits and fails closed
+with every incompatibility. `examples/agent-image/debian.Dockerfile` shows an
+unrelated base with the released glibc OpenCode build. A compatible image:
 
 - matches the Docker engine platform (`linux/amd64` or `linux/arm64`) and declares no volumes;
 - has `/bin/sh` with `sleep`, `mkdir`, `cat`, `chmod`, `mv`, and `opencode` on `PATH`
@@ -116,6 +117,7 @@ Engine 29.2.1 (runc, cgroup v2). Reproduce with `MULTICA_SOURCE=<checkout>` and
 | Workspace keys: spoofing, cross-workspace, forged/ended, key change, stream revocation, 403/422 without substitution | `internal/inference`, `internal/relay` tests; `inference.go` (INFERENCE); `integration/inference_test.go` |
 | No `mat_`/gateway/provider key in attempt env/files, logs, transcript, comments, results | `integration/multica_relay_test.go`, `inferenceCredential` |
 | User images: unsupported version, OpenCode config overrides, reserved `ENV`, missing CLI, volumes and platform rejected; `USER`, setuid and entrypoint cannot change identity | `image_test.go`, `create_failure_test.go` (CONTAINERS) |
+| Unrelated base: Debian with released OpenCode completes the relay, inference and restart path; attempt probes run from a sidecar, not image tools | `examples/agent-image/debian.Dockerfile`; `integration/multica_relay_test.go` (SERVICE, OPENCODE) |
 | Hostile workload: no capabilities/sockets/secrets/metadata, limits, no route, external DNS, IPv6 or other attempt | `internal/docker/backend_test.go`, `projected_test.go` (CONTAINERS) |
 
 Deployment-owned, verified only as integration contracts: production egress
