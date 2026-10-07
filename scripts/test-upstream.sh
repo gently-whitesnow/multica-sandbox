@@ -52,11 +52,13 @@ if [ "${VERIFY_SERVICE:-0}" = 1 ] && [ "${VERIFY_OPENCODE:-0}" = 1 ]; then
  mkdir "$TMP/agent"
  docker build -q -t multica-sandbox-agent:local -f examples/agent-image/debian.Dockerfile "$TMP/agent" >/dev/null
  docker build -q -t multica-sandbox-cli:local -f deploy/multica-cli.Dockerfile --build-context multica="$SOURCE" "$TMP/agent" >/dev/null
+ docker build -q -t multica-sandbox-tool-jq:local -f examples/tool-bundle/Dockerfile "$TMP/agent" >/dev/null
  docker pull -q ghcr.io/anomalyco/opencode:1.18.35@sha256:ae90ec960c871b0ea6df9abc1c2ec1e6b36464e8eca9b0e71e1ed3b553f47aa2 >/dev/null
  # Digest references need the containerd image store; the backend accepts only pinned images.
  MULTICA_TEST_AGENT_IMAGE=$(docker image inspect multica-sandbox-agent:local --format '{{index .RepoDigests 0}}')
  MULTICA_TEST_CLI_IMAGE=$(docker image inspect multica-sandbox-cli:local --format '{{index .RepoDigests 0}}')
- export MULTICA_TEST_AGENT_IMAGE MULTICA_TEST_CLI_IMAGE
+ MULTICA_TEST_TOOL_IMAGE=$(docker image inspect multica-sandbox-tool-jq:local --format '{{index .RepoDigests 0}}')
+ export MULTICA_TEST_AGENT_IMAGE MULTICA_TEST_CLI_IMAGE MULTICA_TEST_TOOL_IMAGE
 fi
 MULTICA_TEST_SERVER_CONTAINER="$SERVER" MULTICA_TEST_DB_CONTAINER="$DB" go test -tags=upstream -run "${UPSTREAM_TEST_FILTER:-.}" -count=1 -v ./integration
 printf 'Verified upstream %s\n' "$REV"

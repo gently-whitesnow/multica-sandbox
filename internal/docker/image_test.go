@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -158,10 +159,10 @@ func TestRejectInvalidCLIArtifact(t *testing.T) {
 		bundle Bundle
 		want   string
 	}{
-		"revision": {Bundle{cliBundle(t, `echo "multica dev (commit: unknown, built: unknown)"`), multica.CLIDir}, "is not built from Multica"},
-		"absent":   {Bundle{"example.invalid/cli@sha256:" + strings.Repeat("0", 64), multica.CLIDir}, "preload the pinned image"},
-		"unpinned": {Bundle{"alpine:latest", multica.CLIDir}, "digest-pinned bundle image"},
-		"target":   {Bundle{testImage, "/usr/local"}, "controller-owned target"},
+		"revision": {Bundle{Image: cliBundle(t, `echo "multica dev (commit: unknown, built: unknown)"`), Target: multica.CLIDir}, "is not built from Multica"},
+		"absent":   {Bundle{Image: "example.invalid/cli@sha256:" + strings.Repeat("0", 64), Target: multica.CLIDir}, "preload the pinned image"},
+		"unpinned": {Bundle{Image: "alpine:latest", Target: multica.CLIDir}, "digest-pinned bundle image"},
+		"target":   {Bundle{Image: testImage, Target: "/usr/local"}, "controller-owned target"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			w := &Projected{Backend: *b, Bundles: []Bundle{test.bundle}}
@@ -173,5 +174,47 @@ func TestRejectInvalidCLIArtifact(t *testing.T) {
 				t.Fatalf("got %v, want %q", err, test.want)
 			}
 		})
+	}
+}
+
+// TestToolBundleCannotElevate mounts a setuid-root binary that reports its effective uid.
+func TestToolBundleCannotElevate(t *testing.T) {
+	ctx := context.Background()
+	engine, err := command(ctx, "info", "--format", "{{.Architecture}}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err = os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n\nimport (\"fmt\"; \"os\")\n\nfunc main() { fmt.Println(os.Getuid(), os.Geteuid()) }\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	build := exec.Command("go", "build", "-o", filepath.Join(dir, "euid"), filepath.Join(dir, "main.go"))
+	build.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", "GOARCH="+engineArchitectures[strings.TrimSpace(string(engine))])
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("%v %s", err, out)
+	}
+	if err = os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte("FROM scratch\nCOPY --chmod=4755 euid /bin/euid\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	tag := fmt.Sprintf("multica-sandbox-tool-test:%d", time.Now().UnixNano())
+	if _, err = command(ctx, "build", "-q", "-t", tag, dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { command(context.Background(), "rmi", "-f", tag) })
+	ref, err := command(ctx, "image", "inspect", "--format", "{{index .RepoDigests 0}}", tag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := testBackend(t, "true")
+	bundle := Bundle{Image: strings.TrimSpace(string(ref)), Target: "/opt/multica-sandbox/tools/euid"}
+	w := &Projected{Backend: *b, Bundles: []Bundle{bundle}}
+	out, err := w.Output(ctx, []string{"/bin/sh", "-c", `d=/opt/multica-sandbox/tools/euid/bin; stat -c %a "$d/euid"; euid; ! touch "$d/x" 2>/dev/null && echo read-only`})
+	if want := "4755\n65532 65532\nread-only\n"; err != nil || string(out) != want {
+		t.Fatalf("got %q %v, want %q", out, err, want)
+	}
+	bundle.Path = []string{"../../../workspace"}
+	w.Bundles = []Bundle{bundle}
+	if _, err = w.Output(ctx, []string{"/bin/true"}); err == nil || !strings.Contains(err.Error(), "inside the bundle") {
+		t.Fatalf("escaping PATH entry accepted: %v", err)
 	}
 }

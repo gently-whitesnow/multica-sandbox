@@ -73,10 +73,24 @@ the agent, copied per attempt into the size-limited tmpfs, unsuitable for bundle
 read-only, `pullPolicy: Never`) are the counterpart for #6; their exec and `nosuid`
 semantics must be verified on the selected runtime.
 
+Refinement (#43, 2026-10-07). User tool bundles use the same mechanism. Top-level
+controller configuration lists `tools` (`name`, digest-pinned `image`, optional
+`path` directories, default `bin`, and an optional `check` argv). They are mounted
+at `/opt/multica-sandbox/tools/<name>`, after the `multica` CLI and before the
+image `PATH`, in declared order. Selection is per controller, like the image;
+per-workspace selection waits for demand. Startup rejects missing `path` entries,
+commands provided twice and commands the image or controller own (the agent, the
+CLI and the helpers the controller runs), then runs each check by bundle path. The
+spike showed why: a glibc binary on a musl image fails with `ENOENT`, and the
+shell then silently runs the image command of the same name. Bundles must be
+self-contained and relocatable; there are no install scripts or tool environment
+variables beyond `PATH`. Every bundle file is visible to the agent.
+
 ## Consequences
 
 Users can bring their own images and tools without modifying the runtime. We own
 the default image, manifest validation and runner compatibility checks; users own
 their custom artifacts and dependencies. The OpenCode image contract and the
-controller-delivered CLI are implemented (`internal/opencode/README.md`); the
-environment manifest, user tool bundles and published base image remain planned.
+controller-delivered CLI and user tool bundles are implemented
+(`internal/opencode/README.md`); per-workspace selection, a separate environment
+manifest and a published base image remain planned.
