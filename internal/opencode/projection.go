@@ -82,7 +82,8 @@ func Config(connections map[string]Remote, local bool) ([]byte, error) {
 }
 
 // Prompt returns the per-turn prompt and, for upstream CLI tasks, the AGENTS.md brief.
-func Prompt(t multica.Task, upstream bool) ([]byte, []byte, error) {
+// With checkout, the brief offers `multica repo checkout` for the claim repositories.
+func Prompt(t multica.Task, upstream, checkout bool) ([]byte, []byte, error) {
 	if t.Agent == nil {
 		return nil, nil, ErrDenied
 	}
@@ -93,10 +94,13 @@ func Prompt(t multica.Task, upstream bool) ([]byte, []byte, error) {
 	var prompt, brief string
 	if upstream && upstreamTask(t) {
 		prompt = upstreamPrompt(t)
-		if sources != "" {
-			sources = "Repository references (no local checkout; access through selected authorized MCP):\n" + sources
+		switch {
+		case checkout:
+			sources = checkoutRepositories(t.Repos)
+		case sources != "":
+			sources = "## Repositories\n\nRepository references (no local checkout; access through selected authorized MCP):\n" + sources + "\n\n"
 		}
-		brief = upstreamBrief(t, sources)
+		brief = upstreamBrief(t, sources, checkout)
 	} else {
 		sections := []string{t.Agent.Instructions, t.WorkspaceContext, "Assigned issue: " + t.IssueID, t.ProjectTitle, t.ProjectDescription, t.TriggerCommentContent, t.ChatMessage}
 		if sources != "" {

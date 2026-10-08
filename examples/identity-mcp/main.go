@@ -12,7 +12,7 @@ import (
 
 func main() {
 	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: identity-example init|gateway|scenario|health")
+		fmt.Fprintln(os.Stderr, "usage: identity-example init|gateway|git|scenario|health")
 		os.Exit(2)
 	}
 	var err error
@@ -31,6 +31,8 @@ func main() {
 		err = initialize()
 	case "gateway":
 		err = gateway()
+	case "git":
+		err = gitFixture()
 	case "evidence":
 		err = printEvidence()
 	case "inference":
@@ -56,7 +58,7 @@ func randomSecret() string {
 }
 func initialize() error {
 	if _, err := os.Stat("/realm/realm.json"); err == nil {
-		for _, name := range []string{"client", "admin", "upstream"} {
+		for _, name := range []string{"client", "admin", "upstream", "git"} {
 			if _, err := os.Stat("/secrets/" + name); err != nil {
 				return fmt.Errorf("incomplete fixture: remove example volumes")
 			}
@@ -70,6 +72,10 @@ func initialize() error {
 	}}}
 	// The provider key exists only in LiteLLM and the mock provider; agents never receive it.
 	if err := os.WriteFile("/secrets/upstream", []byte(randomSecret()), 0600); err != nil {
+		return err
+	}
+	// The Git host password exists only in the Git fixture and the controller's Git relay.
+	if err := os.WriteFile("/secrets/git", []byte(randomSecret()), 0600); err != nil {
 		return err
 	}
 	data, _ := json.Marshal(realm)

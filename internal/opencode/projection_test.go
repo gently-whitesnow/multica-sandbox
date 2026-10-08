@@ -64,19 +64,19 @@ func TestPromptProjectsOnlySafeSourceReferences(t *testing.T) {
 	task.ProjectDescription = "project context"
 	task.PriorSessionID = "ses_old"
 	task.Repos = []multica.Repository{{URL: "https://git.example.invalid/team/repo.git", Ref: "main", Description: "source"}}
-	prompt, _, err := Prompt(task, false)
+	prompt, _, err := Prompt(task, false, false)
 	if err != nil || !strings.Contains(string(prompt), "chat instruction") || !strings.Contains(string(prompt), "project context") || !strings.Contains(string(prompt), "main") || !strings.Contains(string(prompt), "resume is unavailable") || strings.Contains(string(prompt), "ses_old") {
 		t.Fatalf("source/context projection: %v", err)
 	}
 	for _, u := range []string{"https://user:secret@git.example/repo", "https://git.example/repo?token=secret", "file:///host/repo", "ssh://git.example/repo", "https://git.example/repo\nsecret"} {
 		task.Repos[0].URL = u
-		if _, _, err := Prompt(task, false); err == nil {
+		if _, _, err := Prompt(task, false, false); err == nil {
 			t.Fatal("unsafe source reference accepted")
 		}
 	}
 	task.Repos = nil
 	task.ChatMessage = strings.Repeat("a", 65537)
-	if _, _, err := Prompt(task, false); err == nil {
+	if _, _, err := Prompt(task, false, false); err == nil {
 		t.Fatal("oversized context accepted")
 	}
 }

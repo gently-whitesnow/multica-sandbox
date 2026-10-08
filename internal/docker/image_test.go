@@ -59,7 +59,7 @@ chmod 4755 /usr/local/bin/busybox-suid`, "USER root", "HEALTHCHECK CMD true", "E
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = opencode.CheckImage(report, false); err != nil {
+	if err = opencode.CheckImage(report, false, false); err != nil {
 		t.Fatal(err)
 	}
 	identity, err := w.Output(ctx, []string{"/bin/sh", "-c", `id -u; busybox-suid id -u; grep '^NoNewPrivs' /proc/self/status`})
@@ -89,7 +89,7 @@ func TestIncompatibleUserImages(t *testing.T) {
 			w := &Projected{Backend: *b}
 			report, err := w.Output(context.Background(), opencode.ImageProbe)
 			if err == nil {
-				err = opencode.CheckImage(report, false)
+				err = opencode.CheckImage(report, false, false)
 			}
 			for _, want := range test.want {
 				if err == nil || !strings.Contains(err.Error(), want) {
@@ -137,7 +137,7 @@ chmod 755 /usr/local/bin/multica /opt/multica-sandbox/multica/bin/multica`, "ENV
 	w := &Projected{Backend: *b, Bundles: []Bundle{{Image: cliBundle(t, pinnedCLI), Target: multica.CLIDir}}}
 	report, err := w.Output(ctx, opencode.ImageProbe)
 	if err == nil {
-		err = opencode.CheckImage(report, true)
+		err = opencode.CheckImage(report, true, false)
 	}
 	if err != nil {
 		t.Fatal(err)
@@ -168,7 +168,7 @@ func TestRejectInvalidCLIArtifact(t *testing.T) {
 			w := &Projected{Backend: *b, Bundles: []Bundle{test.bundle}}
 			report, err := w.Output(context.Background(), opencode.ImageProbe)
 			if err == nil {
-				err = opencode.CheckImage(report, true)
+				err = opencode.CheckImage(report, true, false)
 			}
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("got %v, want %q", err, test.want)

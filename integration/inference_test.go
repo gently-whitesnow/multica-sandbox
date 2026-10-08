@@ -119,6 +119,9 @@ func (w *workspaceInference) leaked(text string) bool {
 
 func managedVolumes(dir string, c service.Config) []map[string]any {
 	volumes := []map[string]any{{"type": "bind", "source": filepath.Join(dir, "config.json"), "target": "/etc/multica-sandbox/controller.json", "read_only": true}, {"type": "bind", "source": filepath.Join(dir, "identity.json"), "target": "/etc/multica-sandbox/identity.json", "read_only": true}, {"type": "volume", "source": "identity-secrets", "target": "/identity-secrets", "read_only": true}}
+	if c.OpenCode.GitFile != "" {
+		volumes = append(volumes, map[string]any{"type": "bind", "source": filepath.Join(dir, "git.json"), "target": c.OpenCode.GitFile, "read_only": true})
+	}
 	if c.OpenCode.InferenceFile != "" {
 		volumes = append(volumes, map[string]any{"type": "bind", "source": filepath.Join(dir, "inference.json"), "target": "/etc/multica-sandbox/inference.json", "read_only": true}, map[string]any{"type": "bind", "source": filepath.Join(dir, "keys"), "target": "/etc/multica-sandbox/inference-keys", "read_only": true})
 	}

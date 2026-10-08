@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "hosts": [
+    {
+      "workspace_id": "10000000-0000-4000-8000-000000000001",
+      "host": "github.com",
+      "username": "x-access-token",
+      "password_file": "/run/secrets/github-workspace-1"
+    }
+  ]
+}

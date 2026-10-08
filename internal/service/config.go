@@ -72,6 +72,12 @@ type OpenCodeConfig struct {
 	// InferenceFile holds workspace gateway bindings; InferenceRelay is required with it.
 	InferenceFile  string       `json:"inference_file,omitempty"`
 	InferenceRelay *RelayConfig `json:"inference_relay,omitempty"`
+	// Helper is the digest-pinned sandbox-helper image (Dockerfile target helper); with
+	// the Multica relay it gives attempts a workdir volume and the checkout endpoint.
+	Helper string `json:"helper,omitempty"`
+	// GitFile holds workspace Git host bindings (repo.Config); GitRelay serves them (ADR 0015).
+	GitFile  string       `json:"git_file,omitempty"`
+	GitRelay *RelayConfig `json:"git_relay,omitempty"`
 }
 
 // RelayConfig enables an embedded relay: Multica API (ADR 0014) or inference (ADR 0012).

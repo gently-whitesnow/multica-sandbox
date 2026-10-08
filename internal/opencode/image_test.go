@@ -16,12 +16,15 @@ const controllerCLI = "cli /opt/multica-sandbox/multica/bin/multica\n" + pinnedC
 
 func TestCheckImage(t *testing.T) {
 	for _, version := range Supported {
-		if err := CheckImage([]byte("version "+version+"\n"+controllerCLI), true); err != nil {
+		if err := CheckImage([]byte("version "+version+"\n"+controllerCLI+"git /usr/bin/git\n"), true, true); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := CheckImage([]byte("cli /usr/local/bin/multica\ncli-version multica 0.1\nversion 1.18.35\n"), false); err != nil {
-		t.Fatalf("CLI is ignored without the Multica relay: %v", err)
+	if err := CheckImage([]byte("cli /usr/local/bin/multica\ncli-version multica 0.1\nversion 1.18.35\ngit \n"), false, false); err != nil {
+		t.Fatalf("CLI and git are ignored without the relays: %v", err)
+	}
+	if err := CheckImage([]byte("version 1.18.35\n"+controllerCLI+"git \n"), true, true); err == nil || !strings.Contains(err.Error(), "git is not installed") {
+		t.Fatalf("missing git accepted for repository checkout: %v", err)
 	}
 	for name, test := range map[string]struct{ output, want string }{
 		"unsupported": {"version 1.18.33\n", `OpenCode "1.18.33" is not verified (supported: 1.18.34, 1.18.35)`},
@@ -38,7 +41,7 @@ func TestCheckImage(t *testing.T) {
 		"bounded":     {strings.Repeat("env OPENCODE_X\n", 100) + "version 1.18.35\n" + controllerCLI, "; ..."},
 	} {
 		t.Run(name, func(t *testing.T) {
-			err := CheckImage([]byte(test.output), true)
+			err := CheckImage([]byte(test.output), true, false)
 			if err == nil || !strings.Contains(err.Error(), test.want) || strings.ContainsRune(err.Error(), '\x1b') || len(err.Error()) > 2048 {
 				t.Fatalf("got %v, want %q", err, test.want)
 			}

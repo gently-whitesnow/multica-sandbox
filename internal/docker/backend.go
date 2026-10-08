@@ -99,6 +99,9 @@ func (b *Backend) Reconcile(ctx context.Context) error {
 			return err
 		}
 	}
+	if err = reconcileVolumes(ctx, b.Owner); err != nil {
+		return err
+	}
 	return reconcileNetworks(ctx, b.Owner)
 }
 func (b *Backend) name(attempt string) string {

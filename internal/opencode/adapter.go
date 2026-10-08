@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/gently-whitesnow/multica-sandbox/internal/identity"
 	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
 	"github.com/gently-whitesnow/multica-sandbox/internal/relay"
+	"github.com/gently-whitesnow/multica-sandbox/internal/repo"
 )
 
 type Issuer interface {
@@ -50,6 +52,10 @@ type Adapter struct {
 	// InferenceRelay and InferenceRelayURL carry workspace-key inference (ADR 0012).
 	InferenceRelay    Grants
 	InferenceRelayURL string
+	// GitRelay and Checkout serve upstream repository checkout (ADR 0015); they require
+	// the Multica relay and a workload with a workdir volume.
+	GitRelay *repo.Relay
+	Checkout *repo.Checkout
 }
 
 type running struct {
@@ -69,6 +75,8 @@ type running struct {
 	relayToken  string
 	// inferenceToken is the opaque per-attempt provider key; it never rotates.
 	inferenceToken string
+	// gitEnv routes claim repositories through the Git relay with an opaque credential.
+	gitEnv map[string]string
 }
 
 func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, error) {
@@ -76,7 +84,7 @@ func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, 
 	if err != nil {
 		return nil, &execution.RejectedError{Err: err}
 	}
-	prompt, brief, err := Prompt(task, a.Relay != nil)
+	prompt, brief, err := Prompt(task, a.Relay != nil, a.Checkout != nil)
 	if err != nil {
 		return nil, &execution.RejectedError{Err: err}
 	}
@@ -90,6 +98,15 @@ func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, 
 		}
 		if err != nil {
 			return nil, r.reject(fmt.Errorf("Multica relay grant: %w", ErrDenied))
+		}
+	}
+	if a.GitRelay != nil {
+		urls := make([]string, len(task.Repos))
+		for i, repository := range task.Repos {
+			urls[i] = repository.URL
+		}
+		if r.gitEnv, err = a.GitRelay.Issue(task.AttemptKey(), task.WorkspaceID, urls); err != nil {
+			return nil, r.reject(fmt.Errorf("Git relay grant: %w", ErrDenied))
 		}
 	}
 	if err = r.grantInference(runCtx); err != nil {
@@ -107,6 +124,13 @@ func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, 
 	}
 	if err = r.initialize(runCtx, prompt, brief); err != nil {
 		return nil, r.reject(err)
+	}
+	if a.Checkout != nil {
+		repos := map[string]string{}
+		for _, repository := range task.Repos {
+			repos[strings.TrimSpace(repository.URL)] = repository.Ref
+		}
+		a.Checkout.Register(task.AttemptKey(), repo.Task{Workspace: task.WorkspaceID, ID: task.ID, AgentName: task.Agent.Name, Repos: repos, Target: r.workload, Env: r.gitEnv})
 	}
 	r.events = &eventStream{reporter: a.Reporter, task: task.ID, model: r.model}
 	r.events.touch()
@@ -261,6 +285,10 @@ func (r *running) Remove(ctx context.Context) error {
 		}
 		if r.inferenceToken != "" {
 			r.adapter.InferenceRelay.Revoke(r.task.AttemptKey())
+		}
+		if r.gitEnv != nil {
+			r.adapter.Checkout.Unregister(r.task.AttemptKey())
+			r.adapter.GitRelay.Revoke(r.task.AttemptKey())
 		}
 		r.cancel()
 		if r.started {

@@ -53,12 +53,14 @@ if [ "${VERIFY_SERVICE:-0}" = 1 ] && [ "${VERIFY_OPENCODE:-0}" = 1 ]; then
  docker build -q -t multica-sandbox-agent:local -f examples/agent-image/debian.Dockerfile "$TMP/agent" >/dev/null
  docker build -q -t multica-sandbox-cli:local -f deploy/multica-cli.Dockerfile --build-context multica="$SOURCE" "$TMP/agent" >/dev/null
  docker build -q -t multica-sandbox-tool-jq:local -f examples/tool-bundle/Dockerfile "$TMP/agent" >/dev/null
+ docker build -q -t multica-sandbox-helper:local --target helper . >/dev/null
  for IMAGE in $(grep '^ghcr' internal/opencode/images.txt); do docker pull -q "$IMAGE" >/dev/null; done
  # Digest references need the containerd image store; the backend accepts only pinned images.
  MULTICA_TEST_AGENT_IMAGE=$(docker image inspect multica-sandbox-agent:local --format '{{index .RepoDigests 0}}')
  MULTICA_TEST_CLI_IMAGE=$(docker image inspect multica-sandbox-cli:local --format '{{index .RepoDigests 0}}')
  MULTICA_TEST_TOOL_IMAGE=$(docker image inspect multica-sandbox-tool-jq:local --format '{{index .RepoDigests 0}}')
- export MULTICA_TEST_AGENT_IMAGE MULTICA_TEST_CLI_IMAGE MULTICA_TEST_TOOL_IMAGE
+ MULTICA_TEST_HELPER_IMAGE=$(docker image inspect multica-sandbox-helper:local --format '{{index .RepoDigests 0}}')
+ export MULTICA_TEST_AGENT_IMAGE MULTICA_TEST_CLI_IMAGE MULTICA_TEST_TOOL_IMAGE MULTICA_TEST_HELPER_IMAGE
 fi
 MULTICA_TEST_SERVER_CONTAINER="$SERVER" MULTICA_TEST_DB_CONTAINER="$DB" go test -tags=upstream -run "${UPSTREAM_TEST_FILTER:-.}" -count=1 -v ./integration
 printf 'Verified upstream %s\n' "$REV"

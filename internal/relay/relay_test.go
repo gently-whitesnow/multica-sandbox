@@ -283,3 +283,49 @@ func TestStreamsAndRevocationCancelsInflight(t *testing.T) {
 		}
 	}
 }
+
+// resolver adds a per-request upstream to credential-less grants, as the Git relay does.
+type resolver struct {
+	grants *Grants
+	origin string
+}
+
+func (r resolver) Authorize(req *http.Request) (Lease, bool) {
+	lease, ok := r.grants.Authorize(req)
+	if ok && r.origin != "" {
+		lease.Origin, _ = parseOrigin(r.origin)
+		lease.Path, lease.Authorization = "/upstream"+req.URL.Path, "Basic dXNlcjpzZWNyZXQ="
+	}
+	return lease, ok
+}
+
+func TestBoundGrantsNeedResolvedUpstream(t *testing.T) {
+	seen := make(chan *http.Request, 1)
+	origin := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { seen <- r }))
+	defer origin.Close()
+	grants := NewGrants(prefix)
+	opaque, err := grants.Bind("attempt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, upstream := range []string{"", origin.URL} {
+		handler, err := New(resolver{grants, upstream}, Policy{Allow: func(string) bool { return true }, Limit: 1024})
+		if err != nil {
+			t.Fatal(err)
+		}
+		req := httptest.NewRequest(http.MethodGet, "/repo.git/info/refs?service=git-upload-pack", nil)
+		req.Header.Set("Authorization", "Bearer "+opaque)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if upstream == "" {
+			if w.Code != http.StatusForbidden {
+				t.Fatalf("grant without upstream forwarded: %d", w.Code)
+			}
+			continue
+		}
+		got := <-seen
+		if got.URL.Path != "/upstream/repo.git/info/refs" || got.URL.RawQuery != "service=git-upload-pack" || got.Header.Get("Authorization") != "Basic dXNlcjpzZWNyZXQ=" {
+			t.Fatalf("resolved upstream not applied: %s %v", got.URL, got.Header)
+		}
+	}
+}

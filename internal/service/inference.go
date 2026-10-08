@@ -27,6 +27,7 @@ func openCodeInference(ctx context.Context, c Config) (*inference.Service, *rela
 		return nil, nil, err
 	}
 	policy := relay.Policy{Allow: inference.RelayPath, Reserved: inference.ReservedHeaders, Withhold: true, HeaderTimeout: inference.HeaderTimeout}
-	grants, err := serveRelay(ctx, "inference", inference.RelayPrefix, *c.OpenCode.InferenceRelay, policy)
+	grants := relay.NewGrants(inference.RelayPrefix)
+	err = serveRelay(ctx, "inference", grants, *c.OpenCode.InferenceRelay, policy, nil)
 	return source, grants, err
 }

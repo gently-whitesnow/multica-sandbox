@@ -14,6 +14,8 @@ import (
 type Bundle struct {
 	Image, Target string
 	Path          []string
+	// NoPath keeps a controller helper off PATH.
+	NoPath bool
 }
 
 var bundleTarget = regexp.MustCompile(`^/opt/multica-sandbox(/[a-z0-9][a-z0-9-]{0,31}){1,2}$`)
@@ -23,6 +25,9 @@ var BundlePath = regexp.MustCompile(`^[A-Za-z0-9_+-][A-Za-z0-9._+-]*(/[A-Za-z0-9
 
 // Dirs returns the absolute PATH directories of the bundle.
 func (b Bundle) Dirs() []string {
+	if b.NoPath {
+		return nil
+	}
 	if len(b.Path) == 0 {
 		return []string{b.Target + "/bin"}
 	}
@@ -40,7 +45,8 @@ const dockerPath = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 // the bundles and the resulting PATH: bundle bin directories, then the image PATH.
 func (b *Projected) prepare(ctx context.Context) ([]string, string, error) {
 	engine, image, err := b.validate(ctx)
-	if err != nil || len(b.Bundles) == 0 {
+	bundles := b.mounts()
+	if err != nil || len(bundles) == 0 {
 		return nil, "", err
 	}
 	path := dockerPath
@@ -51,8 +57,8 @@ func (b *Projected) prepare(ctx context.Context) ([]string, string, error) {
 	}
 	var args, dirs []string
 	seen := map[string]bool{}
-	for _, bundle := range b.Bundles {
-		if !imagePattern.MatchString(bundle.Image) || !bundleTarget.MatchString(bundle.Target) || seen[bundle.Target] || len(bundle.Path) > 8 {
+	for _, bundle := range bundles {
+		if (bundle.NoPath && len(bundle.Path) > 0) || !imagePattern.MatchString(bundle.Image) || !bundleTarget.MatchString(bundle.Target) || seen[bundle.Target] || len(bundle.Path) > 8 {
 			return nil, "", fmt.Errorf("digest-pinned bundle image and unique controller-owned target required")
 		}
 		for _, path := range bundle.Path {
