@@ -195,6 +195,10 @@ func (r *running) initialize(ctx context.Context, prompt, brief []byte) error {
 	if brief != nil {
 		files[BriefPath] = brief
 	}
+	// gh trusts the forge relay through SSL_CERT_DIR; the certificate is public.
+	if r.gitEnv["SSL_CERT_DIR"] != "" {
+		files[repo.CAPath] = r.adapter.GitRelay.CA()
+	}
 	for path, data := range files {
 		if err := r.workload.Write(ctx, path, data); err != nil {
 			return err

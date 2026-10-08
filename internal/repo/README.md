@@ -5,7 +5,7 @@ inside their attempt, then commit and `git push` as under the native runtime (AD
 The controller serves upstream's daemon `/repo/checkout` contract and mediates Git smart
 HTTP. No Git host or Multica credential enters the attempt. With `sessions`, follow-up
 tasks on an issue reuse its workdir and checkouts ([OpenCode README](../opencode/README.md)).
-Pull requests through `gh` are a later #47 slice.
+With the forge relay, the unchanged `gh` opens pull requests.
 
 ## Configuration
 
@@ -29,6 +29,8 @@ Add these to `opencode` (`deploy/opencode.example.json`). They require `multica_
     file is reread per request, so an external issuer can rotate it, for example a
     GitHub App installation token with `x-access-token`.
   - Without a password file, the host is fetched anonymously.
+  - `api` (with a password file) is the forge API origin for `gh`, for example
+    `https://api.github.com` or an Enterprise Server origin.
   - `commit_name` and `commit_email` set the commit identity of the host's checkouts,
     for example a GitHub App bot. They default to the agent name and
     `agent@multica-sandbox.invalid`.
@@ -46,6 +48,18 @@ Attempts receive `GIT_CONFIG_*` entries:
 (`git-upload-pack`, `git-receive-pack`) for the claim's repositories on bound hosts.
 It replaces the credential and refuses redirects. Packs may reach 2 GiB, and the
 upstream gets 5 minutes to answer. Grants end at cleanup and on restart.
+
+`forge_relay` (`listen`, an `https` `url` on the controller alias) serves `gh`, as native
+`gh` uses host credentials:
+- Attempts resolve each `api` name (`api.github.com` for `github.com`, otherwise the
+  host, `/api/` only) to loopback, where the helper forwards port 443 to the relay.
+- The relay terminates TLS with certificates from a per-process CA. The CA is
+  name-constrained to those names and trusted through `SSL_CERT_DIR`
+  (`/workspace/certs`).
+- `GH_TOKEN` and `GH_ENTERPRISE_TOKEN` carry the attempt's `msg_` credential, and
+  `GH_HOST` names a single bound host. The relay sends `token <password>` upstream.
+- API scope is the deployment credential's. Images add `gh` themselves, as the Debian
+  example does.
 
 Pushes follow the native runtime, where agents push with the host's credentials: any
 ref the deployment credential may update. Scope that credential and protect branches

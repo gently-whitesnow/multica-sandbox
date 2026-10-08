@@ -20,7 +20,8 @@ import (
 
 var networkPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
 var envPattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,63}$`)
-var projectionPaths = map[string]bool{"/workspace/opencode.json": true, "/workspace/prompt.txt": true, "/workspace/AGENTS.md": true, "/workspace/data/opencode/mcp-auth.json": true}
+var hostPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$`)
+var projectionPaths = map[string]bool{"/workspace/opencode.json": true, "/workspace/prompt.txt": true, "/workspace/AGENTS.md": true, "/workspace/data/opencode/mcp-auth.json": true, repo.CAPath: true}
 
 type Projected struct {
 	Backend
@@ -30,6 +31,10 @@ type Projected struct {
 	// Helper is the digest-pinned sandbox-helper image (ADR 0015). With it, attempts get a
 	// workdir volume at WorkDir and a loopback forwarder from DaemonPort to Forward.
 	Helper, Forward string
+	// ForgeHosts resolve to loopback, where the helper forwards repo.ForgePort to
+	// ForgeForward, the forge relay for gh.
+	ForgeHosts   []string
+	ForgeForward string
 	// Sessions, with the helper, retains issue workdirs across attempts.
 	Sessions *Sessions
 }
@@ -93,8 +98,22 @@ func (b *Projected) Start(ctx context.Context, attempt string, w execution.Workd
 		return nil, err
 	}
 	if b.Helper != "" {
-		if _, port, err := net.SplitHostPort(b.Forward); err != nil || port == "" || strings.ContainsAny(b.Forward, " \t\r\n") {
-			return nil, fmt.Errorf("helper forward target host:port required")
+		targets := []string{b.Forward}
+		if b.ForgeForward != "" {
+			targets = append(targets, b.ForgeForward)
+		}
+		for _, target := range targets {
+			if _, port, err := net.SplitHostPort(target); err != nil || port == "" || strings.ContainsAny(target, " \t\r\n") {
+				return nil, fmt.Errorf("helper forward targets must be host:port")
+			}
+		}
+	}
+	if (b.ForgeForward == "") != (len(b.ForgeHosts) == 0) || (b.ForgeForward != "" && b.Helper == "") {
+		return nil, fmt.Errorf("forge hosts and forward target require each other and the helper")
+	}
+	for _, name := range b.ForgeHosts {
+		if !hostPattern.MatchString(name) {
+			return nil, fmt.Errorf("invalid forge host name")
 		}
 	}
 	r := &run{name: b.name(attempt)}
@@ -114,6 +133,9 @@ func (b *Projected) Start(ctx context.Context, attempt string, w execution.Workd
 		}
 		bundles = append(bundles, "--mount=type=volume,source="+projection.volume+",target="+repo.WorkDir+",volume-nocopy")
 	}
+	for _, host := range loopbackHosts(b.ForgeHosts) {
+		bundles = append(bundles, "--add-host="+host)
+	}
 	args := attemptLimits(b.createArgs(r.name, bundles...), isolated)
 	// The holding process never handles tokens or executes task-supplied shell text.
 	args = args[:len(args)-len(b.Command)-2]
@@ -123,7 +145,7 @@ func (b *Projected) Start(ctx context.Context, attempt string, w execution.Workd
 	}
 	data, err := command(ctx, "inspect", r.name)
 	if err == nil {
-		err = checkProjectedPolicy(data, isolated, b.mounts(), path, projection.volume)
+		err = checkProjectedPolicy(data, isolated, b.mounts(), path, projection.volume, b.ForgeHosts)
 	}
 	if err != nil {
 		return nil, errors.Join(err, cleanup())
@@ -133,7 +155,11 @@ func (b *Projected) Start(ctx context.Context, attempt string, w execution.Workd
 	}
 	if b.Helper != "" {
 		// The forwarder runs as the attempt user and reaches only the attempt network.
-		if _, err := command(ctx, "exec", "-d", r.name, HelperDir+"/sandbox-helper", "forward", "127.0.0.1:"+repo.DaemonPort, b.Forward); err != nil {
+		forward := []string{"exec", "-d", r.name, HelperDir + "/sandbox-helper", "forward", "127.0.0.1:" + repo.DaemonPort, b.Forward}
+		if b.ForgeForward != "" {
+			forward = append(forward, "127.0.0.1:"+repo.ForgePort, b.ForgeForward)
+		}
+		if _, err := command(ctx, forward...); err != nil {
 			return nil, errors.Join(err, cleanup())
 		}
 	}
@@ -186,7 +212,7 @@ func (b *Projected) Output(ctx context.Context, args []string) ([]byte, error) {
 	}
 	data, err := command(ctx, "inspect", r.name)
 	if err == nil {
-		err = checkProjectedPolicy(data, "none", b.Bundles, path, "")
+		err = checkProjectedPolicy(data, "none", b.Bundles, path, "", nil)
 	}
 	if err != nil {
 		return nil, errors.Join(err, r.cleanup())

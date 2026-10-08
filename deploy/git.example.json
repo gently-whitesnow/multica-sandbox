@@ -7,7 +7,8 @@
       "username": "x-access-token",
       "password_file": "/run/secrets/github-workspace-1",
       "commit_name": "example-app[bot]",
-      "commit_email": "1+example-app[bot]@users.noreply.github.com"
+      "commit_email": "1+example-app[bot]@users.noreply.github.com",
+      "api": "https://api.github.com"
     }
   ]
 }

@@ -26,6 +26,7 @@ func TestRepositoryCheckoutRequiresHelperAndRelays(t *testing.T) {
 		"no helper":      {GitRelay: relay, GitFile: "/etc/git.json", MulticaRelay: multica, MulticaCLI: cli},
 		"helper only":    {Helper: cli},
 		"no multica cli": {GitRelay: relay, GitFile: "/etc/git.json", Helper: cli},
+		"forge only":     {ForgeRelay: &RelayConfig{Listen: ":8094", URL: "https://git-relay:8094"}, Helper: cli, MulticaRelay: multica, MulticaCLI: cli},
 	} {
 		if _, err := openCodeAdapter(t.Context(), Config{OpenCode: &c}, t.TempDir(), nil, &docker.Backend{}); err == nil || !strings.Contains(err.Error(), "require") {
 			t.Errorf("%s accepted: %v", name, err)

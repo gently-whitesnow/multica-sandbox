@@ -21,7 +21,8 @@ func TestRejectWeakenedPolicy(t *testing.T) {
 	mutations := map[string]map[string]any{
 		"HostConfig": {"NetworkMode": "bridge", "Privileged": true, "PidMode": "host", "ReadonlyRootfs": false,
 			"Binds": []string{"/:/host"}, "Memory": 0, "PidsLimit": 0, "CapAdd": []string{"SYS_ADMIN"}, "SecurityOpt": []string{},
-			"RestartPolicy": map[string]string{"Name": "always"}, "Tmpfs": map[string]string{"/workspace": "rw"}},
+			"RestartPolicy": map[string]string{"Name": "always"}, "Tmpfs": map[string]string{"/workspace": "rw"},
+			"ExtraHosts": []string{"api.github.com:127.0.0.1"}},
 		"Config": {"User": "0", "Volumes": map[string]any{"/data": map[string]any{}}, "Healthcheck": map[string]any{"Test": []string{"CMD", "/bin/evil"}}},
 	}
 	for section, fields := range mutations {
@@ -58,7 +59,7 @@ func TestAcceptOnlyBundleMounts(t *testing.T) {
 			change(c, config, host)
 		}
 		data, _ := json.Marshal(fixture)
-		return checkExpectedPolicy(data, "none", 128*1024*1024, 64, "rw,exec,nosuid,nodev,size=67108864,mode=1777", bundles, path, strings.Join(volume, ""))
+		return checkExpectedPolicy(data, "none", 128*1024*1024, 64, "rw,exec,nosuid,nodev,size=67108864,mode=1777", bundles, path, strings.Join(volume, ""), nil)
 	}
 	if err := check([]Bundle{cli}, nil); err != nil {
 		t.Fatal(err)
@@ -114,7 +115,7 @@ func TestAcceptOnlyWorkdirVolume(t *testing.T) {
 			change(c, host)
 		}
 		data, _ := json.Marshal(fixture)
-		return checkExpectedPolicy(data, "none", 128*1024*1024, 64, "rw,exec,nosuid,nodev,size=67108864,mode=1777", []Bundle{cli}, path, volume)
+		return checkExpectedPolicy(data, "none", 128*1024*1024, 64, "rw,exec,nosuid,nodev,size=67108864,mode=1777", []Bundle{cli}, path, volume, nil)
 	}
 	if err := check(nil); err != nil {
 		t.Fatal(err)
@@ -137,5 +138,25 @@ func TestAcceptOnlyWorkdirVolume(t *testing.T) {
 				t.Fatal("unexpected workdir volume accepted")
 			}
 		})
+	}
+}
+
+func TestAcceptOnlyLoopbackForgeHosts(t *testing.T) {
+	check := func(extra []string, hosts []string) error {
+		var fixture []map[string]any
+		if err := json.Unmarshal([]byte(safePolicy), &fixture); err != nil {
+			t.Fatal(err)
+		}
+		fixture[0]["HostConfig"].(map[string]any)["ExtraHosts"] = extra
+		data, _ := json.Marshal(fixture)
+		return checkExpectedPolicy(data, "none", 128*1024*1024, 64, "rw,exec,nosuid,nodev,size=67108864,mode=1777", nil, "", "", hosts)
+	}
+	if err := check([]string{"api.github.com:127.0.0.1"}, []string{"api.github.com"}); err != nil {
+		t.Fatal(err)
+	}
+	for name, extra := range map[string][]string{"missing": nil, "remote": {"api.github.com:10.0.0.1"}, "extra": {"api.github.com:127.0.0.1", "github.com:127.0.0.1"}} {
+		if check(extra, []string{"api.github.com"}) == nil {
+			t.Errorf("%s host entries accepted", name)
+		}
 	}
 }

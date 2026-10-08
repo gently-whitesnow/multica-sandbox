@@ -20,12 +20,22 @@ func (r *run) check(ctx context.Context) error {
 }
 
 func checkPolicy(data []byte) error {
-	return checkExpectedPolicy(data, "none", 128*1024*1024, 64, "rw,exec,nosuid,nodev,size=67108864,mode=1777", nil, "", "")
+	return checkExpectedPolicy(data, "none", 128*1024*1024, 64, "rw,exec,nosuid,nodev,size=67108864,mode=1777", nil, "", "", nil)
 }
 
-// checkProjectedPolicy also requires exactly the workdir volume when one is named.
-func checkProjectedPolicy(data []byte, network string, bundles []Bundle, path, volume string) error {
-	return checkExpectedPolicy(data, network, 1024*1024*1024, 256, "rw,exec,nosuid,nodev,size=268435456,mode=1777", bundles, path, volume)
+// checkProjectedPolicy also requires exactly the workdir volume when one is named, and
+// exactly the loopback host entries.
+func checkProjectedPolicy(data []byte, network string, bundles []Bundle, path, volume string, hosts []string) error {
+	return checkExpectedPolicy(data, network, 1024*1024*1024, 256, "rw,exec,nosuid,nodev,size=268435456,mode=1777", bundles, path, volume, hosts)
+}
+
+// loopbackHosts are the --add-host entries for names served on attempt loopback.
+func loopbackHosts(names []string) []string {
+	hosts := []string{}
+	for _, name := range names {
+		hosts = append(hosts, name+":127.0.0.1")
+	}
+	return hosts
 }
 
 type mount struct {
@@ -33,7 +43,7 @@ type mount struct {
 	RW                      bool
 }
 
-func checkExpectedPolicy(data []byte, network string, memory int64, pids int, workspace string, bundles []Bundle, path, volume string) error {
+func checkExpectedPolicy(data []byte, network string, memory int64, pids int, workspace string, bundles []Bundle, path, volume string, hosts []string) error {
 	var containers []struct {
 		Config struct {
 			User, WorkingDir string
@@ -45,6 +55,7 @@ func checkExpectedPolicy(data []byte, network string, memory int64, pids int, wo
 			NetworkMode, Runtime, PidMode, IpcMode, CgroupnsMode string
 			ReadonlyRootfs, Privileged, PublishAllPorts          bool
 			CapAdd, CapDrop, SecurityOpt, Binds, VolumesFrom     []string
+			ExtraHosts                                           []string
 			Devices, DeviceRequests                              []json.RawMessage
 			Memory, MemorySwap, NanoCpus, ShmSize                int64
 			PidsLimit                                            int
@@ -69,7 +80,7 @@ func checkExpectedPolicy(data []byte, network string, memory int64, pids int, wo
 		!h.ReadonlyRootfs || h.Privileged || h.PublishAllPorts || len(h.CapAdd) != 0 || !reflect.DeepEqual(h.CapDrop, []string{"ALL"}) ||
 		!reflect.DeepEqual(h.SecurityOpt, []string{"no-new-privileges=true"}) || len(h.Binds) != 0 || len(h.VolumesFrom) != 0 || len(h.Devices) != 0 || len(h.DeviceRequests) != 0 ||
 		h.Memory != memory || h.MemorySwap != h.Memory || h.NanoCpus != 500000000 || h.PidsLimit != pids || h.ShmSize != 8*1024*1024 ||
-		h.RestartPolicy.Name != "no" || h.LogConfig.Type != "none" ||
+		h.RestartPolicy.Name != "no" || h.LogConfig.Type != "none" || !slices.Equal(h.ExtraHosts, loopbackHosts(hosts)) ||
 		!reflect.DeepEqual(h.Tmpfs, map[string]string{"/workspace": workspace, "/tmp": "rw,noexec,nosuid,nodev,size=16777216,mode=1777"}) {
 		return fmt.Errorf("created container does not satisfy offline policy")
 	}

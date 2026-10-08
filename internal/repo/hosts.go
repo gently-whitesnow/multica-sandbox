@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -26,7 +27,8 @@ type Config struct {
 // PasswordFile, with Username, sends HTTP basic authentication; without it the host
 // is fetched anonymously. CommitName and CommitEmail are the commit identity of its
 // checkouts, for example a GitHub App bot; they default to the agent name and
-// DefaultEmail.
+// DefaultEmail. API, with a password file, is the forge API origin (for example
+// https://api.github.com) that gh reaches through the forge relay.
 type Host struct {
 	WorkspaceID  string `json:"workspace_id"`
 	Host         string `json:"host"`
@@ -35,6 +37,7 @@ type Host struct {
 	PasswordFile string `json:"password_file,omitempty"`
 	CommitName   string `json:"commit_name,omitempty"`
 	CommitEmail  string `json:"commit_email,omitempty"`
+	API          string `json:"api,omitempty"`
 }
 
 // DefaultEmail is the commit email of hosts without a configured identity.
@@ -49,6 +52,7 @@ type binding struct {
 	origin             *url.URL
 	username, password string
 	name, email        string
+	api                *url.URL
 }
 
 // Hosts resolves (workspace, host) to an upstream origin and authorization.
@@ -80,18 +84,78 @@ func NewHosts(c Config) (*Hosts, error) {
 		if upstream == "" {
 			upstream = "https://" + host.Host
 		}
-		origin, err := url.Parse(upstream)
-		valid := err == nil && (origin.Scheme == "https" || (c.AllowHTTP && origin.Scheme == "http")) && origin.Host != "" &&
-			origin.User == nil && origin.RawQuery == "" && origin.Fragment == "" && (origin.Path == "" || origin.Path == "/")
-		if !uuid.MatchString(host.WorkspaceID) || !hostName.MatchString(host.Host) || !valid || h.bindings[key] != (binding{}) ||
+		upstreamOrigin, valid := httpOrigin(upstream, c.AllowHTTP)
+		var api *url.URL
+		if host.API != "" {
+			// gh reaches the API by the forge's own name, so the host cannot carry a port.
+			var ok bool
+			api, ok = httpOrigin(host.API, c.AllowHTTP)
+			valid = valid && ok && host.PasswordFile != "" && !strings.Contains(host.Host, ":")
+		}
+		if !uuid.MatchString(host.WorkspaceID) || !hostName.MatchString(host.Host) || !valid || h.bindings[key].origin != nil ||
 			(host.PasswordFile != "" && (!filepath.IsAbs(host.PasswordFile) || host.Username == "" || strings.ContainsAny(host.Username, ":\r\n\x00"))) ||
 			(host.PasswordFile == "" && host.Username != "") || (host.CommitName == "") != (host.CommitEmail == "") ||
 			!plain(host.CommitName) || !plain(host.CommitEmail) || strings.ContainsAny(host.CommitEmail, " <>") {
-			return nil, fmt.Errorf("Git host %.64q: unique workspace and host, an HTTPS upstream origin, a username with an absolute password file and a plain commit name with email required", host.Host)
+			return nil, fmt.Errorf("Git host %.64q: unique workspace and host, HTTPS upstream and API origins, a username with an absolute password file and a plain commit name with email required", host.Host)
 		}
-		h.bindings[key] = binding{origin: &url.URL{Scheme: origin.Scheme, Host: origin.Host}, username: host.Username, password: host.PasswordFile, name: host.CommitName, email: host.CommitEmail}
+		h.bindings[key] = binding{origin: upstreamOrigin, username: host.Username, password: host.PasswordFile, name: host.CommitName, email: host.CommitEmail, api: api}
 	}
 	return h, nil
+}
+
+func httpOrigin(raw string, allowHTTP bool) (*url.URL, bool) {
+	u, err := url.Parse(raw)
+	valid := err == nil && (u.Scheme == "https" || (allowHTTP && u.Scheme == "http")) && u.Host != "" &&
+		u.User == nil && u.RawQuery == "" && u.Fragment == "" && (u.Path == "" || u.Path == "/")
+	if !valid {
+		return nil, false
+	}
+	return &url.URL{Scheme: u.Scheme, Host: u.Host}, true
+}
+
+// APIName is the name gh calls for a forge host: api.github.com for github.com, the
+// host itself (Enterprise Server, /api/v3) otherwise.
+func APIName(host string) string {
+	if host == "github.com" {
+		return "api.github.com"
+	}
+	return host
+}
+
+// APINames lists the forge API names of every binding with an API, sorted.
+func (h *Hosts) APINames() []string {
+	names := []string{}
+	for key, b := range h.bindings {
+		if b.api != nil {
+			names = append(names, APIName(key[1]))
+		}
+	}
+	slices.Sort(names)
+	return slices.Compact(names)
+}
+
+// apiHosts lists the workspace's forge hosts with an API.
+func (h *Hosts) apiHosts(workspace string) []string {
+	hosts := []string{}
+	for key, b := range h.bindings {
+		if key[0] == workspace && b.api != nil {
+			hosts = append(hosts, key[1])
+		}
+	}
+	slices.Sort(hosts)
+	return hosts
+}
+
+// api resolves the workspace's forge API by the name gh called, with a token header.
+func (h *Hosts) api(workspace, name string) (*url.URL, string, bool) {
+	for _, host := range h.apiHosts(workspace) {
+		if APIName(host) == name {
+			b := h.bindings[[2]string{workspace, host}]
+			password, ok := secret(b.password)
+			return b.api, "token " + password, ok
+		}
+	}
+	return nil, "", false
 }
 
 // Has reports whether the workspace has a binding for host.
@@ -132,10 +196,16 @@ func (h *Hosts) resolve(workspace, host string) (*url.URL, string, bool) {
 	if b.password == "" {
 		return b.origin, "", true
 	}
-	data, err := os.ReadFile(b.password)
-	password := strings.TrimSpace(string(data))
-	if err != nil || len(data) > 4096 || password == "" || strings.ContainsAny(password, "\r\n\x00") {
+	password, ok := secret(b.password)
+	if !ok {
 		return nil, "", false
 	}
 	return b.origin, "Basic " + basic(b.username, password), true
+}
+
+// secret rereads a password file, so external issuers can rotate it.
+func secret(path string) (string, bool) {
+	data, err := os.ReadFile(path)
+	password := strings.TrimSpace(string(data))
+	return password, err == nil && len(data) <= 4096 && password != "" && !strings.ContainsAny(password, "\r\n\x00")
 }

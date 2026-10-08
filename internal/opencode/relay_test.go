@@ -6,6 +6,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -137,4 +139,43 @@ func TestRepositoryAttemptGetsCheckoutAndGitRelay(t *testing.T) {
 	if got := post(); got != http.StatusUnauthorized {
 		t.Fatalf("ended attempt checkout: %d", got)
 	}
+}
+
+func TestForgeAttemptGetsGhTokenAndCA(t *testing.T) {
+	secret := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(secret, []byte("host-secret"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	hosts, err := repo.NewHosts(repo.Config{Version: 1, Hosts: []repo.Host{{WorkspaceID: safeTask().WorkspaceID, Host: "github.com", Username: "x-access-token", PasswordFile: secret, API: "https://api.github.com"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	git := repo.NewRelay("http://git-relay:8093", hosts)
+	if _, err := repo.NewForge(git); err != nil {
+		t.Fatal(err)
+	}
+	grants := relay.NewGrants(multica.RelayPrefix)
+	workload := &stubWorkload{files: map[string][]byte{}, envs: make(chan map[string]string, 1)}
+	a := Adapter{Server: "https://multica.example.invalid", Issuer: &stubIssuer{}, Authority: &stubAuthority{}, Workloads: workload, Status: stubStatus{}, Relay: grants, RelayURL: "http://multica-relay:8091",
+		GitRelay: git, Checkout: &repo.Checkout{Auth: grants}}
+	run, err := a.Start(context.Background(), relayTask(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := <-workload.envs
+	if env["GH_TOKEN"] != strings.TrimPrefix(env["GIT_CONFIG_VALUE_0"], "Authorization: Bearer ") || env["GH_HOST"] != "github.com" || env["SSL_CERT_DIR"] != repo.CertDir ||
+		string(workload.files[repo.CAPath]) != string(git.CA()) || strings.Contains(strings.Join(values(env), " "), "host-secret") {
+		t.Fatalf("gh environment or CA: %v", env)
+	}
+	if err := run.Remove(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func values(m map[string]string) []string {
+	out := []string{}
+	for _, v := range m {
+		out = append(out, v)
+	}
+	return out
 }

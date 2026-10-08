@@ -78,7 +78,7 @@ environment entries:
 `origin` keeps the real URL. The relay attaches controller-only, workspace-scoped
 credentials per Git host and serves only the claim's repositories. Pushes follow
 the native runtime: any ref the deployment credential may update. Grants end at
-cleanup and on controller restart. The relay does not create pull requests. Credential issuance and rotation, for example GitHub App tokens, stay
+cleanup and on controller restart. Credential issuance and rotation, for example GitHub App tokens, stay
 external, as files the controller rereads.
 
 Rejected alternatives:
@@ -102,6 +102,12 @@ Refinement (#52, 2026-10-08). Push follows the native runtime instead of an
 `agent/<agent>/*` ref policy: native agents push with host credentials, so the
 relay adds no ref checks. Checkouts set a per-host commit identity (default: the
 agent name) and reconcile upstream's Co-authored-by hook from workspace settings.
+
+Refinement (#55, 2026-10-08). Pull requests use the unchanged `gh`, as native.
+Attempts resolve forge API names to loopback, and the helper forwards 443 to a
+controller TLS relay. A per-process CA, name-constrained to those names and
+trusted via `SSL_CERT_DIR`, signs its certificates. The relay swaps the Git
+relay credential, sent as the `gh` token, for the workspace token.
 
 ## Consequences
 

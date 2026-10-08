@@ -78,6 +78,9 @@ type OpenCodeConfig struct {
 	// GitFile holds workspace Git host bindings (repo.Config); GitRelay serves them (ADR 0015).
 	GitFile  string       `json:"git_file,omitempty"`
 	GitRelay *RelayConfig `json:"git_relay,omitempty"`
+	// ForgeRelay serves gh for Git hosts with an api; its https url names the listener
+	// the attempt helper forwards loopback 443 to.
+	ForgeRelay *RelayConfig `json:"forge_relay,omitempty"`
 	// Sessions, with the helper, retains issue workdirs and resumes sessions (ADR 0015).
 	Sessions *SessionsConfig `json:"sessions,omitempty"`
 }
