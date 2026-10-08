@@ -16,11 +16,12 @@ import (
 	"github.com/gently-whitesnow/multica-sandbox/internal/docker"
 	"github.com/gently-whitesnow/multica-sandbox/internal/identity"
 	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
+	"github.com/gently-whitesnow/multica-sandbox/internal/opencode"
 	"github.com/gently-whitesnow/multica-sandbox/internal/service"
 )
 
-// officialImage is the verified upstream OpenCode image, used without changes.
-const officialImage = "ghcr.io/anomalyco/opencode:1.18.35@sha256:ae90ec960c871b0ea6df9abc1c2ec1e6b36464e8eca9b0e71e1ed3b553f47aa2"
+// officialImage is the newest verified upstream OpenCode image, used without changes.
+var officialImage = opencode.Images[len(opencode.Images)-1]
 
 func managedMCPService(t *testing.T, api *multica.Client) {
 	if os.Getenv("VERIFY_OPENCODE") != "1" || os.Getenv("VERIFY_SERVICE") != "1" {
@@ -35,7 +36,7 @@ func managedMCPService(t *testing.T, api *multica.Client) {
 	compose := func(args ...string) string {
 		return dockerTest(t, append([]string{"compose", "-p", project, "-f", "../examples/identity-mcp/compose.yaml", "-f", fixture}, args...)...)
 	}
-	t.Cleanup(func() { compose("down", "-v", "--remove-orphans") })
+	t.Cleanup(func() { compose("down", "-v", "--remove-orphans", "--rmi", "local") })
 	compose("build", "seed", "gateway")
 	compose("up", "-d", "--wait", "--wait-timeout", "180", "gateway")
 	controller := "90000000-0000-4000-8000-000000000029"

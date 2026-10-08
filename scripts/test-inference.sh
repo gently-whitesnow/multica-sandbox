@@ -5,7 +5,7 @@ ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)
 PROJECT="sandbox-inference-$$"
 TMP=$(mktemp -d)
 compose() { docker compose -p "$PROJECT" --profile inference -f "$ROOT/examples/identity-mcp/compose.yaml" -f "$TMP/inference.yaml" "$@"; }
-cleanup() { compose down -v --remove-orphans; rm -rf "$TMP"; }
+cleanup() { compose down -v --remove-orphans --rmi local; rm -rf "$TMP"; }
 trap cleanup EXIT
 cat > "$TMP/inference.yaml" <<EOF_CONFIG
 services:
@@ -39,7 +39,7 @@ networks:
   execution:
     internal: true
 EOF_CONFIG
-docker pull ghcr.io/anomalyco/opencode:1.18.35@sha256:ae90ec960c871b0ea6df9abc1c2ec1e6b36464e8eca9b0e71e1ed3b553f47aa2 >/dev/null
+docker pull "$(grep '^ghcr' "$ROOT/internal/opencode/images.txt" | tail -n 1)" >/dev/null
 compose build
 compose up -d --wait --wait-timeout 240 litellm || { compose logs --no-color litellm 2>&1 | tail -20; exit 1; }
 compose up --no-deps --no-log-prefix --abort-on-container-exit --exit-code-from inference inference

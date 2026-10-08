@@ -1,15 +1,37 @@
 package opencode
 
 import (
+	_ "embed"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 
 	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
 )
 
-// Supported lists OpenCode releases verified by the conformance suite (README).
-var Supported = []string{"1.18.34", "1.18.35"}
+//go:embed images.txt
+var images string
+
+// Images lists the verified official OpenCode images, oldest first; Supported holds
+// their versions. A release is supported only when its official image passes conformance.
+var Images, Supported = verified(images)
+
+var officialImage = regexp.MustCompile(`^ghcr\.io/anomalyco/opencode:([0-9]+\.[0-9]+\.[0-9]+)@sha256:[0-9a-f]{64}$`)
+
+func verified(list string) (images, versions []string) {
+	for _, line := range strings.Split(list, "\n") {
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		m := officialImage.FindStringSubmatch(line)
+		if m == nil || slices.Contains(versions, m[1]) {
+			panic("opencode: invalid images.txt line " + line)
+		}
+		images, versions = append(images, line), append(versions, m[1])
+	}
+	return images, versions
+}
 
 // ImageProbe reports image facts the adapter relies on. Its output is image-controlled data.
 // OpenCode merges the probed paths over the projected configuration (managed and parent-directory config).

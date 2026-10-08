@@ -1,6 +1,12 @@
 package opencode
 
 import (
+	"bytes"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -37,5 +43,30 @@ func TestCheckImage(t *testing.T) {
 				t.Fatalf("got %v, want %q", err, test.want)
 			}
 		})
+	}
+}
+
+// TestOfficialImagesAreListed keeps every tracked official OpenCode reference on the verified list.
+func TestOfficialImagesAreListed(t *testing.T) {
+	files, err := exec.Command("git", "-C", "../..", "ls-files", "-z").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference := regexp.MustCompile(`ghcr\.io/anomalyco/opencode[:@][^\s"'\x60)]*`)
+	found := map[string]bool{}
+	for _, name := range bytes.Split(bytes.TrimSuffix(files, []byte{0}), []byte{0}) {
+		data, err := os.ReadFile(filepath.Join("../..", string(name)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, image := range reference.FindAllString(string(data), -1) {
+			found[image] = true
+			if !slices.Contains(Images, image) {
+				t.Errorf("%s: %s is not in images.txt", name, image)
+			}
+		}
+	}
+	if len(found) != len(Images) || len(Images) == 0 {
+		t.Fatalf("found %d listed images, want all %d", len(found), len(Images))
 	}
 }

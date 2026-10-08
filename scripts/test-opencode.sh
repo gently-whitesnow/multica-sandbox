@@ -5,7 +5,7 @@ ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)
 PROJECT="sandbox-opencode-$$"
 TMP=$(mktemp -d)
 compose() { docker compose -p "$PROJECT" -f "$ROOT/examples/identity-mcp/compose.yaml" -f "$TMP/rotation.yaml" "$@"; }
-cleanup() { compose down -v --remove-orphans; rm -rf "$TMP"; }
+cleanup() { compose down -v --remove-orphans --rmi local; rm -rf "$TMP"; }
 trap cleanup EXIT
 cat > "$TMP/rotation.yaml" <<EOF_CONFIG
 services:
@@ -31,7 +31,7 @@ networks:
   execution:
     internal: true
 EOF_CONFIG
-docker pull ghcr.io/anomalyco/opencode:1.18.35@sha256:ae90ec960c871b0ea6df9abc1c2ec1e6b36464e8eca9b0e71e1ed3b553f47aa2 >/dev/null
+docker pull "$(grep '^ghcr' "$ROOT/internal/opencode/images.txt" | tail -n 1)" >/dev/null
 compose build
 compose up -d --wait --wait-timeout 180 gateway
 compose run --rm --no-deps rotation

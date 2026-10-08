@@ -18,7 +18,8 @@ import (
 	"github.com/gently-whitesnow/multica-sandbox/internal/opencode"
 )
 
-const opencodeImage = "ghcr.io/anomalyco/opencode:1.18.35@sha256:ae90ec960c871b0ea6df9abc1c2ec1e6b36464e8eca9b0e71e1ed3b553f47aa2"
+// opencodeImage is the newest verified official OpenCode image.
+var opencodeImage = opencode.Images[len(opencode.Images)-1]
 
 type rotationStatus struct {
 	sync.Mutex

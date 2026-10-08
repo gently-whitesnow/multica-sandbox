@@ -20,6 +20,7 @@ import (
 
 	"github.com/gently-whitesnow/multica-sandbox/internal/controller"
 	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
+	"github.com/gently-whitesnow/multica-sandbox/internal/opencode"
 )
 
 const user = "10000000-0000-4000-8000-000000000001"
@@ -195,6 +196,8 @@ func TestUpstreamLifecycle(t *testing.T) {
 	t.Run("multi-workspace-restart", func(t *testing.T) { fleetRestart(t) })
 	t.Run("managed-mcp-service", func(t *testing.T) { managedMCPService(t, api) })
 	t.Run("multica-relay-service", func(t *testing.T) { multicaRelayService(t, api, os.Getenv("MULTICA_TEST_AGENT_IMAGE"), 14, true) })
-	t.Run("multica-relay-official-image", func(t *testing.T) { multicaRelayService(t, api, officialImage, 15, false) })
+	for i, image := range opencode.Images {
+		t.Run("multica-relay-official-"+opencode.Supported[i], func(t *testing.T) { multicaRelayService(t, api, image, 15+i, false) })
+	}
 	t.Run("controller-service", func(t *testing.T) { containerService(t, api, rt) })
 }

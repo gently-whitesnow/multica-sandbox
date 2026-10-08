@@ -32,8 +32,10 @@ The default command is `opencode run --format json` with the projected prompt. A
 
 Users build images in their own CI; the controller never builds Dockerfiles or pulls.
 At startup it runs `ImageProbe` offline within attempt limits and fails closed
-with every incompatibility. `examples/agent-image/debian.Dockerfile` shows an
-unrelated base with the released glibc OpenCode build. A compatible image:
+with every incompatibility. The optional base is an official image from
+[`images.txt`](images.txt) (Alpine), unchanged or extended with `FROM`; no project
+base is published. `examples/agent-image/debian.Dockerfile` shows an unrelated base
+with the released glibc OpenCode build. A compatible image:
 
 - matches the Docker engine platform (`linux/amd64` or `linux/arm64`) and declares no volumes;
 - has `/bin/sh` with `sleep`, `mkdir`, `cat`, `chmod`, `mv`, and `opencode` on `PATH`
@@ -91,9 +93,9 @@ cleanup and use a durable at-least-once queue.
 Supported means this path only: persistent controller, Docker projected backend,
 native OpenCode. Evidence is fixture-based for the pinned stack, not production
 certification. Pins: Multica `b4ca5b4a23e68b26292a680dca7689a952bb1cd5`
-(unmodified); OpenCode 1.18.34 (`aec0b9a6`) and 1.18.35 (`53d1eabb`), image digests; LiteLLM v1.104.0 with
+(unmodified); OpenCode 1.18.34 (`aec0b9a6`) and 1.18.35 (`53d1eabb`), official images in `images.txt`; LiteLLM v1.104.0 with
 Postgres virtual keys; Keycloak 26.8.0; MCP Go SDK 1.8.0; go-oidc 3.21.0; Docker
-Engine 29.2.1 (runc, cgroup v2). Reproduce with `MULTICA_SOURCE=<checkout>` and
+Engine 29.2.1 (runc, cgroup v2, `linux/arm64`; `amd64` is unverified). Reproduce with `MULTICA_SOURCE=<checkout>` and
 `VERIFY_CONTAINERS=1 VERIFY_SERVICE=1 VERIFY_OPENCODE=1 VERIFY_INFERENCE=1 VERIFY_IDENTITY=1 ./verify.sh`.
 
 | Verified behavior | Evidence (flags) |
@@ -113,7 +115,7 @@ Engine 29.2.1 (runc, cgroup v2). Reproduce with `MULTICA_SOURCE=<checkout>` and
 | No `mat_`/gateway/provider key in attempt env/files, logs, transcript, comments, results | `integration/multica_relay_test.go`, `inferenceCredential` |
 | Tool bundles: read-only, declared `PATH` order; reserved, duplicate and missing entries, failing checks and escaping paths rejected; setuid cannot elevate; the agent runs a bundled `jq` | `tools_containers_test.go`, `image_test.go` (CONTAINERS); `integration/multica_relay_test.go` |
 | User images: unsupported version, OpenCode config overrides, reserved `ENV`, volumes and platform rejected; `USER`, setuid and entrypoint cannot change identity | `image_test.go`, `create_failure_test.go` (CONTAINERS) |
-| Unrelated base: Debian with released OpenCode completes the relay, inference and restart path; the unchanged official image completes the relay; neither contains `multica`; attempt probes run from a sidecar, not image tools | `examples/agent-image/debian.Dockerfile`; `integration/multica_relay_test.go` (SERVICE, OPENCODE) |
+| Bases: Debian with the newest released OpenCode completes the relay, inference and restart path; every `images.txt` image completes the relay unchanged, and references elsewhere must be listed; none contains `multica`; attempt probes run from a sidecar, not image tools | `examples/agent-image/debian.Dockerfile`; `integration/multica_relay_test.go` (SERVICE, OPENCODE); `image_test.go` |
 | Hostile workload: no capabilities/sockets/secrets/metadata, limits, no route, external DNS, IPv6 or other attempt | `internal/docker/backend_test.go`, `projected_test.go` (CONTAINERS) |
 
 Deployment-owned, verified only as integration contracts: production egress policy,
@@ -124,7 +126,7 @@ new MCP operations but does not cancel MCP work in flight; relay streams are can
 While the controller is down no backend deadline exists; Kubernetes deadlines and
 distributed ownership are #6.
 
-Limitations: verified OpenCode releases only (`Supported`); 2.x is unsupported because
+Limitations: verified OpenCode releases only (`images.txt`); 2.x is unsupported because
 upstream cannot deliver MCP to it safely; other agents need their own conformance. Every
 attempt has a fresh session; resume is unsupported. Only issue tasks use the upstream
 prompt and `multica` CLI; chat and other kinds use the bounded legacy prompt.
