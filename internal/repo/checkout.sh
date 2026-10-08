@@ -1,11 +1,12 @@
 # Upstream isolated checkout (Multica b4ca5b4 repocache: ensureIsolatedCheckout,
-# inspectExistingCheckout, resolveRef, excludeFromGit), cloned from origin through the
-# Git relay instead of a bare cache. Runs as the attempt user; it prints result lines,
-# or "error <kind> <message>". Arguments: url ref branch fresh workdir name root.
+# inspectExistingCheckout, resolveRef, excludeFromGit, prepareCommitMsgHook), cloned
+# from origin through the Git relay instead of a bare cache. Runs as the attempt user;
+# it prints result lines, or "error <kind> <message>". Arguments: url ref branch fresh
+# workdir name root commit-name commit-email co-author.
 set -u
 fail() { printf 'error %s %s\n' "$1" "$(printf '%s' "$2" | tr '\r\n' '  ' | cut -c1-600)"; exit 1; }
 run() { out=$("$@" 2>&1) || fail failed "$(printf '%s\n' "$out" | tail -n 3)"; }
-url=$1 ref=$2 branch=$3 fresh=$4 name=$6 root=$7
+url=$1 ref=$2 branch=$3 fresh=$4 name=$6 root=$7 author=$8 email=$9 coauthor=${10}
 dir=$(cd -P -- "$5" 2>/dev/null && pwd -P) || fail forbidden "resolve requested workdir: $5"
 case "$dir" in "$root" | "$root"/*) ;; *) fail forbidden "$dir is outside the active task workdir $root" ;; esac
 path=$dir/$name
@@ -28,6 +29,40 @@ exclude() {
 	for p in .agent_context CLAUDE.md AGENTS.md .claude .opencode .codeartsdoer .deveco CODEBUDDY.md .codebuddy .pi .omp; do
 		grep -qF -- "$p" "$file" 2>/dev/null || printf '\n%s\n' "$p" >>"$file"
 	done
+}
+# configure stands in for the native host's global identity and reconciles the hook.
+configure() {
+	run git -C "$path" config user.name "$author"
+	run git -C "$path" config user.email "$email"
+	hook=$(git -C "$path" rev-parse --absolute-git-dir)/hooks/prepare-commit-msg
+	if [ "$coauthor" = 1 ]; then
+		mkdir -p "${hook%/*}" && cat >"$hook.tmp" <<'HOOK' && chmod 755 "$hook.tmp" && mv -f "$hook.tmp" "$hook" || fail failed "install prepare-commit-msg hook"
+#!/bin/sh
+# multica:prepare-commit-msg:co-authored-by
+# Multica: add Co-authored-by trailer for the Multica Agent.
+# Installed by the Multica daemon. Do not edit — it will be overwritten.
+
+COMMIT_MSG_FILE="$1"
+COMMIT_SOURCE="$2"
+
+# Skip merge and squash commits.
+case "$COMMIT_SOURCE" in
+  merge|squash) exit 0 ;;
+esac
+
+TRAILER="Co-authored-by: multica-agent <github@multica.ai>"
+
+# Don't add if already present.
+if grep -qF "$TRAILER" "$COMMIT_MSG_FILE"; then
+  exit 0
+fi
+
+# Use git interpret-trailers for proper formatting.
+git interpret-trailers --in-place --trailer "$TRAILER" "$COMMIT_MSG_FILE"
+HOOK
+	elif grep -qF '# multica:prepare-commit-msg:co-authored-by' "$hook" 2>/dev/null; then
+		rm -f -- "$hook"
+	fi
 }
 start() {
 	if git -C "$path" show-ref --verify --quiet "refs/heads/$branch"; then branch=$branch-$(date +%s); fi
@@ -53,6 +88,7 @@ if [ -e "$path" ] || [ -L "$path" ]; then
 	fi
 	if [ -n "$kept" ]; then
 		exclude
+		configure
 		printf 'path %s\nbranch %s\nkept %s\nuncommitted %s\nunpushed %s\n' "$path" "$current" "$kept" "$uncommitted" "$unpushed"
 		exit 0
 	fi
@@ -74,4 +110,5 @@ else
 	trap - EXIT
 fi
 exclude
+configure
 printf 'path %s\nbranch %s\n' "$path" "$branch"

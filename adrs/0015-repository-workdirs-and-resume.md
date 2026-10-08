@@ -78,11 +78,9 @@ environment entries:
 - `http.<relay>.extraHeader` carries the opaque credential.
 
 `origin` keeps the real URL. The relay attaches controller-only, workspace-scoped
-credentials per Git host. It serves only the claim's repositories and allows
-pushes only to `refs/heads/agent/<agent>/*`. It denies tags, other refs, encoded
-pushes and more than 64 commands. Grants end at cleanup and on controller
-restart. The relay does not create pull requests; that path is decided with push
-(#47). Credential issuance and rotation, for example GitHub App tokens, stay
+credentials per Git host and serves only the claim's repositories. Pushes follow
+the native runtime: any ref the deployment credential may update. Grants end at
+cleanup and on controller restart. The relay does not create pull requests. Credential issuance and rotation, for example GitHub App tokens, stay
 external, as files the controller rereads.
 
 Rejected alternatives:
@@ -100,7 +98,12 @@ Refinement (#50, 2026-10-08). The helper is a separate digest-pinned image (Dock
 target `helper`, config `helper`); its image also runs the volume init. Attempts get
 the workdir volume only with the helper. The checkout route shares the Multica relay
 listener. Checkout follows upstream isolated mode with a fresh clone and serves only
-the claim's repositories. The Git relay serves only upload-pack until 07.3.
+the claim's repositories.
+
+Refinement (#52, 2026-10-08). Push follows the native runtime instead of an
+`agent/<agent>/*` ref policy: native agents push with host credentials, so the
+relay adds no ref checks. Checkouts set a per-host commit identity (default: the
+agent name) and reconcile upstream's Co-authored-by hook from workspace settings.
 
 ## Consequences
 
@@ -109,9 +112,9 @@ the attempt. Retained volumes are part of the trust boundary. They are reused
 only for the same workspace, agent and issue, and must not be returned to any
 clean pool (ADR 0004). Each session pays for its first clone. Disk quotas, Git
 credential issuance and forge-side branch protection remain deployment-owned. The
-push namespace is a policy, not code review. The relay allowlist bounds pushes
-only to the claim's repositories.
+relay bounds pushes only to the claim's repositories; credential scope and forge
+branch protection bound their refs.
 
-Implementation follows #47: 07.2 read path, 07.3 push and PR decision, 07.4
-resume and retention. Kubernetes (#6) needs equivalent volumes and a
+Implementation follows #47: 07.2 read path, 07.3 push, 07.4 resume and
+retention, 07.5 pull requests. Kubernetes (#6) needs equivalent volumes and a
 loopback-capable helper.

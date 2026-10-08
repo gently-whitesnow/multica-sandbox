@@ -5,7 +5,9 @@
       "workspace_id": "10000000-0000-4000-8000-000000000001",
       "host": "github.com",
       "username": "x-access-token",
-      "password_file": "/run/secrets/github-workspace-1"
+      "password_file": "/run/secrets/github-workspace-1",
+      "commit_name": "example-app[bot]",
+      "commit_email": "1+example-app[bot]@users.noreply.github.com"
     }
   ]
 }

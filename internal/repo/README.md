@@ -1,10 +1,10 @@
 # Repository checkout and Git relay
 
 Agents run the unchanged upstream `multica repo checkout <url> [--ref] [--fresh]`
-inside their attempt (ADR 0015). The controller serves upstream's daemon
-`/repo/checkout` contract and mediates Git smart HTTP. No Git host or Multica credential
-enters the attempt. Push and pull requests are #47 07.3. Retained session volumes and
-resume are 07.4.
+inside their attempt, then commit and `git push` as under the native runtime (ADR 0015).
+The controller serves upstream's daemon `/repo/checkout` contract and mediates Git smart
+HTTP. No Git host or Multica credential enters the attempt. Pull requests through `gh`
+and session resume are later #47 slices.
 
 ## Configuration
 
@@ -28,6 +28,9 @@ Add these to `opencode` (`deploy/opencode.example.json`). They require `multica_
     file is reread per request, so an external issuer can rotate it, for example a
     GitHub App installation token with `x-access-token`.
   - Without a password file, the host is fetched anonymously.
+  - `commit_name` and `commit_email` set the commit identity of the host's checkouts,
+    for example a GitHub App bot. They default to the agent name and
+    `agent@multica-sandbox.invalid`.
 
 The agent image must contain `git`; startup checks it. Official-base users add it with
 `FROM`, as `examples/agent-image/debian.Dockerfile` already does.
@@ -38,9 +41,14 @@ Attempts receive `GIT_CONFIG_*` entries:
 - `http.<relay>/.extraHeader` carries a per-attempt `msg_` credential;
 - `url.<relay>/<host>/.insteadOf` maps `https://<host>/` and `git@<host>:`.
 
-`origin` keeps the real URL. The relay serves only `info/refs?service=git-upload-pack`
-and `git-upload-pack` for the claim's repositories on bound hosts. It replaces the
-credential and refuses redirects. Grants end at cleanup and on restart.
+`origin` keeps the real URL. The relay serves only smart HTTP fetch and push
+(`git-upload-pack`, `git-receive-pack`) for the claim's repositories on bound hosts.
+It replaces the credential and refuses redirects. Packs may reach 2 GiB, and the
+upstream gets 5 minutes to answer. Grants end at cleanup and on restart.
+
+Pushes follow the native runtime, where agents push with the host's credentials: any
+ref the deployment credential may update. Scope that credential and protect branches
+on the forge.
 
 `/repo/checkout` authorizes requests in this order, with upstream's messages:
 1. the attempt's Multica relay credential;
@@ -61,10 +69,17 @@ b4ca5b4) with a fresh clone instead of the bare cache:
   commits.
 - **Agent files:** `info/exclude` lists the upstream agent files.
 - **Busy:** a concurrent checkout waits 10 s, then returns 503 `repo-busy`.
+- **Commits:** every checkout writes the host's commit identity to the repository
+  config, standing in for the native host's global identity. It also reconciles
+  upstream's `prepare-commit-msg` hook, which adds
+  `Co-authored-by: multica-agent <github@multica.ai>`. The hook is installed while the
+  workspace's `github_enabled` and `co_authored_by_enabled` are on (default) and
+  removed otherwise; the setting is read once per attempt.
 
 Differences from upstream:
 - only the claim's repositories, not the whole workspace registry;
 - every session pays for its own clone;
-- no commit identity or co-author hook until 07.3;
+- the identity is repository config of the checkout, not a global one, so clones made
+  without `multica repo checkout` have none;
 - claims with a non-HTTPS repository URL are rejected, as before; scp-style remotes
   of bound hosts are only rewritten.

@@ -16,7 +16,8 @@ import (
 const relayBodyLimit = 32 << 20
 
 // serveRelay forwards attempt requests to their grant's trusted upstream until ctx ends.
-// Routes serve exact paths on the same listener instead of the relay.
+// Routes serve exact paths on the same listener instead of the relay. The body limit
+// defaults to relayBodyLimit.
 func serveRelay(ctx context.Context, name string, auth relay.Authorizer, c RelayConfig, p relay.Policy, routes map[string]http.Handler) error {
 	if _, err := relayAddress(name, c); err != nil {
 		return err
@@ -24,7 +25,9 @@ func serveRelay(ctx context.Context, name string, auth relay.Authorizer, c Relay
 	if _, _, err := net.SplitHostPort(c.Listen); err != nil {
 		return fmt.Errorf("%s relay listen address required", name)
 	}
-	p.Limit = relayBodyLimit
+	if p.Limit == 0 {
+		p.Limit = relayBodyLimit
+	}
 	proxy, err := relay.New(auth, p)
 	if err != nil {
 		return err

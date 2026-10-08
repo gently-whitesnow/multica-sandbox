@@ -81,10 +81,12 @@ func mockInference(w http.ResponseWriter, r *http.Request) {
 			if title[1] == "Relay fixture issue" || title[1] == "Repository fixture issue" {
 				hold = "i=0; while [ ! -e /workspace/.probed ] && [ $i -lt 100 ]; do sleep 0.2; i=$((i+1)); done; "
 			}
-			// Repository tasks first check out the claim repository with the unchanged upstream CLI.
+			// Repository tasks check out the claim repository with the unchanged upstream CLI,
+			// then commit and push their task branch with plain git.
 			if title[1] == "Repository fixture issue" {
 				checkout = `repo=$(multica repo checkout https://git.fixture.test/sandbox/fixture.git) && `
-				hold += `printf 'Checkout: %s %s\n' "$(git -C "$repo" branch --show-current)" "$(cat "$repo/README")" >> reply.md && `
+				hold += `printf 'Checkout: %s %s\n' "$(git -C "$repo" branch --show-current)" "$(cat "$repo/README")" >> reply.md && ` +
+					`git -C "$repo" commit -q --allow-empty -m 'Fixture agent work' && git -C "$repo" push -q origin HEAD && `
 			}
 			// A configured tool bundle reports itself; images without jq post only the read.
 			call("bash", map[string]string{"command": checkout + hold + "printf '%s\\n' 'Relay fixture read: " + title[1] + "' >> reply.md && { ! command -v jq >/dev/null || jq --version >> reply.md; } && multica issue comment add " + issue + " --content-file ./reply.md --output table && rm reply.md", "description": "Post the result"})

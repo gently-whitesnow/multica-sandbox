@@ -45,13 +45,11 @@ func origin(t *testing.T) string {
 	return bare
 }
 
-func checkout(t *testing.T, root, url, ref, branch string, fresh bool, workdir string) (response, string, string) {
+// checkout runs the script with the default identity; the co-author hook is on unless disabled.
+func checkout(t *testing.T, root, url, ref, branch string, fresh bool, workdir string, coauthor ...bool) (response, string, string) {
 	t.Helper()
-	flag := "0"
-	if fresh {
-		flag = "1"
-	}
-	cmd := exec.Command("/bin/sh", "-c", script, "checkout", url, ref, branch, flag, workdir, Name(url), root)
+	flag := map[bool]string{false: "0", true: "1"}
+	cmd := exec.Command("/bin/sh", "-c", script, "checkout", url, ref, branch, flag[fresh], workdir, Name(url), root, "Fixture Agent", DefaultEmail, flag[len(coauthor) == 0 || coauthor[0]])
 	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0")
 	out, _ := cmd.Output()
 	return parse(out)
@@ -77,9 +75,18 @@ func TestCheckoutScriptFollowsUpstream(t *testing.T) {
 	if !strings.Contains(string(exclude), "\nAGENTS.md\n") || !strings.Contains(string(exclude), "\n.opencode\n") {
 		t.Fatal("agent files are not excluded")
 	}
-	if got, _, _ := checkout(t, root, bare, "", branch, false, root); got.Kept != "task_branch" || got.BranchName != branch {
+	// Commits carry the configured identity and the upstream Co-authored-by trailer.
+	run(t, path, "commit", "-q", "--allow-empty", "-m", "agent work")
+	if got := strings.TrimSpace(run(t, path, "log", "-1", "--format=%an <%ae>%n%(trailers:key=Co-authored-by)")); got != "Fixture Agent <"+DefaultEmail+">\nCo-authored-by: multica-agent <github@multica.ai>" {
+		t.Fatalf("commit identity and trailer: %q", got)
+	}
+	if got, _, _ := checkout(t, root, bare, "", branch, false, root, false); got.Kept != "task_branch" || got.BranchName != branch {
 		t.Fatalf("task branch not kept: %+v", got)
 	}
+	if _, err := os.Stat(filepath.Join(path, ".git/hooks/prepare-commit-msg")); !os.IsNotExist(err) {
+		t.Fatal("disabled co-author hook was not removed")
+	}
+	git(t, path, "reset", "-q", "--hard", "HEAD~1")
 	if err := os.WriteFile(filepath.Join(path, "draft"), []byte("x"), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -147,6 +154,18 @@ func TestNaming(t *testing.T) {
 	}
 }
 
+// run is git without the test identity, so repository configuration applies.
+func run(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+	return string(out)
+}
+
 type fakeTarget struct {
 	args []string
 	env  map[string]string
@@ -191,7 +210,7 @@ func TestCheckoutHandler(t *testing.T) {
 	if w.Code != 200 || strings.TrimSpace(w.Body.String()) != `{"path":"/workspace/work/fixture","branch_name":"agent/a/000000000042"}` {
 		t.Fatalf("checkout: %d %s", w.Code, w.Body)
 	}
-	if got := target.args[4:]; strings.Join(got, "|") != url+"|release|agent/a/000000000042|0|"+WorkDir+"|fixture|"+WorkDir || target.env["GIT_TERMINAL_PROMPT"] != "0" {
+	if got := target.args[4:]; strings.Join(got, "|") != url+"|release|agent/a/000000000042|0|"+WorkDir+"|fixture|"+WorkDir+"|A|"+DefaultEmail+"|0" || target.env["GIT_TERMINAL_PROMPT"] != "0" {
 		t.Fatalf("script arguments: %q", got)
 	}
 	for name, c := range map[string]struct {

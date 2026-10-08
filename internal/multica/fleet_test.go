@@ -21,3 +21,25 @@ func TestBatchRejectsCrossWorkspaceAndOverclaim(t *testing.T) {
 		server.Close()
 	}
 }
+
+func TestCoAuthoredByFollowsWorkspaceSettings(t *testing.T) {
+	for body, want := range map[string]bool{
+		`{"settings":{}}`: true,
+		`{"settings":{"co_authored_by_enabled":false}}`:                      false,
+		`{"settings":{"github_enabled":false}}`:                              false,
+		`{"settings":{"github_enabled":true,"co_authored_by_enabled":true}}`: true,
+		`not json`: true,
+	} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/api/daemon/workspaces/"+testID+"/repos" {
+				http.NotFound(w, r)
+			}
+			fmt.Fprint(w, body)
+		}))
+		api, _ := NewAllowHTTP(server.URL, "token")
+		if got := api.CoAuthoredBy(context.Background(), testID); got != want {
+			t.Errorf("%s: %t", body, got)
+		}
+		server.Close()
+	}
+}
