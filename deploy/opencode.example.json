@@ -25,6 +25,10 @@
     "listen": ":8093",
     "url": "http://git-relay:8093"
   },
+  "forge_relay": {
+    "listen": ":8094",
+    "url": "https://git-relay:8094"
+  },
   "sessions": {
     "ttl": "168h",
     "max": 64

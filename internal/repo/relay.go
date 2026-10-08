@@ -30,6 +30,8 @@ type Relay struct {
 	grants *relay.Grants
 	mu     sync.Mutex
 	access map[string]access
+	// ca, set by NewForge, makes attempts trust the forge relay for gh.
+	ca []byte
 }
 
 type access struct {
@@ -42,7 +44,8 @@ func NewRelay(relayURL string, hosts *Hosts) *Relay {
 }
 
 // Issue grants the attempt its claim repositories and returns the Git environment that
-// routes them through the relay. origin keeps the real URL.
+// routes them through the relay. origin keeps the real URL. With the forge relay, the
+// same credential is the gh token for the workspace's forge APIs.
 func (g *Relay) Issue(attempt, workspace string, urls []string) (map[string]string, error) {
 	a := access{workspace: workspace, repos: map[string]bool{}}
 	hosts := []string{}
@@ -70,6 +73,12 @@ func (g *Relay) Issue(attempt, workspace string, urls []string) (map[string]stri
 			config = append(config, [2]string{base, "git@" + host + ":"})
 		}
 	}
+	if apis := g.hosts.apiHosts(workspace); g.ca != nil && len(apis) > 0 {
+		env["GH_TOKEN"], env["GH_ENTERPRISE_TOKEN"], env["GH_PROMPT_DISABLED"], env["GH_NO_UPDATE_NOTIFIER"], env["SSL_CERT_DIR"] = opaque, opaque, "1", "1", CertDir
+		if len(apis) == 1 {
+			env["GH_HOST"] = apis[0]
+		}
+	}
 	env["GIT_CONFIG_COUNT"] = strconv.Itoa(len(config))
 	for i, entry := range config {
 		env["GIT_CONFIG_KEY_"+strconv.Itoa(i)], env["GIT_CONFIG_VALUE_"+strconv.Itoa(i)] = entry[0], entry[1]
@@ -83,6 +92,16 @@ func (g *Relay) Revoke(attempt string) {
 	g.mu.Lock()
 	delete(g.access, attempt)
 	g.mu.Unlock()
+}
+
+// CA is the forge relay certificate attempts trust, nil without the forge relay.
+func (g *Relay) CA() []byte { return g.ca }
+
+func (g *Relay) workspace(attempt string) (string, bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	a, ok := g.access[attempt]
+	return a.workspace, ok
 }
 
 func (g *Relay) Authorize(r *http.Request) (relay.Lease, bool) {

@@ -114,6 +114,9 @@ func openCodeAdapter(ctx context.Context, c Config, stateDir string, api *multic
 		return nil, fmt.Errorf("multica_relay and the digest-pinned multica_cli artifact require each other")
 	}
 	git := c.OpenCode.GitRelay != nil
+	if c.OpenCode.ForgeRelay != nil && !git {
+		return nil, fmt.Errorf("forge_relay requires git_relay")
+	}
 	if git != (c.OpenCode.GitFile != "") || (git && c.OpenCode.Helper == "") || (c.OpenCode.Helper != "" && c.OpenCode.MulticaRelay == nil) {
 		return nil, fmt.Errorf("git_relay and git_file require each other and the helper; the helper requires multica_relay")
 	}
@@ -166,14 +169,17 @@ func openCodeAdapter(ctx context.Context, c Config, stateDir string, api *multic
 				return nil, err
 			}
 			adapter.GitRelay = repo.NewRelay(c.OpenCode.GitRelay.URL, hosts)
-			if err = serveRelay(ctx, "Git", adapter.GitRelay, *c.OpenCode.GitRelay, relay.Policy{Allow: repo.GitPath, Limit: repo.PushLimit, HeaderTimeout: repo.PushTimeout}, nil); err != nil {
+			if err = serveRelay(ctx, "Git", adapter.GitRelay, *c.OpenCode.GitRelay, relay.Policy{Allow: repo.GitPath, Limit: repo.PushLimit, HeaderTimeout: repo.PushTimeout}, nil, nil); err != nil {
+				return nil, err
+			}
+			if err = serveForge(ctx, c.OpenCode.ForgeRelay, adapter.GitRelay, hosts, workloads); err != nil {
 				return nil, err
 			}
 			// The upstream CLI authenticates checkout with its Multica relay credential.
 			adapter.Checkout, adapter.Settings = &repo.Checkout{Auth: grants, Hosts: hosts}, api
 			routes = map[string]http.Handler{"/repo/checkout": adapter.Checkout}
 		}
-		if err = serveRelay(ctx, "Multica", grants, *c.OpenCode.MulticaRelay, relay.Policy{Allow: multica.RelayPath}, routes); err != nil {
+		if err = serveRelay(ctx, "Multica", grants, *c.OpenCode.MulticaRelay, relay.Policy{Allow: multica.RelayPath}, routes, nil); err != nil {
 			return nil, err
 		}
 		adapter.Relay = grants
@@ -188,6 +194,26 @@ func openCodeAdapter(ctx context.Context, c Config, stateDir string, api *multic
 		adapter.InferenceRelayURL = strings.TrimRight(c.OpenCode.InferenceRelay.URL, "/")
 	}
 	return adapter, nil
+}
+
+// serveForge serves gh calls for the API names of Git hosts on TLS (ADR 0015); attempts
+// resolve those names to loopback, where the helper forwards to the forge relay.
+func serveForge(ctx context.Context, c *RelayConfig, git *repo.Relay, hosts *repo.Hosts, workloads *docker.Projected) error {
+	if c == nil {
+		return nil
+	}
+	if !strings.HasPrefix(c.URL, "https://") || len(hosts.APINames()) == 0 {
+		return fmt.Errorf("forge_relay requires an https url and a Git host with an api")
+	}
+	forge, err := repo.NewForge(git)
+	if err != nil {
+		return err
+	}
+	if workloads.ForgeForward, err = relayAddress("forge", *c); err != nil {
+		return err
+	}
+	workloads.ForgeHosts = hosts.APINames()
+	return serveRelay(ctx, "forge", forge, *c, relay.Policy{Allow: repo.ForgePath}, nil, forge.TLSConfig())
 }
 
 func (a *agentFleetAPI) Message(ctx context.Context, id string) error { return a.AgentMessage(ctx, id) }

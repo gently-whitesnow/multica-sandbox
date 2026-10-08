@@ -97,7 +97,8 @@ func mockInference(w http.ResponseWriter, r *http.Request) {
 			if title[1] == "Repository fixture issue" {
 				checkout = `repo=$(multica repo checkout https://git.fixture.test/sandbox/fixture.git) && `
 				hold += `printf 'Checkout: %s %s\n' "$(git -C "$repo" branch --show-current)" "$(cat "$repo/README")" >> reply.md && ` +
-					`git -C "$repo" commit -q --allow-empty -m 'Fixture agent work' && git -C "$repo" push -q origin HEAD && printf 'first run' > notes.txt && `
+					`git -C "$repo" commit -q --allow-empty -m 'Fixture agent work' && git -C "$repo" push -q origin HEAD && printf 'first run' > notes.txt && ` +
+					`{ ! command -v gh >/dev/null || gh api -X POST repos/sandbox/fixture/pulls -f title='Fixture agent work' -f head="$(git -C "$repo" branch --show-current)" -f base=main --jq '"Pull request: " + .html_url' >> reply.md; } && `
 			}
 			// A configured tool bundle reports itself; images without jq post only the read.
 			call("bash", map[string]string{"command": checkout + hold + "printf '%s\\n' 'Relay fixture read: " + title[1] + "' >> reply.md && { ! command -v jq >/dev/null || jq --version >> reply.md; } && multica issue comment add " + issue + " --content-file ./reply.md --output table && rm reply.md", "description": "Post the result"})

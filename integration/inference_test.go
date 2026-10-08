@@ -190,7 +190,7 @@ func restartFailsClosed(t *testing.T, w *workspaceInference, network, controller
 	owner := sql(t, fmt.Sprintf("SELECT daemon_id FROM agent_runtime WHERE id='%s';", runtime))
 	opaque := ""
 	eventually(t, "streaming attempt", func() bool {
-		container := dockerTest(t, "ps", "-q", "--filter", "label=io.multica-sandbox.owner="+owner)
+		container := attemptContainer(t, owner)
 		if container == "" {
 			return false
 		}

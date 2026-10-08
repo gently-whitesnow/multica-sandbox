@@ -19,8 +19,8 @@ from verified behavior.
 - `internal/inference/`: workspace gateway bindings, relay policy and advisory model catalogs.
 - `internal/identity/`: static/external identity resolution and verified Keycloak issuance.
 - `internal/relay/`: shared credential-translation reverse proxy and per-attempt grants
-  (Multica API, inference and Git).
-- `internal/repo/`, `cmd/sandbox-helper`: upstream repository checkout, the Git relay and
+  (Multica API, inference, Git and forge).
+- `internal/repo/`, `cmd/sandbox-helper`: upstream repository checkout, the Git and forge relays and
   the attempt helper (workdir volume, loopback forwarder).
 - `examples/agent-image/`: example user-owned OpenCode image on a Debian base; the
   controller mounts the `multica` CLI artifact (`deploy/multica-cli.Dockerfile`).

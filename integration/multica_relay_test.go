@@ -54,6 +54,9 @@ wget -q -O /dev/null --header "Authorization: Bearer $git" "$r/fixture.git/info/
 wget -q -O /dev/null --header "Authorization: Bearer $git" "$r/other.git/info/refs?service=git-upload-pack" && exit 25
 wget -q -O /dev/null --header "Authorization: Bearer $git" "$r/other.git/info/refs?service=git-receive-pack" && exit 26
 wget -q -O /dev/null --header "Authorization: Bearer $git" "$r/fixture.git/info/refs?service=git-receive-pack" || exit 29
+[ "$(value GH_ENTERPRISE_TOKEN)" = "$git" ] && [ "$(value GH_HOST)" = git.fixture.test ] || exit 30
+grep -q '^127.0.0.1[[:space:]]*git.fixture.test' /proc/1/root/etc/hosts || exit 31
+grep -q 'BEGIN CERTIFICATE' /proc/1/root/workspace/certs/multica-sandbox-forge.pem || exit 32
 wget -q -O /dev/null --header "Authorization: Bearer $token" "$r/fixture.git/info/refs?service=git-upload-pack" && exit 27
 body="{\"url\":\"https://git.fixture.test/sandbox/fixture.git\",\"workspace_id\":\"$(value MULTICA_WORKSPACE_ID)\",\"task_id\":\"$(value MULTICA_TASK_ID)\",\"workdir\":\"/workspace\"}"
 wget -q -O /dev/null --header "Authorization: Bearer $token" --post-data "$body" http://127.0.0.1:` + repo.DaemonPort + `/repo/checkout 2>&1 | grep -q ' 403 ' || exit 28
@@ -147,7 +150,7 @@ func multicaRelayService(t *testing.T, api *multica.Client, agentImage string, n
 		}
 		// The fixture agent holds its final step until the probe marks the attempt (mock_inference.go).
 		if state == "running" && (opaque == "" || (w != nil && inferenceOpaque == "") || (full && gitOpaque == "")) {
-			if container := dockerTest(t, "ps", "-q", "--filter", "label=io.multica-sandbox.owner="+controller); container != "" {
+			if container := attemptContainer(t, controller); container != "" {
 				if opaque == "" {
 					opaque = liveProbe(t, container, "attempt boundary", attemptProbe, server)
 				}
@@ -214,6 +217,16 @@ func multicaRelayService(t *testing.T, api *multica.Client, agentImage string, n
 	controllerModelSelections(t, api, w, runtime, agent)
 }
 
+// attemptContainer returns the owner's running attempt, never a short-lived volume init.
+func attemptContainer(t *testing.T, owner string) string {
+	for _, line := range strings.Split(dockerTest(t, "ps", "--filter", "label=io.multica-sandbox.owner="+owner, "--format", "{{.ID}} {{.Names}}"), "\n") {
+		if id, name, ok := strings.Cut(strings.TrimSpace(line), " "); ok && !strings.HasSuffix(name, "-init") {
+			return id
+		}
+	}
+	return ""
+}
+
 // configureRepositories adds the helper, the Git relay and a claim repository on the fixture Git host.
 func configureRepositories(t *testing.T, dir, project string, c *service.Config) {
 	helper := os.Getenv("MULTICA_TEST_HELPER_IMAGE")
@@ -223,7 +236,8 @@ func configureRepositories(t *testing.T, dir, project string, c *service.Config)
 	c.OpenCode.Helper, c.OpenCode.GitFile = helper, "/etc/multica-sandbox/git.json"
 	c.OpenCode.GitRelay = &service.RelayConfig{Listen: ":8093", URL: "http://git-relay:8093"}
 	c.OpenCode.Sessions = &service.SessionsConfig{TTL: "1h", Max: 4}
-	writeJSON(t, filepath.Join(dir, "git.json"), repo.Config{Version: 1, AllowHTTP: true, Hosts: []repo.Host{{WorkspaceID: workspace, Host: "git.fixture.test", Upstream: "http://" + project + "-git-1:8080", Username: "fixture", PasswordFile: "/identity-secrets/git", CommitName: "Fixture Bot", CommitEmail: "bot@fixture.invalid"}}})
+	c.OpenCode.ForgeRelay = &service.RelayConfig{Listen: ":8094", URL: "https://git-relay:8094"}
+	writeJSON(t, filepath.Join(dir, "git.json"), repo.Config{Version: 1, AllowHTTP: true, Hosts: []repo.Host{{WorkspaceID: workspace, Host: "git.fixture.test", Upstream: "http://" + project + "-git-1:8080", Username: "fixture", PasswordFile: "/identity-secrets/git", CommitName: "Fixture Bot", CommitEmail: "bot@fixture.invalid", API: "http://" + project + "-git-1:8080"}}})
 	sql(t, fmt.Sprintf(`UPDATE workspace SET repos='[{"url":"https://git.fixture.test/sandbox/fixture.git","description":"Fixture repository"}]' WHERE id='%s';`, workspace))
 	t.Cleanup(func() { sql(t, fmt.Sprintf(`UPDATE workspace SET repos='[]' WHERE id='%s';`, workspace)) })
 }
@@ -231,6 +245,9 @@ func configureRepositories(t *testing.T, dir, project string, c *service.Config)
 // repositoryEnded checks the pushed task branch, that the ended Git grant is denied and
 // that the host password never left the controller.
 func repositoryEnded(t *testing.T, network, project, controller, branch, opaque, secret, content string) {
+	if pulls := dockerTest(t, "exec", project+"-git-1", "cat", "/srv/git/pulls"); strings.TrimSpace(pulls) != branch+` main "Fixture agent work"` || !strings.Contains(content, "Pull request: https://git.fixture.test/sandbox/fixture/pull/1") {
+		t.Fatalf("unchanged gh did not open the pull request through the forge relay: %q %q", pulls, content)
+	}
 	pushed := dockerTest(t, "exec", project+"-git-1", "git", "-C", "/srv/git/sandbox/fixture.git", "log", "-1", "--format=%an <%ae>%n%s%n%(trailers:key=Co-authored-by)", "refs/heads/"+branch)
 	if strings.TrimSpace(pushed) != "Fixture Bot <bot@fixture.invalid>\nFixture agent work\nCo-authored-by: multica-agent <github@multica.ai>" {
 		t.Fatalf("task branch push did not reach the Git host with the configured identity and trailer: %q", pushed)
@@ -244,7 +261,7 @@ func repositoryEnded(t *testing.T, network, project, controller, branch, opaque,
 	if strings.Contains(dockerTest(t, "logs", controller)+content, secret) {
 		t.Fatal("Git host password leaked into controller logs or comments")
 	}
-	t.Log("unchanged multica repo checkout cloned the claim repository through the Git relay; plain git pushed the task branch with the configured identity and the upstream co-author trailer; host password stayed in the controller")
+	t.Log("unchanged multica repo checkout cloned the claim repository through the Git relay; plain git pushed the task branch with the configured identity and the upstream co-author trailer; unchanged gh opened a pull request through the forge relay; host password stayed in the controller")
 }
 
 // sessionResumed runs two follow-up tasks on the repository issue: the first resumes

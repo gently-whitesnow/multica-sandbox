@@ -59,7 +59,7 @@ func TestWorkdirVolumeAndForwarder(t *testing.T) {
 		t.Fatal(err)
 	}
 	backend := &Projected{Backend: Backend{Image: testImage, Owner: owner, Command: []string{"/bin/sh"}}, Network: template, Peers: []string{peer},
-		Helper: helperImage(t), Forward: "endpoint:8091"}
+		Helper: helperImage(t), Forward: "endpoint:8091", ForgeHosts: []string{"api.github.com"}, ForgeForward: "endpoint:8091"}
 	t.Cleanup(func() {
 		_ = backend.Reconcile(context.Background())
 		_, _ = command(context.Background(), "rm", "-fv", peer)
@@ -76,8 +76,11 @@ echo kept > note
 test ! -e /opt/multica-sandbox/helper/bin
 case ":$PATH:" in *:/opt/multica-sandbox/helper*) exit 3 ;; esac
 for p in /proc/[0-9]*; do case "$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)" in /opt/multica-sandbox/helper/sandbox-helper\ forward*) awk '/^Uid:/ {print $2}' "$p/status" ;; esac; done
-wget -q -T 5 -O - http://127.0.0.1:` + repo.DaemonPort + `/repo/checkout`}, nil)
-	if err != nil || string(out) != "65532\ncheckout" {
+wget -q -T 5 -O - http://127.0.0.1:` + repo.DaemonPort + `/repo/checkout
+echo
+# The peer restarts nc per connection; forge names resolve to the loopback forwarder.
+for i in 1 2 3 4 5 6; do wget -q -T 5 -O - http://api.github.com:` + repo.ForgePort + `/ && break; sleep 0.5; done`}, nil)
+	if err != nil || string(out) != "65532\ncheckout\ncheckout" {
 		t.Fatalf("workdir volume or forwarder: %v %q", err, out)
 	}
 	volume := a.(*projectedRun).volume

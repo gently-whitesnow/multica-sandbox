@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"log"
@@ -17,8 +18,8 @@ const relayBodyLimit = 32 << 20
 
 // serveRelay forwards attempt requests to their grant's trusted upstream until ctx ends.
 // Routes serve exact paths on the same listener instead of the relay. The body limit
-// defaults to relayBodyLimit.
-func serveRelay(ctx context.Context, name string, auth relay.Authorizer, c RelayConfig, p relay.Policy, routes map[string]http.Handler) error {
+// defaults to relayBodyLimit. With tlsConfig the listener terminates TLS.
+func serveRelay(ctx context.Context, name string, auth relay.Authorizer, c RelayConfig, p relay.Policy, routes map[string]http.Handler, tlsConfig *tls.Config) error {
 	if _, err := relayAddress(name, c); err != nil {
 		return err
 	}
@@ -42,6 +43,9 @@ func serveRelay(ctx context.Context, name string, auth relay.Authorizer, c Relay
 	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", c.Listen)
 	if err != nil {
 		return fmt.Errorf("%s relay listener: %w", name, err)
+	}
+	if tlsConfig != nil {
+		listener = tls.NewListener(listener, tlsConfig)
 	}
 	srv := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: time.Minute, MaxHeaderBytes: 64 << 10, ErrorLog: log.New(io.Discard, "", 0)}
 	go func() { _ = srv.Serve(listener) }()
