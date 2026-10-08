@@ -74,6 +74,25 @@ services:
       interval: 2s
       timeout: 2s
       retries: 90
+  # Repositories profile: an authenticated Git smart HTTP host behind the controller's Git relay.
+  git:
+    build:
+      context: ../..
+      dockerfile: examples/identity-mcp/Dockerfile
+      target: git
+    profiles: [repositories]
+    networks: [fixture]
+    command: [git]
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+    volumes:
+      - credentials:/secrets:ro
+    healthcheck:
+      test: [CMD, /identity-example, health]
+      interval: 2s
+      timeout: 2s
+      retries: 30
   scenario:
     <<: *example
     command: [scenario]

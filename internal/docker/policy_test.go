@@ -1,6 +1,8 @@
 package docker
 
 import (
+	"github.com/gently-whitesnow/multica-sandbox/internal/repo"
+
 	"encoding/json"
 	"strings"
 	"testing"
@@ -42,7 +44,7 @@ func TestRejectWeakenedPolicy(t *testing.T) {
 func TestAcceptOnlyBundleMounts(t *testing.T) {
 	cli := Bundle{Image: "example.invalid/cli@sha256:" + strings.Repeat("a", 64), Target: "/opt/multica-sandbox/multica"}
 	path := cli.Target + "/bin:/usr/bin:/bin"
-	check := func(bundles []Bundle, change func(c, config, host map[string]any)) error {
+	check := func(bundles []Bundle, change func(c, config, host map[string]any), volume ...string) error {
 		var fixture []map[string]any
 		if err := json.Unmarshal([]byte(safePolicy), &fixture); err != nil {
 			t.Fatal(err)
@@ -56,7 +58,7 @@ func TestAcceptOnlyBundleMounts(t *testing.T) {
 			change(c, config, host)
 		}
 		data, _ := json.Marshal(fixture)
-		return checkExpectedPolicy(data, "none", 128*1024*1024, 64, "rw,exec,nosuid,nodev,size=67108864,mode=1777", bundles, path)
+		return checkExpectedPolicy(data, "none", 128*1024*1024, 64, "rw,exec,nosuid,nodev,size=67108864,mode=1777", bundles, path, strings.Join(volume, ""))
 	}
 	if err := check([]Bundle{cli}, nil); err != nil {
 		t.Fatal(err)
@@ -87,6 +89,52 @@ func TestAcceptOnlyBundleMounts(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			if check([]Bundle{cli}, change) == nil {
 				t.Fatal("unexpected mount configuration accepted")
+			}
+		})
+	}
+}
+
+func TestAcceptOnlyWorkdirVolume(t *testing.T) {
+	cli := Bundle{Image: "example.invalid/cli@sha256:" + strings.Repeat("a", 64), Target: "/opt/multica-sandbox/multica"}
+	path := cli.Target + "/bin:/usr/bin:/bin"
+	const volume = "multica-sandbox-0123-work"
+	check := func(change func(c, host map[string]any)) error {
+		var fixture []map[string]any
+		if err := json.Unmarshal([]byte(safePolicy), &fixture); err != nil {
+			t.Fatal(err)
+		}
+		c := fixture[0]
+		host := c["HostConfig"].(map[string]any)
+		c["Config"].(map[string]any)["Env"] = []string{"PATH=" + path}
+		host["Mounts"] = []any{map[string]any{"Type": "image", "Source": cli.Image, "Target": cli.Target},
+			map[string]any{"Type": "volume", "Source": volume, "Target": repo.WorkDir, "VolumeOptions": map[string]any{"NoCopy": true}}}
+		c["Mounts"] = []any{map[string]any{"Type": "image", "Name": cli.Image, "Destination": cli.Target, "RW": false},
+			map[string]any{"Type": "volume", "Name": volume, "Source": "/var/lib/docker/volumes/x/_data", "Destination": repo.WorkDir, "Driver": "local", "RW": true}}
+		if change != nil {
+			change(c, host)
+		}
+		data, _ := json.Marshal(fixture)
+		return checkExpectedPolicy(data, "none", 128*1024*1024, 64, "rw,exec,nosuid,nodev,size=67108864,mode=1777", []Bundle{cli}, path, volume)
+	}
+	if err := check(nil); err != nil {
+		t.Fatal(err)
+	}
+	for name, change := range map[string]func(c, host map[string]any){
+		"missing": func(c, host map[string]any) {
+			c["Mounts"], host["Mounts"] = c["Mounts"].([]any)[:1], host["Mounts"].([]any)[:1]
+		},
+		"copy-up": func(_, host map[string]any) { delete(host["Mounts"].([]any)[1].(map[string]any), "VolumeOptions") },
+		"other":   func(_, host map[string]any) { host["Mounts"].([]any)[1].(map[string]any)["Source"] = "shared" },
+		"bind":    func(c, _ map[string]any) { c["Mounts"].([]any)[1].(map[string]any)["Type"] = "bind" },
+		"target":  func(c, _ map[string]any) { c["Mounts"].([]any)[1].(map[string]any)["Destination"] = "/workspace" },
+		"subpath": func(_, host map[string]any) {
+			host["Mounts"].([]any)[1].(map[string]any)["VolumeOptions"].(map[string]any)["Subpath"] = "x"
+		},
+		"read-only": func(c, _ map[string]any) { c["Mounts"].([]any)[1].(map[string]any)["RW"] = false },
+	} {
+		t.Run(name, func(t *testing.T) {
+			if check(change) == nil {
+				t.Fatal("unexpected workdir volume accepted")
 			}
 		})
 	}

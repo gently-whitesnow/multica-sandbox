@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
+	"github.com/gently-whitesnow/multica-sandbox/internal/repo"
 )
 
 // Text below mirrors Multica b4ca5b4a23e68b26292a680dca7689a952bb1cd5
@@ -29,6 +30,13 @@ func (r *running) environment() map[string]string {
 	}
 	if name := r.task.Agent.Name; name != "" && len(name) <= 256 && !strings.ContainsAny(name, "\x00\r\n") {
 		env["MULTICA_AGENT_NAME"] = name
+	}
+	if r.gitEnv != nil {
+		// The helper forwards the upstream daemon port to the checkout endpoint (ADR 0015).
+		env["MULTICA_DAEMON_PORT"] = repo.DaemonPort
+		for name, value := range r.gitEnv {
+			env[name] = value
+		}
 	}
 	return env
 }
@@ -80,7 +88,7 @@ func upstreamPrompt(t multica.Task) string {
 }
 
 // upstreamBrief is the runtime brief OpenCode reads from AGENTS.md in its working directory.
-func upstreamBrief(t multica.Task, repositories string) string {
+func upstreamBrief(t multica.Task, repositories string, checkout bool) string {
 	var b strings.Builder
 	b.WriteString("# Multica Agent Runtime\n\n")
 	b.WriteString("You are a coding agent in the Multica platform. Use the `multica` CLI to interact with the platform.\n\n")
@@ -103,13 +111,15 @@ func upstreamBrief(t multica.Task, repositories string) string {
 	b.WriteString("- `multica issue get <id> --output json` — full issue.\n")
 	b.WriteString("- `multica issue comment list <issue-id> [--roots-only] [--summary] [--thread <comment-id> [--tail N] | --recent N] [--since <RFC3339>] --output json` — thread-aware comment reads. Bound a wide read with `--roots-only --summary`; bound a deep one with `--thread <id> --tail N`; add `--compact` to any JSON read to drop echoed/null/bookkeeping fields.\n")
 	b.WriteString("- `multica issue status <id> <status>` — flip status (todo / in_progress / in_review / done / blocked / backlog / cancelled).\n")
-	b.WriteString("- `multica issue comment add <issue-id> [--content \"...\" | --content-file <path> | --content-stdin] [--parent <comment-id>] [--attachment <path>]` — post a comment. Agent-authored bodies MUST use `--content-file`; see `## Comment Formatting` for why.\n\n")
+	b.WriteString("- `multica issue comment add <issue-id> [--content \"...\" | --content-file <path> | --content-stdin] [--parent <comment-id>] [--attachment <path>]` — post a comment. Agent-authored bodies MUST use `--content-file`; see `## Comment Formatting` for why.\n")
+	if checkout {
+		b.WriteString("- `multica repo checkout <url> [--ref <branch-or-sha>] [--fresh]` — repository checkout on a dedicated branch. Re-running it keeps an existing checkout that has uncommitted or unpushed work, or is already on this task's branch, and only fetches. `--fresh` discards uncommitted and untracked files and starts a new branch; commits stay on the old branch, but push any you still need first.\n")
+	}
+	b.WriteString("\n")
 	b.WriteString("## Comment Formatting\n\n")
 	b.WriteString("For issue comments, **always write the comment body to a UTF-8 file with your file-write tool first, then post it with `--content-file <path>`**. Never use inline `--content` for agent-authored comments; never use `--content-stdin` HEREDOCs alongside other flags. Write the file inside your working directory, never `/tmp` or shared paths. Keep the same `--parent` value from the trigger comment when replying; delete the temp file (`rm ./reply.md`) only after the post succeeded; do not rely on `\\n` escapes.\n\n")
 	b.WriteString("For final-result comments, use `--output table` to confirm success without echoing the body. Use `--output json` instead when you need the returned comment ID. Gate the cleanup on the post succeeding (`&&`): a cleanup command run unconditionally succeeds after a failed post and makes the whole shell call exit 0.\n\n")
-	if repositories != "" {
-		b.WriteString("## Repositories\n\n" + repositories + "\n\n")
-	}
+	b.WriteString(repositories)
 	if t.ProjectTitle != "" || t.ProjectDescription != "" {
 		b.WriteString("## Project Context\n\n" + strings.TrimSpace(t.ProjectTitle+"\n\n"+t.ProjectDescription) + "\n\n")
 	}
@@ -127,5 +137,40 @@ func upstreamBrief(t multica.Task, repositories string) string {
 	b.WriteString("**Post exactly ONE comment per run — your final result, before this turn exits.** Do NOT post progress updates or plans along the way.\n\n")
 	b.WriteString("Keep comments concise and natural — state the outcome, not the process.\n\n")
 	b.WriteString("**Runtime-local paths are never deliverables.** Your working directory exists only in this disposable sandbox — NEVER write an absolute path or a `file://` URL as a clickable link or an embedded image. Reference code locations as inline code.\n")
+	return b.String()
+}
+
+// checkoutRepositories mirrors upstream writeRepositories for the claim repositories.
+func checkoutRepositories(repos []multica.Repository) string {
+	if len(repos) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("## Repositories\n\n")
+	b.WriteString("Available in this workspace — `multica repo checkout <url> [--ref <branch-or-sha>]` to fetch (creates a repository checkout on a dedicated branch).\n\n")
+	pinned := false
+	for _, repo := range repos {
+		line := "- " + repo.URL
+		if repo.Description != "" {
+			line += " — " + strings.NewReplacer("\r", " ", "\n", " ").Replace(repo.Description)
+		}
+		if ref := strings.TrimSpace(repo.Ref); ref != "" {
+			pinned = true
+			line += fmt.Sprintf(" (starts from `%s`)", ref)
+		}
+		b.WriteString(line + "\n")
+	}
+	if pinned {
+		b.WriteString("\nA repository that starts from a branch is already checked out there — do not pass `--ref` to get back to it. ")
+		b.WriteString("Deliver to the same line: open pull requests with `gh pr create --base <that-branch>`. ")
+		b.WriteString("If what it starts from is a tag or a commit rather than a branch, treat it as a starting point only and confirm the target branch before opening a pull request.\n")
+	}
+	b.WriteString("\nIf `multica repo checkout` reports that it KEPT an existing checkout, you are continuing work that began earlier — possibly before this project was last reconfigured. ")
+	b.WriteString("The branch it names is the branch your work sits ON: the head of a pull request, never its base. It does not record where that work was meant to land. ")
+	b.WriteString("Keep delivering where this work was already going — the base of its existing pull request, or the target the task states — and ask if neither settles it.")
+	if pinned {
+		b.WriteString(" Do not retarget it to a starting point listed above: that is the project's current setting, which may have changed since this work began.")
+	}
+	b.WriteString("\n\n")
 	return b.String()
 }

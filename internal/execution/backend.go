@@ -30,6 +30,8 @@ type ProjectedRun interface {
 	Execute(context.Context, []string) error
 	// Stream passes env through the exec client environment, never through argv.
 	Stream(context.Context, []string, map[string]string, func(io.Reader) error) error
+	// Capture runs a controller-owned command as the attempt user and returns its bounded stdout.
+	Capture(context.Context, []string, map[string]string) ([]byte, error)
 }
 
 // RejectedError is safe to report as a task failure: no execution resources remain.

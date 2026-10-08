@@ -18,5 +18,11 @@
   "inference_relay": {
     "listen": ":8092",
     "url": "http://inference-relay:8092"
+  },
+  "helper": "registry.example.com/multica-sandbox/helper@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "git_file": "/etc/multica-sandbox/git.json",
+  "git_relay": {
+    "listen": ":8093",
+    "url": "http://git-relay:8093"
   }
 }

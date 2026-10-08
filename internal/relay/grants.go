@@ -32,6 +32,7 @@ type Grants struct {
 }
 
 type grant struct {
+	attempt    string
 	origin     *url.URL
 	credential string
 	header     http.Header
@@ -51,6 +52,19 @@ func (g *Grants) Issue(attempt string, u Upstream) (string, error) {
 	if attempt == "" || err != nil || u.Credential == "" || strings.ContainsAny(u.Credential, "\r\n") {
 		return "", errors.New("relay grant requires an attempt, origin and credential")
 	}
+	return g.issue(attempt, origin, u)
+}
+
+// Bind issues an opaque credential without an upstream: its leases carry no origin, so
+// the relay refuses them unless an authorizer resolves the upstream per request.
+func (g *Grants) Bind(attempt string) (string, error) {
+	if attempt == "" {
+		return "", errors.New("relay grant requires an attempt")
+	}
+	return g.issue(attempt, nil, Upstream{})
+}
+
+func (g *Grants) issue(attempt string, origin *url.URL, u Upstream) (string, error) {
 	header := http.Header{}
 	for name, value := range u.Header {
 		if name == "" || strings.ContainsAny(name+value, "\r\n\x00") {
@@ -70,7 +84,7 @@ func (g *Grants) Issue(attempt string, u Upstream) (string, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	hash := sha256.Sum256([]byte(opaque))
-	g.byHash[hash] = &grant{origin: origin, credential: u.Credential, header: header, ctx: ctx, cancel: cancel, slots: make(chan struct{}, inflight)}
+	g.byHash[hash] = &grant{attempt: attempt, origin: origin, credential: u.Credential, header: header, ctx: ctx, cancel: cancel, slots: make(chan struct{}, inflight)}
 	g.byAttempt[attempt] = hash
 	return opaque, nil
 }
@@ -104,7 +118,7 @@ func (g *Grants) Authorize(r *http.Request) (Lease, bool) {
 	default:
 		return Lease{}, false
 	}
-	return Lease{Origin: entry.origin, Credential: entry.credential, Header: entry.header, Context: entry.ctx, Release: func() { <-entry.slots }}, true
+	return Lease{Attempt: entry.attempt, Origin: entry.origin, Credential: entry.credential, Header: entry.header, Context: entry.ctx, Release: func() { <-entry.slots }}, true
 }
 
 func parseOrigin(origin string) (*url.URL, error) {

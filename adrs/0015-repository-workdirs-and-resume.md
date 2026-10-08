@@ -96,6 +96,12 @@ Rejected alternatives:
 - Hosting a Git service.
 - Pre-cloned mirrors: they are preparation caches and belong to #5.
 
+Refinement (#50, 2026-10-08). The helper is a separate digest-pinned image (Dockerfile
+target `helper`, config `helper`); its image also runs the volume init. Attempts get
+the workdir volume only with the helper. The checkout route shares the Multica relay
+listener. Checkout follows upstream isolated mode with a fresh clone and serves only
+the claim's repositories. The Git relay serves only upload-pack until 07.3.
+
 ## Consequences
 
 Agents can work on repositories and continue sessions without credentials inside

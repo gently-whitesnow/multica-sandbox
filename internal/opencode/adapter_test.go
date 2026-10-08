@@ -151,4 +151,7 @@ func (s *stubWorkload) Stream(ctx context.Context, args []string, env map[string
 	}
 	return s.Execute(ctx, args)
 }
+func (s *stubWorkload) Capture(context.Context, []string, map[string]string) ([]byte, error) {
+	return nil, nil
+}
 func (s *stubWorkload) Result() execution.Result { return execution.Result{} }

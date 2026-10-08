@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/gently-whitesnow/multica-sandbox/internal/execution"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
 	"github.com/gently-whitesnow/multica-sandbox/internal/opencode"
 	"github.com/gently-whitesnow/multica-sandbox/internal/relay"
+	"github.com/gently-whitesnow/multica-sandbox/internal/repo"
 )
 
 func Run(ctx context.Context, c Config, stateDir, tokenPath string, out io.Writer) error {
@@ -93,11 +95,21 @@ func Run(ctx context.Context, c Config, stateDir, tokenPath string, out io.Write
 }
 
 func openCodeAdapter(ctx context.Context, c Config, api *multica.Client, backend *docker.Backend) (*opencode.Adapter, error) {
-	workloads := &docker.Projected{Backend: *backend, Network: c.OpenCode.Network, Peers: c.OpenCode.Peers}
+	workloads := &docker.Projected{Backend: *backend, Network: c.OpenCode.Network, Peers: c.OpenCode.Peers, Helper: c.OpenCode.Helper}
 	if (c.OpenCode.MulticaRelay == nil) != (c.OpenCode.MulticaCLI == "") {
 		return nil, fmt.Errorf("multica_relay and the digest-pinned multica_cli artifact require each other")
 	}
+	git := c.OpenCode.GitRelay != nil
+	if git != (c.OpenCode.GitFile != "") || (git && c.OpenCode.Helper == "") || (c.OpenCode.Helper != "" && c.OpenCode.MulticaRelay == nil) {
+		return nil, fmt.Errorf("git_relay and git_file require each other and the helper; the helper requires multica_relay")
+	}
 	var err error
+	if c.OpenCode.Helper != "" {
+		// The forwarder reaches the checkout endpoint on the Multica relay listener.
+		if workloads.Forward, err = relayAddress("Multica", *c.OpenCode.MulticaRelay); err != nil {
+			return nil, err
+		}
+	}
 	if workloads.Bundles, err = bundles(c.OpenCode, c.Tools); err != nil {
 		return nil, err
 	}
@@ -106,7 +118,7 @@ func openCodeAdapter(ctx context.Context, c Config, api *multica.Client, backend
 	if err != nil {
 		return nil, fmt.Errorf("inspect agent image: %w", err)
 	}
-	if err = opencode.CheckImage(report, c.OpenCode.MulticaRelay != nil); err != nil {
+	if err = opencode.CheckImage(report, c.OpenCode.MulticaRelay != nil, git); err != nil {
 		return nil, err
 	}
 	if err = checkTools(ctx, workloads, c.Tools); err != nil {
@@ -132,10 +144,25 @@ func openCodeAdapter(ctx context.Context, c Config, api *multica.Client, backend
 	}
 	adapter := &opencode.Adapter{Server: strings.TrimRight(c.Server, "/"), Controller: c.Daemon, Issuer: issuer, Authority: authority, Status: api, Reporter: api, Workloads: workloads, Command: c.Command}
 	if c.OpenCode.MulticaRelay != nil {
-		adapter.Relay, err = serveRelay(ctx, "Multica", multica.RelayPrefix, *c.OpenCode.MulticaRelay, relay.Policy{Allow: multica.RelayPath})
-		if err != nil {
+		grants := relay.NewGrants(multica.RelayPrefix)
+		var routes map[string]http.Handler
+		if git {
+			hosts, err := repo.ReadConfig(c.OpenCode.GitFile)
+			if err != nil {
+				return nil, err
+			}
+			adapter.GitRelay = repo.NewRelay(c.OpenCode.GitRelay.URL, hosts)
+			if err = serveRelay(ctx, "Git", adapter.GitRelay, *c.OpenCode.GitRelay, relay.Policy{Allow: repo.GitPath}, nil); err != nil {
+				return nil, err
+			}
+			// The upstream CLI authenticates checkout with its Multica relay credential.
+			adapter.Checkout = &repo.Checkout{Auth: grants}
+			routes = map[string]http.Handler{"/repo/checkout": adapter.Checkout}
+		}
+		if err = serveRelay(ctx, "Multica", grants, *c.OpenCode.MulticaRelay, relay.Policy{Allow: multica.RelayPath}, routes); err != nil {
 			return nil, err
 		}
+		adapter.Relay = grants
 		adapter.RelayURL = strings.TrimRight(c.OpenCode.MulticaRelay.URL, "/")
 	}
 	source, grants, err := openCodeInference(ctx, c)

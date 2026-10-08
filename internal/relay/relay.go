@@ -21,9 +21,13 @@ import (
 
 // Lease is an authorized forwarding grant for one request.
 type Lease struct {
+	// Attempt names the grant's attempt for authorizers that add per-request policy.
+	Attempt    string
 	Origin     *url.URL
 	Credential string
-	Header     http.Header
+	// Authorization, when set, replaces the bearer built from Credential; Path replaces the request path.
+	Authorization, Path string
+	Header              http.Header
 	// Context ends when the grant is revoked, cancelling in-flight requests.
 	Context context.Context
 	Release func()
@@ -84,6 +88,9 @@ func New(auth Authorizer, p Policy) (*Relay, error) {
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			lease := pr.In.Context().Value(leaseKey{}).(Lease)
 			pr.SetURL(lease.Origin)
+			if lease.Path != "" {
+				pr.Out.URL.Path, pr.Out.URL.RawPath = lease.Path, ""
+			}
 			for _, name := range dropped {
 				pr.Out.Header.Del(name)
 			}
@@ -95,7 +102,12 @@ func New(auth Authorizer, p Policy) (*Relay, error) {
 			for name, values := range lease.Header {
 				pr.Out.Header[name] = slices.Clone(values)
 			}
-			pr.Out.Header.Set("Authorization", "Bearer "+lease.Credential)
+			switch {
+			case lease.Authorization != "":
+				pr.Out.Header.Set("Authorization", lease.Authorization)
+			case lease.Credential != "":
+				pr.Out.Header.Set("Authorization", "Bearer "+lease.Credential)
+			}
 		},
 		ModifyResponse: func(resp *http.Response) error {
 			// The transport never follows redirects; refusing them also withholds upstream locations.
@@ -135,6 +147,10 @@ func (r *Relay) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	defer lease.Release()
+	if lease.Origin == nil || (lease.Path != "" && !strings.HasPrefix(lease.Path, "/")) {
+		deny(w, http.StatusForbidden, "request not permitted")
+		return
+	}
 	ctx, cancel := context.WithCancel(context.WithValue(req.Context(), leaseKey{}, lease))
 	defer cancel()
 	defer context.AfterFunc(lease.Context, cancel)()
