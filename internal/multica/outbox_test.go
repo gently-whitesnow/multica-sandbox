@@ -88,7 +88,7 @@ func TestQueuedReportSurvivesOutageAndReplays(t *testing.T) {
 	instantRetries(t)
 	s := &terminalServer{status: []int{503, 503, 503, 503, 503, 503}}
 	c, dir := outboxClient(t, s)
-	err := c.Deliver(context.Background(), Terminal{Task: testID, Failed: true, Error: "opencode timed out after 1m0s", Reason: "timeout", Session: "ses_x", Disposable: true})
+	err := c.Deliver(context.Background(), Terminal{Task: testID, Failed: true, Error: "opencode timed out after 1m0s", Reason: "timeout", Session: "ses_x", WorkDir: "volume", Retired: "ses_old"})
 	if !errors.Is(err, ErrDeferred) || queued(t, dir) != 1 {
 		t.Fatalf("report not durably deferred: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestQueuedReportSurvivesOutageAndReplays(t *testing.T) {
 		t.Fatal("queued report not replayed", n, err)
 	}
 	last := s.bodies[len(s.bodies)-1]
-	if last["failure_reason"] != "timeout" || last["session_id"] != "ses_x" || last["session_rollout_missing"] != true {
+	if last["failure_reason"] != "timeout" || last["session_id"] != "ses_x" || last["work_dir"] != "volume" || last["retired_session_id"] != "ses_old" || last["session_rollout_missing"] != nil {
 		t.Fatalf("replayed payload changed: %v", last)
 	}
 }

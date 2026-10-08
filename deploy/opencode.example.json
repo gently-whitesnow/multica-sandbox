@@ -24,5 +24,9 @@
   "git_relay": {
     "listen": ":8093",
     "url": "http://git-relay:8093"
+  },
+  "sessions": {
+    "ttl": "168h",
+    "max": 64
   }
 }

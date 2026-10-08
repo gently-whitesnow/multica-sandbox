@@ -28,7 +28,7 @@ const (
 type Reporter interface {
 	ReportMessages(context.Context, string, []multica.Message) error
 	ReportUsage(context.Context, string, multica.Usage) error
-	ReportSession(context.Context, string, string) error
+	ReportSession(context.Context, string, string, string) error
 }
 
 // eventStream maps `opencode run --format json` like the upstream OpenCode backend.
@@ -36,10 +36,13 @@ type eventStream struct {
 	reporter Reporter
 	task     string
 	model    string
-	output   strings.Builder
-	session  string
-	usage    multica.Usage
-	active   atomic.Int64
+	// workDir names the retained workdir reported with the session.
+	workDir string
+	output  strings.Builder
+	session string
+	usage   multica.Usage
+	active  atomic.Int64
+	tools   atomic.Int64
 
 	mu      sync.Mutex
 	seq     int
@@ -175,6 +178,7 @@ func (s *eventStream) read(ctx context.Context, reader io.Reader) error {
 }
 
 func (s *eventStream) tool(e nativeEvent, when time.Time) {
+	s.tools.Add(1)
 	call := multica.Message{Type: "tool_use", Tool: e.Part.Tool, CallID: e.Part.CallID, CreatedAt: when}
 	state := e.Part.State
 	if state == nil {
@@ -272,7 +276,7 @@ func (s *eventStream) flush() {
 	ctx, cancel := context.WithTimeout(context.Background(), reportTimeout)
 	defer cancel()
 	if session != "" {
-		_ = s.reporter.ReportSession(ctx, s.task, session)
+		_ = s.reporter.ReportSession(ctx, s.task, session, s.workDir)
 	}
 	if len(batch) > 0 {
 		_ = s.reporter.ReportMessages(ctx, s.task, batch)

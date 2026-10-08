@@ -40,20 +40,18 @@ read-only rootfs, only `CAP_CHOWN`, `chmod 0700`, then `chown 65532`. Labels
 bind a volume to its controller, workspace, agent and issue. Fresh runs get a
 per-attempt volume that is removed at cleanup.
 
-**Sessions.** Issue tasks retain one volume per (workspace, agent, issue), with
-one writer at a time. Terminal reports carry the native `session_id` and a
-`work_dir` naming the volume. The controller honours `prior_session_id` only if:
-- `prior_work_dir` names an existing volume;
-- the volume's labels match the claim's workspace, agent and issue; and
-- the volume becomes free within a bounded wait, as upstream waits for its
-  workdir lock.
-
-Otherwise the run starts fresh and gets the upstream continuity notice. A resume
-rejected before any tool use falls back to a fresh session once and reports
-`retired_session_id`. `session_rollout_missing` is reported only when no session
-is retained. Retention expires after an idle TTL. The controller measures usage
-and drops sessions over a configured cap. Disk quotas are deployment-owned: the
-Docker `local` driver cannot limit persistent volumes.
+**Sessions.** With `sessions` configured, issue tasks retain one volume per
+(controller, workspace, agent, issue), named from those IDs, with one writer at a
+time: a second run waits 15 s, as upstream waits for its workdir lock, then gets
+a per-attempt volume. Reports carry the native `session_id` and a `work_dir`
+naming the volume. `prior_session_id` is honoured only when `prior_work_dir`
+names that volume and it already existed with matching labels. Otherwise the run
+starts fresh with the upstream continuity notice. A resume that yields no session
+and no tool use is retried fresh once and reports `retired_session_id`.
+`session_rollout_missing` is reported only when no session is retained. An idle
+TTL, tracked in controller state, and a session count cap bound retention. Disk
+quotas are deployment-owned: the Docker `local` driver cannot limit persistent
+volumes.
 
 **Checkout endpoint.** The controller serves the upstream `/repo/checkout`
 request and response contract on the attempt network. A static forwarder,

@@ -31,6 +31,7 @@ type Task struct {
 	ProjectDescription    string            `json:"project_description"`
 	Repos                 []Repository      `json:"repos"`
 	PriorSessionID        string            `json:"prior_session_id"`
+	PriorWorkDir          string            `json:"prior_work_dir"`
 	TriggerCommentContent string            `json:"trigger_comment_content"`
 	RemoteMCPConnections  []json.RawMessage `json:"remote_mcp_connections"`
 	WorkspaceID           string            `json:"workspace_id"`
@@ -155,12 +156,12 @@ func (c *Client) AgentMessage(ctx context.Context, id string) error {
 	return c.taskPost(ctx, id, "messages", map[string]any{"messages": []map[string]any{{"seq": 1, "type": "text", "content": "Experimental OpenCode attempt started.", "created_at": time.Now().UTC()}}})
 }
 func (c *Client) AgentComplete(ctx context.Context, id string, result execution.Result) error {
-	return c.Deliver(ctx, Terminal{Task: id, Output: result.Output, Session: result.SessionID, Disposable: result.Disposable})
+	return c.Deliver(ctx, Terminal{Task: id, Output: result.Output, Session: result.SessionID, WorkDir: result.WorkDir, Retired: result.RetiredSessionID, Disposable: result.Disposable})
 }
 
 // AgentFail sends safe text; an empty reason lets Multica classify it as it does for its own daemon.
 func (c *Client) AgentFail(ctx context.Context, id, message, reason string, result execution.Result) error {
-	return c.Deliver(ctx, Terminal{Task: id, Failed: true, Error: message, Reason: reason, Session: result.SessionID, Disposable: result.Disposable})
+	return c.Deliver(ctx, Terminal{Task: id, Failed: true, Error: message, Reason: reason, Session: result.SessionID, WorkDir: result.WorkDir, Retired: result.RetiredSessionID, Disposable: result.Disposable})
 }
 
 type Repository struct {

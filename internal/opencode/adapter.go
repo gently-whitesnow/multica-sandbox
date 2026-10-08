@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -25,7 +26,7 @@ type Authority interface {
 	Apply(context.Context, attempt.Grant) error
 }
 type Workloads interface {
-	Start(context.Context, string) (execution.ProjectedRun, error)
+	Start(context.Context, string, execution.Workdir) (execution.ProjectedRun, error)
 }
 type Status interface {
 	Status(context.Context, string) (string, error)
@@ -83,15 +84,27 @@ type running struct {
 	inferenceToken string
 	// gitEnv routes claim repositories through the Git relay with an opaque credential.
 	gitEnv map[string]string
+	// workDir names the retained workdir; resume is the session OpenCode continues and
+	// retired the prior session a failed resume abandoned (ADR 0015).
+	workDir, resume, retired string
 }
+
+// SessionDB keeps OpenCode's session store in the retained workdir, apart from the
+// auth stores under XDG_DATA_HOME.
+const SessionDB = "/workspace/work/.multica-sandbox/opencode.db"
+
+var sessionID = regexp.MustCompile(`^ses_[A-Za-z0-9]{1,64}$`)
 
 func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, error) {
 	connections, err := Select(task)
 	if err != nil {
 		return nil, &execution.RejectedError{Err: err}
 	}
-	prompt, brief, err := Prompt(task, a.Relay != nil, a.Checkout != nil)
-	if err != nil {
+	continuity := Fresh
+	if task.PriorSessionID != "" {
+		continuity = Lost
+	}
+	if _, _, err = Prompt(task, a.Relay != nil, a.Checkout != nil, continuity); err != nil {
 		return nil, &execution.RejectedError{Err: err}
 	}
 	r := &running{adapter: a, task: task, connections: connections, tokens: map[string]identity.AccessToken{}, done: make(chan error, 1), exited: make(chan struct{})}
@@ -123,10 +136,25 @@ func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, 
 		cancel()
 		return nil, r.reject(err)
 	}
-	r.workload, err = a.Workloads.Start(runCtx, task.AttemptKey())
+	// Upstream issue conversations keep a retained workdir when the backend offers one.
+	var workdir execution.Workdir
+	if a.Relay != nil && upstreamTask(task) {
+		workdir = execution.Workdir{Workspace: task.WorkspaceID, Agent: task.AgentID, Issue: task.IssueID, Prior: task.PriorWorkDir}
+	}
+	r.workload, err = a.Workloads.Start(runCtx, task.AttemptKey(), workdir)
 	if err != nil {
 		cancel()
 		return nil, errors.Join(err, r.Remove(context.Background()))
+	}
+	// Like upstream, the prior session resumes only in the workdir it was recorded with.
+	var reused bool
+	r.workDir, reused = r.workload.Workdir()
+	if reused && r.workDir == task.PriorWorkDir && sessionID.MatchString(task.PriorSessionID) {
+		r.resume, continuity = task.PriorSessionID, Resumed
+	}
+	prompt, brief, err := Prompt(task, a.Relay != nil, a.Checkout != nil, continuity)
+	if err != nil {
+		return nil, r.reject(err)
 	}
 	if err = r.initialize(runCtx, prompt, brief); err != nil {
 		return nil, r.reject(err)
@@ -140,7 +168,7 @@ func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, 
 		coAuthor := a.Settings == nil || a.Settings.CoAuthoredBy(runCtx, task.WorkspaceID)
 		a.Checkout.Register(task.AttemptKey(), repo.Task{Workspace: task.WorkspaceID, ID: task.ID, AgentName: task.Agent.Name, Repos: repos, Target: r.workload, Env: r.gitEnv, CoAuthor: coAuthor})
 	}
-	r.events = &eventStream{reporter: a.Reporter, task: task.ID, model: r.model}
+	r.events = &eventStream{reporter: a.Reporter, task: task.ID, model: r.model, workDir: r.workDir}
 	r.events.touch()
 	r.started = true
 	go r.loop(runCtx)
@@ -148,7 +176,11 @@ func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, 
 }
 
 func (r *running) initialize(ctx context.Context, prompt, brief []byte) error {
-	if err := r.workload.Execute(ctx, []string{"/bin/sh", "-c", `set -eu; mkdir -p /workspace/config/opencode; printf "{}" > /workspace/config/opencode/opencode.json; printf "*\n" > /workspace/config/opencode/.gitignore; chmod 555 /workspace/config/opencode`}); err != nil {
+	script := `set -eu; mkdir -p /workspace/config/opencode; printf "{}" > /workspace/config/opencode/opencode.json; printf "*\n" > /workspace/config/opencode/.gitignore; chmod 555 /workspace/config/opencode`
+	if r.workDir != "" {
+		script += `; mkdir -p -m 700 "${0%/*}"`
+	}
+	if err := r.workload.Execute(ctx, []string{"/bin/sh", "-c", script, SessionDB}); err != nil {
 		return fmt.Errorf("OpenCode config directory: %w", ErrDenied)
 	}
 	config, err := Config(r.connections, r.relayToken != "")
@@ -233,11 +265,16 @@ func (r *running) loop(ctx context.Context) {
 	defer close(r.exited)
 	command := r.adapter.Command
 	if len(command) == 0 {
-		command = []string{"/bin/sh", "-c", `exec opencode run --format json "$(cat /workspace/prompt.txt)"`}
+		command = []string{"/bin/sh", "-c", `exec opencode run --format json ${MULTICA_SANDBOX_RESUME:+--session "$MULTICA_SANDBOX_RESUME"} "$(cat /workspace/prompt.txt)"`}
 	}
 	agent := make(chan error, 1)
 	go func() {
-		agent <- r.workload.Stream(ctx, command, r.environment(), func(reader io.Reader) error { return r.events.read(ctx, reader) })
+		read := func(reader io.Reader) error { return r.events.read(ctx, reader) }
+		err := r.workload.Stream(ctx, command, r.environment(), read)
+		if err != nil && r.retryFresh(ctx) {
+			err = r.workload.Stream(ctx, command, r.environment(), read)
+		}
+		agent <- err
 	}()
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
@@ -270,11 +307,27 @@ loop:
 	r.done <- err
 }
 
+// retryFresh follows upstream shouldRetryWithFreshSession for OpenCode: a resume that
+// established no session and used no tool retires the prior session and runs once more,
+// fresh, with the continuity notice.
+func (r *running) retryFresh(ctx context.Context) bool {
+	if r.resume == "" || ctx.Err() != nil || r.events.session != "" || r.events.tools.Load() > 0 {
+		return false
+	}
+	prompt, _, err := Prompt(r.task, r.adapter.Relay != nil, r.adapter.Checkout != nil, Lost)
+	if err != nil || r.workload.Write(ctx, "/workspace/prompt.txt", prompt) != nil {
+		return false
+	}
+	r.retired, r.resume = r.resume, ""
+	return true
+}
+
+// Result reports the session as retained only with a retained workdir.
 func (r *running) Result() execution.Result {
 	if r.events == nil {
 		return execution.Result{Disposable: true}
 	}
-	return execution.Result{Output: r.events.output.String(), SessionID: r.events.session, Disposable: true}
+	return execution.Result{Output: r.events.output.String(), SessionID: r.events.session, WorkDir: r.workDir, RetiredSessionID: r.retired, Disposable: r.workDir == ""}
 }
 
 func (r *running) Wait(ctx context.Context) error {

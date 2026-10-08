@@ -54,9 +54,19 @@ type stubWorkload struct {
 	runs    int
 	files   map[string][]byte
 	envs    chan map[string]string
+	// workdir is the requested retained workdir; retained and reused are the answer.
+	workdir  execution.Workdir
+	retained string
+	reused   bool
+	// failFirst ends the first agent run at once, without events.
+	failFirst bool
 }
 
-func (s *stubWorkload) Start(context.Context, string) (execution.ProjectedRun, error) { return s, nil }
+func (s *stubWorkload) Start(_ context.Context, _ string, w execution.Workdir) (execution.ProjectedRun, error) {
+	s.workdir = w
+	return s, nil
+}
+func (s *stubWorkload) Workdir() (string, bool) { return s.retained, s.reused }
 func (s *stubWorkload) Write(_ context.Context, path string, data []byte) error {
 	s.writes++
 	if s.files != nil {
@@ -148,6 +158,10 @@ func TestUncertainRevocationIsNotSafeRejection(t *testing.T) {
 func (s *stubWorkload) Stream(ctx context.Context, args []string, env map[string]string, _ func(io.Reader) error) error {
 	if s.envs != nil {
 		s.envs <- env
+	}
+	if s.failFirst {
+		s.failFirst = false
+		return errors.New("resume refused")
 	}
 	return s.Execute(ctx, args)
 }

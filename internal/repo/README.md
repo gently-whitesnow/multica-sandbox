@@ -3,8 +3,9 @@
 Agents run the unchanged upstream `multica repo checkout <url> [--ref] [--fresh]`
 inside their attempt, then commit and `git push` as under the native runtime (ADR 0015).
 The controller serves upstream's daemon `/repo/checkout` contract and mediates Git smart
-HTTP. No Git host or Multica credential enters the attempt. Pull requests through `gh`
-and session resume are later #47 slices.
+HTTP. No Git host or Multica credential enters the attempt. With `sessions`, follow-up
+tasks on an issue reuse its workdir and checkouts ([OpenCode README](../opencode/README.md)).
+Pull requests through `gh` are a later #47 slice.
 
 ## Configuration
 
@@ -78,7 +79,7 @@ b4ca5b4) with a fresh clone instead of the bare cache:
 
 Differences from upstream:
 - only the claim's repositories, not the whole workspace registry;
-- every session pays for its own clone;
+- every retained workdir pays for its own clone;
 - the identity is repository config of the checkout, not a global one, so clones made
   without `multica repo checkout` have none;
 - claims with a non-HTTPS repository URL are rejected, as before; scp-style remotes

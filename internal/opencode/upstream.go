@@ -31,6 +31,12 @@ func (r *running) environment() map[string]string {
 	if name := r.task.Agent.Name; name != "" && len(name) <= 256 && !strings.ContainsAny(name, "\x00\r\n") {
 		env["MULTICA_AGENT_NAME"] = name
 	}
+	if r.workDir != "" {
+		env["OPENCODE_DB"] = SessionDB
+	}
+	if r.resume != "" {
+		env["MULTICA_SANDBOX_RESUME"] = r.resume
+	}
 	if r.gitEnv != nil {
 		// The helper forwards the upstream daemon port to the checkout endpoint (ADR 0015).
 		env["MULTICA_DAEMON_PORT"] = repo.DaemonPort
@@ -48,7 +54,13 @@ func upstreamTask(t multica.Task) bool {
 		(t.TriggerThreadID == "" || multica.ValidID(t.TriggerThreadID))
 }
 
-func upstreamPrompt(t multica.Task) string {
+// sessionContinuityNotice is upstream execenv.SessionContinuityNoticeIssue.
+const sessionContinuityNotice = "## Session Continuity Notice\n\n" +
+	"This run was meant to continue an earlier conversation, but that provider session could not be restored, and this run does not continue it. The issue and its full comment history are unaffected — that record is the authoritative version of this conversation, and reading it (which your workflow already requires) reconstructs it. What is gone is your own working memory from the turns that did not come back: what you already tried, what you ruled out, and how far you had got. Re-derive what you need instead of assuming it, and do not claim continuity the record cannot back up. Do not open your reply by announcing this — raise it only where it actually matters, such as when the user refers to reasoning you never wrote down.\n\n"
+
+// upstreamPrompt carries no issue-wide comment delta, so a resumed run gets upstream's
+// unknown-delta hint and the issue read stays unconditional.
+func upstreamPrompt(t multica.Task, resumed bool) string {
 	var b strings.Builder
 	b.WriteString("You are running as a local coding agent for a Multica workspace.\n\n")
 	fmt.Fprintf(&b, "Your assigned issue ID is: %s\n\n", t.IssueID)
@@ -72,13 +84,16 @@ func upstreamPrompt(t multica.Task) string {
 		fmt.Fprintf(&b, "[NEW COMMENT] %s just left a new comment. Focus on THIS comment — do not confuse it with previous ones:\n\n", author)
 		fmt.Fprintf(&b, "> %s\n\n", t.TriggerCommentContent)
 	}
-	// Every sandbox attempt is a fresh session, so the cold hints always apply.
 	fmt.Fprintf(&b, "Start by running `multica issue get %s --output json` to understand your task, then decide how to proceed.\n\n", t.IssueID)
 	thread := t.TriggerThreadID
 	if thread == "" {
 		thread = t.TriggerCommentID
 	}
-	fmt.Fprintf(&b, "Triggering thread: `multica issue comment list %s --thread %s --tail 30 --compact --output json` (that thread's root + its 30 newest replies). The scan workflow step 2 requires is the same command with `--roots-only --summary` in place of `--thread ... --tail 30`.\n\n", t.IssueID, thread)
+	if resumed {
+		fmt.Fprintf(&b, "You're resuming the prior session, and the triggering comment is already included above. This turn carries no issue-wide comment delta, so nothing here answers the scan workflow step 2 requires — run it: `multica issue comment list %s --roots-only --summary --compact --output json`, and expand what its `last_activity_at` shows has moved. Triggering thread in full, if resumed memory is not enough for the reply: `multica issue comment list %s --thread %s --tail 30 --compact --output json`.\n\n", t.IssueID, t.IssueID, thread)
+	} else {
+		fmt.Fprintf(&b, "Triggering thread: `multica issue comment list %s --thread %s --tail 30 --compact --output json` (that thread's root + its 30 newest replies). The scan workflow step 2 requires is the same command with `--roots-only --summary` in place of `--thread ... --tail 30`.\n\n", t.IssueID, thread)
+	}
 	fmt.Fprintf(&b, "Post your reply as a comment — always use the trigger comment ID below, do NOT reuse --parent values from previous turns in this session.\n\n"+
 		"Write the body file first (rules: ## Comment Formatting above — MUL-2904 / #4182):\n\n"+
 		"    multica issue comment add %s --parent %s --content-file ./reply.md --output table && rm ./reply.md\n\n"+

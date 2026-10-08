@@ -30,6 +30,8 @@ type Projected struct {
 	// Helper is the digest-pinned sandbox-helper image (ADR 0015). With it, attempts get a
 	// workdir volume at WorkDir and a loopback forwarder from DaemonPort to Forward.
 	Helper, Forward string
+	// Sessions, with the helper, retains issue workdirs across attempts.
+	Sessions *Sessions
 }
 
 // HelperDir holds the helper image mount; the workdir volume is mounted at repo.WorkDir.
@@ -81,7 +83,8 @@ func (b *Projected) ValidateNetwork(ctx context.Context) error {
 	return nil
 }
 
-func (b *Projected) Start(ctx context.Context, attempt string) (execution.ProjectedRun, error) {
+// Start creates an attempt; a Workdir with an issue asks for its retained session volume.
+func (b *Projected) Start(ctx context.Context, attempt string, w execution.Workdir) (execution.ProjectedRun, error) {
 	bundles, path, err := b.prepare(ctx)
 	if err != nil {
 		return nil, err
@@ -99,15 +102,14 @@ func (b *Projected) Start(ctx context.Context, attempt string) (execution.Projec
 	if err != nil {
 		return nil, err
 	}
-	projection := &projectedRun{run: r, network: isolated, peers: b.Peers}
+	projection := &projectedRun{run: r, network: isolated, peers: b.Peers, owner: b.Owner}
 	cleanup := func() error {
 		cleanCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		return projection.Remove(cleanCtx)
 	}
 	if b.Helper != "" {
-		projection.volume = r.name + "-work"
-		if err := b.workdir(ctx, projection.volume); err != nil {
+		if err := b.attachWorkdir(ctx, projection, w); err != nil {
 			return nil, errors.Join(err, cleanup())
 		}
 		bundles = append(bundles, "--mount=type=volume,source="+projection.volume+",target="+repo.WorkDir+",volume-nocopy")
@@ -138,16 +140,36 @@ func (b *Projected) Start(ctx context.Context, attempt string) (execution.Projec
 	return projection, nil
 }
 
+// attachWorkdir gives the attempt its issue's session volume when it is free within
+// sessionBusyWait, and a per-attempt volume otherwise.
+func (b *Projected) attachWorkdir(ctx context.Context, p *projectedRun, w execution.Workdir) error {
+	if b.Sessions != nil && w.Issue != "" {
+		name, label := sessionName(b.Owner, w)
+		if b.Sessions.acquire(ctx, name) {
+			p.volume, p.sessions = name, b.Sessions
+			var err error
+			p.reused, err = b.sessionVolume(ctx, name, label)
+			return err
+		}
+	}
+	p.volume = p.name + "-work"
+	return b.workdir(ctx, p.volume)
+}
+
 // workdir creates an owned volume and hands its root to the attempt user from the
 // helper image: no network, a read-only rootfs and only CAP_CHOWN.
-func (b *Projected) workdir(ctx context.Context, volume string) error {
-	if _, err := command(ctx, "volume", "create", "--label", ownerLabel+"="+b.Owner, volume); err != nil {
+func (b *Projected) workdir(ctx context.Context, volume string, labels ...string) error {
+	if _, err := command(ctx, append(append([]string{"volume", "create", "--label", ownerLabel + "=" + b.Owner}, labels...), volume)...); err != nil {
 		return err
 	}
 	_, err := command(ctx, "run", "--rm", "--name", volume+"-init", "--label", ownerLabel+"="+b.Owner, "--pull=never", "--runtime=runc",
 		"--network=none", "--read-only", "--user=0:0", "--cap-drop=ALL", "--cap-add=CHOWN", "--security-opt=no-new-privileges=true",
 		"--memory=32m", "--pids-limit=8", "--log-driver=none", "--mount=type=volume,source="+volume+",target=/work,volume-nocopy",
 		"--entrypoint", "/sandbox-helper", b.Helper, "init", "/work")
+	if err != nil {
+		_, rmErr := command(ctx, "volume", "rm", "-f", volume)
+		err = errors.Join(err, rmErr)
+	}
 	return err
 }
 
@@ -193,8 +215,18 @@ func attemptLimits(args []string, network string) []string {
 
 type projectedRun struct {
 	*run
-	network, volume string
-	peers           []string
+	network, volume, owner string
+	peers                  []string
+	// sessions holds the retained volume's writer slot; reused means it already existed.
+	sessions *Sessions
+	reused   bool
+}
+
+func (r *projectedRun) Workdir() (string, bool) {
+	if r.sessions == nil {
+		return "", false
+	}
+	return r.volume, r.reused
 }
 
 func (r *projectedRun) Write(ctx context.Context, path string, data []byte) error {
@@ -222,8 +254,12 @@ func (r *projectedRun) Execute(ctx context.Context, args []string) error {
 
 func (r *projectedRun) Remove(ctx context.Context) error {
 	err := r.run.Remove(ctx)
-	// A failed volume init leaves no container; the volume is still removed.
-	if r.volume != "" {
+	switch {
+	case r.sessions != nil:
+		// The container is gone, so the next run of this conversation may write.
+		err = errors.Join(err, r.sessions.release(r.volume), r.sessions.Collect(ctx, r.owner))
+	case r.volume != "":
+		// A failed volume init leaves no container; the volume is still removed.
 		_, volumeErr := command(ctx, "volume", "rm", "-f", r.volume)
 		err = errors.Join(err, volumeErr)
 	}
@@ -271,13 +307,18 @@ func (b *Projected) isolate(ctx context.Context, name string) (string, error) {
 	return name, nil
 }
 
-// reconcileVolumes removes owned workdir volumes; every one belongs to a finished attempt.
+// reconcileVolumes removes owned per-attempt workdir volumes, which all belong to
+// finished attempts; session volumes stay for Sessions.Collect.
 func reconcileVolumes(ctx context.Context, owner string) error {
-	data, err := command(ctx, "volume", "ls", "-q", "--filter", "label="+ownerLabel+"="+owner)
+	data, err := command(ctx, "volume", "ls", "--filter", "label="+ownerLabel+"="+owner, "--format", `{{.Name}} {{.Label "`+sessionLabel+`"}}`)
 	if err != nil {
 		return err
 	}
-	for _, name := range strings.Fields(string(data)) {
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		name, session, _ := strings.Cut(line, " ")
+		if name == "" || session != "" {
+			continue
+		}
 		if _, err := command(ctx, "volume", "rm", "-f", name); err != nil {
 			return err
 		}

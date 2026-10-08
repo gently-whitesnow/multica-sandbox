@@ -26,6 +26,8 @@ type Terminal struct {
 	Error      string `json:"error,omitempty"`
 	Reason     string `json:"failure_reason,omitempty"`
 	Session    string `json:"session_id,omitempty"`
+	WorkDir    string `json:"work_dir,omitempty"`
+	Retired    string `json:"retired_session_id,omitempty"`
 	Disposable bool   `json:"session_rollout_missing,omitempty"`
 }
 
@@ -149,6 +151,12 @@ func (c *Client) sendTerminal(ctx context.Context, t Terminal) error {
 	}
 	if t.Session != "" {
 		body["session_id"] = t.Session
+	}
+	if t.WorkDir != "" {
+		body["work_dir"] = t.WorkDir
+	}
+	if t.Retired != "" {
+		body["retired_session_id"] = t.Retired
 	}
 	if t.Disposable {
 		body["session_rollout_missing"] = true

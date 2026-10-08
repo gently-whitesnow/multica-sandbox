@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gently-whitesnow/multica-sandbox/internal/execution"
 )
 
 func TestProjectedAttemptIsolation(t *testing.T) {
@@ -33,11 +35,11 @@ func TestProjectedAttemptIsolation(t *testing.T) {
 		_, _ = command(context.Background(), "rm", "-fv", peer)
 		_, _ = command(context.Background(), "network", "rm", template)
 	})
-	a, err := backend.Start(ctx, "workspace-a:attempt")
+	a, err := backend.Start(ctx, "workspace-a:attempt", execution.Workdir{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := backend.Start(ctx, "workspace-b:attempt")
+	b, err := backend.Start(ctx, "workspace-b:attempt", execution.Workdir{})
 	if err != nil {
 		t.Fatal(err)
 	}

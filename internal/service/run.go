@@ -82,7 +82,7 @@ func Run(ctx context.Context, c Config, stateDir, tokenPath string, out io.Write
 	}
 	if c.OpenCode != nil {
 		c.Command = command
-		launch, err := openCodeAdapter(ctx, c, api, backend)
+		launch, err := openCodeAdapter(ctx, c, stateDir, api, backend)
 		if err != nil {
 			return err
 		}
@@ -94,8 +94,22 @@ func Run(ctx context.Context, c Config, stateDir, tokenPath string, out io.Write
 	return serveFleet(ctx, c, stateDir, api, &p, out)
 }
 
-func openCodeAdapter(ctx context.Context, c Config, api *multica.Client, backend *docker.Backend) (*opencode.Adapter, error) {
+func openCodeAdapter(ctx context.Context, c Config, stateDir string, api *multica.Client, backend *docker.Backend) (*opencode.Adapter, error) {
 	workloads := &docker.Projected{Backend: *backend, Network: c.OpenCode.Network, Peers: c.OpenCode.Peers, Helper: c.OpenCode.Helper}
+	if s := c.OpenCode.Sessions; s != nil {
+		ttl, err := time.ParseDuration(s.TTL)
+		if c.OpenCode.Helper == "" || err != nil || ttl <= 0 || s.Max < 1 || s.Max > 1024 {
+			return nil, fmt.Errorf("sessions require the helper, a positive ttl and max in [1,1024]")
+		}
+		workloads.Sessions = &docker.Sessions{Dir: filepath.Join(stateDir, "sessions"), TTL: ttl, Max: s.Max}
+		if err := os.MkdirAll(workloads.Sessions.Dir, 0700); err != nil {
+			return nil, err
+		}
+		// Reconciliation kept session volumes; expired ones go before any attempt starts.
+		if err := workloads.Sessions.Collect(ctx, c.Daemon); err != nil {
+			return nil, err
+		}
+	}
 	if (c.OpenCode.MulticaRelay == nil) != (c.OpenCode.MulticaCLI == "") {
 		return nil, fmt.Errorf("multica_relay and the digest-pinned multica_cli artifact require each other")
 	}
