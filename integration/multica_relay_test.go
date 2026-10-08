@@ -52,7 +52,8 @@ grep -q 'url = https://git.fixture.test/sandbox/fixture.git' /proc/1/root/worksp
 r=http://git-relay:8093/git.fixture.test/sandbox
 wget -q -O /dev/null --header "Authorization: Bearer $git" "$r/fixture.git/info/refs?service=git-upload-pack" || exit 24
 wget -q -O /dev/null --header "Authorization: Bearer $git" "$r/other.git/info/refs?service=git-upload-pack" && exit 25
-wget -q -O /dev/null --header "Authorization: Bearer $git" "$r/fixture.git/info/refs?service=git-receive-pack" && exit 26
+wget -q -O /dev/null --header "Authorization: Bearer $git" "$r/other.git/info/refs?service=git-receive-pack" && exit 26
+wget -q -O /dev/null --header "Authorization: Bearer $git" "$r/fixture.git/info/refs?service=git-receive-pack" || exit 29
 wget -q -O /dev/null --header "Authorization: Bearer $token" "$r/fixture.git/info/refs?service=git-upload-pack" && exit 27
 body="{\"url\":\"https://git.fixture.test/sandbox/fixture.git\",\"workspace_id\":\"$(value MULTICA_WORKSPACE_ID)\",\"task_id\":\"$(value MULTICA_TASK_ID)\",\"workdir\":\"/workspace\"}"
 wget -q -O /dev/null --header "Authorization: Bearer $token" --post-data "$body" http://127.0.0.1:` + repo.DaemonPort + `/repo/checkout 2>&1 | grep -q ' 403 ' || exit 28
@@ -182,7 +183,7 @@ func multicaRelayService(t *testing.T, api *multica.Client, agentImage string, n
 		t.Fatalf("ended attempt credential not denied: %v %s", err, out)
 	}
 	if full {
-		repositoryEnded(t, network, controllerName, gitOpaque, secret, content)
+		repositoryEnded(t, network, project, controllerName, fmt.Sprintf("agent/relay-fixture-agent-%d/%012d", n, n), gitOpaque, secret, content)
 	}
 	if w != nil {
 		denied := exec.Command("docker", "run", "--rm", "--network", network, "--entrypoint", "/bin/sh", "-e", "T="+inferenceOpaque, image, "-c", `wget -q -O /dev/null --header "Authorization: Bearer $T" --post-data '{}' http://`+controllerName+`:8092/v1/chat/completions 2>&1 | grep -q ' 401 '`)
@@ -220,21 +221,28 @@ func configureRepositories(t *testing.T, dir, project string, c *service.Config)
 	}
 	c.OpenCode.Helper, c.OpenCode.GitFile = helper, "/etc/multica-sandbox/git.json"
 	c.OpenCode.GitRelay = &service.RelayConfig{Listen: ":8093", URL: "http://git-relay:8093"}
-	writeJSON(t, filepath.Join(dir, "git.json"), repo.Config{Version: 1, AllowHTTP: true, Hosts: []repo.Host{{WorkspaceID: workspace, Host: "git.fixture.test", Upstream: "http://" + project + "-git-1:8080", Username: "fixture", PasswordFile: "/identity-secrets/git"}}})
+	writeJSON(t, filepath.Join(dir, "git.json"), repo.Config{Version: 1, AllowHTTP: true, Hosts: []repo.Host{{WorkspaceID: workspace, Host: "git.fixture.test", Upstream: "http://" + project + "-git-1:8080", Username: "fixture", PasswordFile: "/identity-secrets/git", CommitName: "Fixture Bot", CommitEmail: "bot@fixture.invalid"}}})
 	sql(t, fmt.Sprintf(`UPDATE workspace SET repos='[{"url":"https://git.fixture.test/sandbox/fixture.git","description":"Fixture repository"}]' WHERE id='%s';`, workspace))
 	t.Cleanup(func() { sql(t, fmt.Sprintf(`UPDATE workspace SET repos='[]' WHERE id='%s';`, workspace)) })
 }
 
-// repositoryEnded checks that the ended Git grant is denied and the host password never left the controller.
-func repositoryEnded(t *testing.T, network, controller, opaque, secret, content string) {
-	denied := exec.Command("docker", "run", "--rm", "--network", network, "--entrypoint", "/bin/sh", "-e", "T="+opaque, image, "-c", `wget -q -O /dev/null --header "Authorization: Bearer $T" "http://`+controller+`:8093/git.fixture.test/sandbox/fixture.git/info/refs?service=git-upload-pack" 2>&1 | grep -q ' 401 '`)
-	if out, err := denied.CombinedOutput(); err != nil {
-		t.Fatalf("ended Git credential not denied: %v %s", err, out)
+// repositoryEnded checks the pushed task branch, that the ended Git grant is denied and
+// that the host password never left the controller.
+func repositoryEnded(t *testing.T, network, project, controller, branch, opaque, secret, content string) {
+	pushed := dockerTest(t, "exec", project+"-git-1", "git", "-C", "/srv/git/sandbox/fixture.git", "log", "-1", "--format=%an <%ae>%n%s%n%(trailers:key=Co-authored-by)", "refs/heads/"+branch)
+	if strings.TrimSpace(pushed) != "Fixture Bot <bot@fixture.invalid>\nFixture agent work\nCo-authored-by: multica-agent <github@multica.ai>" {
+		t.Fatalf("task branch push did not reach the Git host with the configured identity and trailer: %q", pushed)
+	}
+	for _, service := range []string{"upload", "receive"} {
+		denied := exec.Command("docker", "run", "--rm", "--network", network, "--entrypoint", "/bin/sh", "-e", "T="+opaque, image, "-c", `wget -q -O /dev/null --header "Authorization: Bearer $T" "http://`+controller+`:8093/git.fixture.test/sandbox/fixture.git/info/refs?service=git-`+service+`-pack" 2>&1 | grep -q ' 401 '`)
+		if out, err := denied.CombinedOutput(); err != nil {
+			t.Fatalf("ended Git credential not denied for %s-pack: %v %s", service, err, out)
+		}
 	}
 	if strings.Contains(dockerTest(t, "logs", controller)+content, secret) {
 		t.Fatal("Git host password leaked into controller logs or comments")
 	}
-	t.Log("unchanged multica repo checkout cloned the claim repository through the Git relay on the task branch; host password stayed in the controller")
+	t.Log("unchanged multica repo checkout cloned the claim repository through the Git relay; plain git pushed the task branch with the configured identity and the upstream co-author trailer; host password stayed in the controller")
 }
 
 // startFixture builds and starts the identity-mcp services; cleanup removes them with their images.

@@ -31,6 +31,11 @@ type Status interface {
 	Status(context.Context, string) (string, error)
 }
 
+// Settings reads workspace settings that shape repository checkouts.
+type Settings interface {
+	CoAuthoredBy(context.Context, string) bool
+}
+
 // Grants issues per-attempt relay credentials; upstream credentials stay in controller memory.
 type Grants interface {
 	Issue(string, relay.Upstream) (string, error)
@@ -56,6 +61,7 @@ type Adapter struct {
 	// the Multica relay and a workload with a workdir volume.
 	GitRelay *repo.Relay
 	Checkout *repo.Checkout
+	Settings Settings
 }
 
 type running struct {
@@ -130,7 +136,9 @@ func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, 
 		for _, repository := range task.Repos {
 			repos[strings.TrimSpace(repository.URL)] = repository.Ref
 		}
-		a.Checkout.Register(task.AttemptKey(), repo.Task{Workspace: task.WorkspaceID, ID: task.ID, AgentName: task.Agent.Name, Repos: repos, Target: r.workload, Env: r.gitEnv})
+		// Upstream snapshots the setting per checkout; an attempt is the sandbox's unit.
+		coAuthor := a.Settings == nil || a.Settings.CoAuthoredBy(runCtx, task.WorkspaceID)
+		a.Checkout.Register(task.AttemptKey(), repo.Task{Workspace: task.WorkspaceID, ID: task.ID, AgentName: task.Agent.Name, Repos: repos, Target: r.workload, Env: r.gitEnv, CoAuthor: coAuthor})
 	}
 	r.events = &eventStream{reporter: a.Reporter, task: task.ID, model: r.model}
 	r.events.touch()

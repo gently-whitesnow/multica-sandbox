@@ -152,11 +152,11 @@ func openCodeAdapter(ctx context.Context, c Config, api *multica.Client, backend
 				return nil, err
 			}
 			adapter.GitRelay = repo.NewRelay(c.OpenCode.GitRelay.URL, hosts)
-			if err = serveRelay(ctx, "Git", adapter.GitRelay, *c.OpenCode.GitRelay, relay.Policy{Allow: repo.GitPath}, nil); err != nil {
+			if err = serveRelay(ctx, "Git", adapter.GitRelay, *c.OpenCode.GitRelay, relay.Policy{Allow: repo.GitPath, Limit: repo.PushLimit, HeaderTimeout: repo.PushTimeout}, nil); err != nil {
 				return nil, err
 			}
 			// The upstream CLI authenticates checkout with its Multica relay credential.
-			adapter.Checkout = &repo.Checkout{Auth: grants}
+			adapter.Checkout, adapter.Settings = &repo.Checkout{Auth: grants, Hosts: hosts}, api
 			routes = map[string]http.Handler{"/repo/checkout": adapter.Checkout}
 		}
 		if err = serveRelay(ctx, "Multica", grants, *c.OpenCode.MulticaRelay, relay.Policy{Allow: multica.RelayPath}, routes); err != nil {

@@ -7,16 +7,23 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gently-whitesnow/multica-sandbox/internal/relay"
 )
 
-// GitPrefix marks per-attempt Git relay credentials.
-const GitPrefix = "msg_"
+const (
+	// GitPrefix marks per-attempt Git relay credentials.
+	GitPrefix = "msg_"
+	// PushLimit bounds a pushed pack, as large forges do; PushTimeout bounds the
+	// upstream's pack processing before it answers.
+	PushLimit   = 2 << 30
+	PushTimeout = 5 * time.Minute
+)
 
 // Relay authorizes Git smart HTTP for the claim's repositories of each attempt. Agents
-// address it as <URL>/<host>/<repository path>; until push is decided (#47) only
-// upload-pack is served.
+// address it as <URL>/<host>/<repository path>. Fetch and push follow the native
+// runtime: the deployment credential's scope and forge branch protection bound refs.
 type Relay struct {
 	URL    string
 	hosts  *Hosts
@@ -40,7 +47,7 @@ func (g *Relay) Issue(attempt, workspace string, urls []string) (map[string]stri
 	a := access{workspace: workspace, repos: map[string]bool{}}
 	hosts := []string{}
 	for _, raw := range urls {
-		host, key, ok := repository(raw)
+		host, key, ok := repoKey(raw)
 		if !ok || !g.hosts.Has(workspace, host) {
 			continue
 		}
@@ -97,7 +104,7 @@ func (g *Relay) Authorize(r *http.Request) (relay.Lease, bool) {
 		service = ""
 	}
 	origin, authorization, resolved := g.hosts.resolve(a.workspace, host)
-	if !granted || service != "git-upload-pack" || !a.repos[host+strings.TrimSuffix(repo, ".git")] || !resolved {
+	if !granted || (service != "git-upload-pack" && service != "git-receive-pack") || !a.repos[host+strings.TrimSuffix(repo, ".git")] || !resolved {
 		lease.Release()
 		return relay.Lease{}, false
 	}
@@ -122,9 +129,9 @@ func smartHTTP(p string) (string, string) {
 	return "", ""
 }
 
-// repository returns the host and the comparison key of an HTTPS claim URL: lower-case
+// repoKey returns the host and the comparison key of an HTTPS claim URL: lower-case
 // host and path without a trailing slash or .git.
-func repository(raw string) (string, string, bool) {
+func repoKey(raw string) (string, string, bool) {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || u.Scheme != "https" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.RawPath != "" {
 		return "", "", false

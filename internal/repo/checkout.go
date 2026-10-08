@@ -44,6 +44,8 @@ type Task struct {
 	Target Target
 	// Env is the attempt's Git relay environment.
 	Env map[string]string
+	// CoAuthor installs the upstream Co-authored-by hook (workspace setting).
+	CoAuthor bool
 }
 
 // Authorizer resolves the attempt of an opaque Multica relay credential.
@@ -52,8 +54,10 @@ type Authorizer interface {
 }
 
 // Checkout serves the upstream daemon's POST /repo/checkout for registered attempts.
+// Hosts supplies commit identities.
 type Checkout struct {
 	Auth  Authorizer
+	Hosts *Hosts
 	mu    sync.Mutex
 	tasks map[string]*active
 }
@@ -179,11 +183,9 @@ func (c *Checkout) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	fresh := "0"
-	if req.Fresh {
-		fresh = "1"
-	}
-	args := []string{"/bin/sh", "-c", script, "checkout", req.URL, ref, Branch(task.AgentName, task.ID), fresh, req.WorkDir, name, WorkDir}
+	flag := map[bool]string{false: "0", true: "1"}
+	commitName, commitEmail := c.Hosts.Identity(task.Workspace, req.URL, task.AgentName)
+	args := []string{"/bin/sh", "-c", script, "checkout", req.URL, ref, Branch(task.AgentName, task.ID), flag[req.Fresh], req.WorkDir, name, WorkDir, commitName, commitEmail, flag[task.CoAuthor]}
 	out, _ := task.Target.Capture(ctx, args, task.Env)
 	if ctx.Err() != nil {
 		return

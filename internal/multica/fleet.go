@@ -26,6 +26,21 @@ func (c *Client) Workspaces(ctx context.Context) ([]Workspace, error) {
 	return out, nil
 }
 
+// CoAuthoredBy mirrors upstream workspaceCoAuthoredByEnabled: the Co-authored-by hook
+// needs github_enabled and co_authored_by_enabled, both true when unknown.
+func (c *Client) CoAuthoredBy(ctx context.Context, workspace string) bool {
+	var out struct {
+		Settings struct {
+			GitHub   *bool `json:"github_enabled"`
+			CoAuthor *bool `json:"co_authored_by_enabled"`
+		} `json:"settings"`
+	}
+	if !validID(workspace) || c.call(ctx, http.MethodGet, "/api/daemon/workspaces/"+workspace+"/repos", nil, &out) != nil {
+		return true
+	}
+	return (out.Settings.GitHub == nil || *out.Settings.GitHub) && (out.Settings.CoAuthor == nil || *out.Settings.CoAuthor)
+}
+
 func (c *Client) ClaimBatch(ctx context.Context, daemon string, scopes map[string]string, limit int) ([]Task, error) {
 	if !validID(daemon) || limit < 1 || limit > 32 {
 		return nil, fmt.Errorf("invalid batch capacity or daemon")

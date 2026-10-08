@@ -48,6 +48,9 @@ func TestGitRelayServesOnlyClaimRepositories(t *testing.T) {
 	bare := origin(t)
 	root := filepath.Dir(bare)
 	git(t, root, "clone", "-q", "--bare", bare, filepath.Join(root, "other.git"))
+	for _, name := range []string{"fixture.git", "other.git"} {
+		git(t, filepath.Join(root, name), "config", "http.receivepack", "true")
+	}
 	var seen []string
 	upstream := gitServer(t, root, &seen)
 	secret := filepath.Join(t.TempDir(), "token")
@@ -76,8 +79,9 @@ func TestGitRelayServesOnlyClaimRepositories(t *testing.T) {
 	if strings.Contains(strings.Join(values(env), " "), "host-secret") || env["GIT_CONFIG_COUNT"] != "3" {
 		t.Fatalf("unexpected attempt Git environment: %v", env)
 	}
-	clone := func(url string) error {
-		cmd := exec.Command("git", "clone", "-q", url, filepath.Join(t.TempDir(), "c"))
+	work := filepath.Join(t.TempDir(), "c")
+	attempt := func(args ...string) error {
+		cmd := exec.Command("git", append([]string{"-c", "user.name=A", "-c", "user.email=a@example.invalid"}, args...)...)
 		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1")
 		for name, value := range env {
 			cmd.Env = append(cmd.Env, name+"="+value)
@@ -88,9 +92,23 @@ func TestGitRelayServesOnlyClaimRepositories(t *testing.T) {
 		}
 		return err
 	}
+	clone := func(url string) error { return attempt("clone", "-q", url, filepath.Join(t.TempDir(), "c")) }
 	// The repository path has no .git suffix on disk lookups: the fixture is fixture.git.
-	if err := clone("https://git.example.test/fixture.git"); err != nil {
+	if err := attempt("clone", "-q", "https://git.example.test/fixture.git", work); err != nil {
 		t.Fatal("claim repository clone failed:", err)
+	}
+	// Pushes follow the native runtime: any branch of a claim repository, nothing else.
+	if err := attempt("-C", work, "commit", "-q", "--allow-empty", "-m", "agent"); err != nil {
+		t.Fatal(err)
+	}
+	if err := attempt("-C", work, "push", "-q", "origin", "HEAD:refs/heads/agent/a/1", "HEAD:refs/heads/topic"); err != nil {
+		t.Fatal("claim repository push failed:", err)
+	}
+	if git(t, bare, "rev-parse", "agent/a/1") != git(t, work, "rev-parse", "HEAD") {
+		t.Fatal("pushed branch did not reach the upstream")
+	}
+	if attempt("-C", work, "push", "-q", "https://git.example.test/other.git", "HEAD:refs/heads/agent/a/1") == nil {
+		t.Fatal("unlisted repository accepted a push")
 	}
 	for _, url := range []string{"https://git.example.test/other.git", "https://other.example.test/other.git"} {
 		if clone(url) == nil {
@@ -103,11 +121,11 @@ func TestGitRelayServesOnlyClaimRepositories(t *testing.T) {
 		}
 	}
 	for name, r := range map[string]*http.Request{
-		"receive-pack refs": httptest.NewRequest("GET", "/git.example.test/fixture.git/info/refs?service=git-receive-pack", nil),
-		"receive-pack":      httptest.NewRequest("POST", "/git.example.test/fixture.git/git-receive-pack", nil),
-		"dumb":              httptest.NewRequest("GET", "/git.example.test/fixture.git/HEAD", nil),
-		"extra query":       httptest.NewRequest("GET", "/git.example.test/fixture.git/info/refs?service=git-upload-pack&x=1", nil),
-		"traversal":         httptest.NewRequest("GET", "/git.example.test/x/../fixture.git/info/refs?service=git-upload-pack", nil),
+		"unlisted push": httptest.NewRequest("POST", "/git.example.test/other.git/git-receive-pack", nil),
+		"push refs GET": httptest.NewRequest("POST", "/git.example.test/fixture.git/info/refs?service=git-receive-pack", nil),
+		"dumb":          httptest.NewRequest("GET", "/git.example.test/fixture.git/HEAD", nil),
+		"extra query":   httptest.NewRequest("GET", "/git.example.test/fixture.git/info/refs?service=git-upload-pack&x=1", nil),
+		"traversal":     httptest.NewRequest("GET", "/git.example.test/x/../fixture.git/info/refs?service=git-upload-pack", nil),
 	} {
 		r.Header.Set("Authorization", env["GIT_CONFIG_VALUE_0"][len("Authorization: "):])
 		w := httptest.NewRecorder()
@@ -117,8 +135,8 @@ func TestGitRelayServesOnlyClaimRepositories(t *testing.T) {
 		}
 	}
 	g.Revoke("attempt")
-	if clone("https://git.example.test/fixture.git") == nil {
-		t.Fatal("revoked grant still clones")
+	if clone("https://git.example.test/fixture.git") == nil || attempt("-C", work, "push", "-q", "origin", "HEAD:refs/heads/late") == nil {
+		t.Fatal("revoked grant still clones or pushes")
 	}
 }
 
@@ -136,6 +154,9 @@ func TestHostConfigRequiresSafeBindings(t *testing.T) {
 		"host path":       func(h *Host) { h.Host = "github.com/org" },
 		"upper host":      func(h *Host) { h.Host = "GitHub.com" },
 		"workspace":       func(h *Host) { h.WorkspaceID = "default" },
+		"name only":       func(h *Host) { h.CommitName = "Bot" },
+		"email brackets":  func(h *Host) { h.CommitName, h.CommitEmail = "Bot", "<bot@example.invalid>" },
+		"name newline":    func(h *Host) { h.CommitName, h.CommitEmail = "Bot\nX", "bot@example.invalid" },
 	} {
 		h := valid
 		change(&h)
@@ -145,6 +166,17 @@ func TestHostConfigRequiresSafeBindings(t *testing.T) {
 	}
 	if _, err := NewHosts(Config{Version: 1, Hosts: []Host{valid, valid}}); err == nil {
 		t.Error("duplicate binding accepted")
+	}
+	bot := valid
+	bot.CommitName, bot.CommitEmail = "Bot", "bot@example.invalid"
+	hosts, err := NewHosts(Config{Version: 1, Hosts: []Host{bot}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for url, want := range map[string]string{"https://github.com/o/r.git": "Bot bot@example.invalid", "https://gitlab.com/o/r": "Agent x " + DefaultEmail} {
+		if name, email := hosts.Identity(workspace, url, "Agent <x>\n"); name+" "+email != want {
+			t.Errorf("%s: %s %s", url, name, email)
+		}
 	}
 }
 
