@@ -33,6 +33,12 @@ func (c *Client) ReportMessages(ctx context.Context, id string, messages []Messa
 func (c *Client) ReportUsage(ctx context.Context, id string, usage Usage) error {
 	return c.taskPost(ctx, id, "usage", map[string]any{"usage": []Usage{usage}})
 }
-func (c *Client) ReportSession(ctx context.Context, id, session string) error {
-	return c.taskPost(ctx, id, "session", map[string]string{"session_id": session})
+
+// ReportSession pins the session and its retained workdir mid-flight, as upstream PinTaskSession.
+func (c *Client) ReportSession(ctx context.Context, id, session, workDir string) error {
+	body := map[string]string{"session_id": session}
+	if workDir != "" {
+		body["work_dir"] = workDir
+	}
+	return c.taskPost(ctx, id, "session", body)
 }

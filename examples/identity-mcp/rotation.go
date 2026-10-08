@@ -52,8 +52,8 @@ func (s *recordingIssuer) AcquireForMCP(ctx context.Context, ref identity.Ref, u
 
 type fixtureWorkloads struct{ *docker.Projected }
 
-func (w fixtureWorkloads) Start(ctx context.Context, key string) (execution.ProjectedRun, error) {
-	run, err := w.Projected.Start(ctx, key)
+func (w fixtureWorkloads) Start(ctx context.Context, key string, workdir execution.Workdir) (execution.ProjectedRun, error) {
+	run, err := w.Projected.Start(ctx, key, workdir)
 	if err != nil {
 		return nil, err
 	}

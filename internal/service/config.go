@@ -78,6 +78,14 @@ type OpenCodeConfig struct {
 	// GitFile holds workspace Git host bindings (repo.Config); GitRelay serves them (ADR 0015).
 	GitFile  string       `json:"git_file,omitempty"`
 	GitRelay *RelayConfig `json:"git_relay,omitempty"`
+	// Sessions, with the helper, retains issue workdirs and resumes sessions (ADR 0015).
+	Sessions *SessionsConfig `json:"sessions,omitempty"`
+}
+
+// SessionsConfig bounds retained workdirs: TTL after last use and a session count.
+type SessionsConfig struct {
+	TTL string `json:"ttl"`
+	Max int    `json:"max"`
 }
 
 // RelayConfig enables an embedded relay: Multica API (ADR 0014) or inference (ADR 0012).

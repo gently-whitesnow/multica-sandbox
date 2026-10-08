@@ -35,7 +35,7 @@ func (r *reportStub) ReportUsage(_ context.Context, _ string, u multica.Usage) e
 	r.usage = append(r.usage, u)
 	return nil
 }
-func (r *reportStub) ReportSession(_ context.Context, _, s string) error {
+func (r *reportStub) ReportSession(_ context.Context, _, s, _ string) error {
 	r.sessions = append(r.sessions, s)
 	return nil
 }

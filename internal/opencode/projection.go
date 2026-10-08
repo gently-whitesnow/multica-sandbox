@@ -81,9 +81,21 @@ func Config(connections map[string]Remote, local bool) ([]byte, error) {
 	return json.Marshal(map[string]any{"mcp": connections, "autoupdate": false, "share": "disabled", "permission": permissions})
 }
 
+// Continuity says how a run relates to the claim's prior session.
+type Continuity int
+
+const (
+	// Fresh runs have no prior session.
+	Fresh Continuity = iota
+	// Resumed runs continue the prior native session.
+	Resumed
+	// Lost runs were meant to continue a session that cannot be restored.
+	Lost
+)
+
 // Prompt returns the per-turn prompt and, for upstream CLI tasks, the AGENTS.md brief.
 // With checkout, the brief offers `multica repo checkout` for the claim repositories.
-func Prompt(t multica.Task, upstream, checkout bool) ([]byte, []byte, error) {
+func Prompt(t multica.Task, upstream, checkout bool, c Continuity) ([]byte, []byte, error) {
 	if t.Agent == nil {
 		return nil, nil, ErrDenied
 	}
@@ -93,7 +105,7 @@ func Prompt(t multica.Task, upstream, checkout bool) ([]byte, []byte, error) {
 	}
 	var prompt, brief string
 	if upstream && upstreamTask(t) {
-		prompt = upstreamPrompt(t)
+		prompt = upstreamPrompt(t, c == Resumed)
 		switch {
 		case checkout:
 			sources = checkoutRepositories(t.Repos)
@@ -108,8 +120,9 @@ func Prompt(t multica.Task, upstream, checkout bool) ([]byte, []byte, error) {
 		}
 		prompt = strings.Join(sections, "\n\n")
 	}
-	if t.PriorSessionID != "" {
-		prompt += "\n\nThis disposable attempt starts a fresh native session. Prior session resume is unavailable."
+	if c == Lost {
+		// Upstream appends the notice to the per-turn message, never the brief.
+		prompt = strings.TrimRight(prompt, "\n") + "\n\n" + strings.TrimRight(sessionContinuityNotice, "\n")
 	}
 	if len(prompt) > 65536 || len(brief) > 65536 {
 		return nil, nil, ErrDenied

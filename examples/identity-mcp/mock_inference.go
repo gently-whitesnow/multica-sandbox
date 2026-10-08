@@ -29,7 +29,9 @@ func mockInference(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(400)
 		return
 	}
-	count := 0
+	// count and result describe the turn since the latest prompt; a resumed session
+	// carries earlier prompts, and a dropped one the upstream continuity notice.
+	count, prompts, lost := 0, 0, false
 	ws := "10000000-0000-4000-8000-000000000001"
 	issue, result := "", ""
 	for _, message := range body.Messages {
@@ -37,6 +39,11 @@ func mockInference(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			data, _ := json.Marshal(message.Content)
 			text = string(data)
+		}
+		if message.Role == "user" {
+			prompts++
+			count, result = 0, ""
+			lost = strings.Contains(text, "## Session Continuity Notice")
 		}
 		if message.Role == "tool" {
 			count++
@@ -71,6 +78,10 @@ func mockInference(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case count < 24 && name != "":
 		call(name, readArgs{Workspace: ws, Resource: "document"})
+	case bash && issue != "" && count == 0 && (prompts > 1 || lost):
+		// Follow-up runs report what the retained workdir and conversation still hold.
+		state := map[bool]string{true: "Resumed", false: "Fresh after lost session"}[prompts > 1]
+		call("bash", map[string]string{"command": "printf '%s: %s\\n' '" + state + "' \"$(cat notes.txt)\" > reply.md && multica issue comment add " + issue + " --content-file ./reply.md --output table && rm reply.md", "description": "Post the follow-up"})
 	case bash && issue != "" && count == 0:
 		// The upstream-style prompt names the issue; the agent reads it through the Multica relay.
 		call("bash", map[string]string{"command": "multica issue get " + issue + " --output json", "description": "Read the assigned issue"})
@@ -86,7 +97,7 @@ func mockInference(w http.ResponseWriter, r *http.Request) {
 			if title[1] == "Repository fixture issue" {
 				checkout = `repo=$(multica repo checkout https://git.fixture.test/sandbox/fixture.git) && `
 				hold += `printf 'Checkout: %s %s\n' "$(git -C "$repo" branch --show-current)" "$(cat "$repo/README")" >> reply.md && ` +
-					`git -C "$repo" commit -q --allow-empty -m 'Fixture agent work' && git -C "$repo" push -q origin HEAD && `
+					`git -C "$repo" commit -q --allow-empty -m 'Fixture agent work' && git -C "$repo" push -q origin HEAD && printf 'first run' > notes.txt && `
 			}
 			// A configured tool bundle reports itself; images without jq post only the read.
 			call("bash", map[string]string{"command": checkout + hold + "printf '%s\\n' 'Relay fixture read: " + title[1] + "' >> reply.md && { ! command -v jq >/dev/null || jq --version >> reply.md; } && multica issue comment add " + issue + " --content-file ./reply.md --output table && rm reply.md", "description": "Post the result"})

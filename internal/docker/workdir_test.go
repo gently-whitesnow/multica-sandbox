@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/gently-whitesnow/multica-sandbox/internal/repo"
+
+	"github.com/gently-whitesnow/multica-sandbox/internal/execution"
 )
 
 // helperImage builds the sandbox-helper target offline from the local module.
@@ -63,7 +65,7 @@ func TestWorkdirVolumeAndForwarder(t *testing.T) {
 		_, _ = command(context.Background(), "rm", "-fv", peer)
 		_, _ = command(context.Background(), "network", "rm", template)
 	})
-	a, err := backend.Start(ctx, "workspace-a:attempt")
+	a, err := backend.Start(ctx, "workspace-a:attempt", execution.Workdir{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +90,7 @@ wget -q -T 5 -O - http://127.0.0.1:` + repo.DaemonPort + `/repo/checkout`}, nil)
 	if _, err := command(ctx, "volume", "inspect", volume); err == nil {
 		t.Fatal("workdir volume survived cleanup")
 	}
-	if _, err := backend.Start(ctx, "workspace-b:attempt"); err != nil {
+	if _, err := backend.Start(ctx, "workspace-b:attempt", execution.Workdir{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := backend.Reconcile(ctx); err != nil {
