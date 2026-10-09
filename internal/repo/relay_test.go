@@ -65,7 +65,7 @@ func TestGitRelayServesOnlyClaimRepositories(t *testing.T) {
 		t.Fatal(err)
 	}
 	g := NewRelay("http://placeholder", hosts)
-	handler, err := relay.New(g, relay.Policy{Allow: GitPath, Limit: 1 << 20})
+	handler, err := relay.New(g, relay.Policy{Allow: GitPath, Limit: 1 << 20, Proxy: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,11 +76,11 @@ func TestGitRelayServesOnlyClaimRepositories(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(strings.Join(values(env), " "), "host-secret") || env["GIT_CONFIG_COUNT"] != "3" {
+	if strings.Contains(strings.Join(values(env), " "), "host-secret") || env["GIT_CONFIG_COUNT"] != "4" {
 		t.Fatalf("unexpected attempt Git environment: %v", env)
 	}
 	work := filepath.Join(t.TempDir(), "c")
-	attempt := func(args ...string) error {
+	run := func(args ...string) (string, error) {
 		cmd := exec.Command("git", append([]string{"-c", "user.name=A", "-c", "user.email=a@example.invalid"}, args...)...)
 		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1")
 		for name, value := range env {
@@ -90,12 +90,21 @@ func TestGitRelayServesOnlyClaimRepositories(t *testing.T) {
 		if err != nil {
 			t.Log(string(out))
 		}
+		return strings.TrimSpace(string(out)), err
+	}
+	attempt := func(args ...string) error {
+		_, err := run(args...)
 		return err
 	}
 	clone := func(url string) error { return attempt("clone", "-q", url, filepath.Join(t.TempDir(), "c")) }
 	// The repository path has no .git suffix on disk lookups: the fixture is fixture.git.
 	if err := attempt("clone", "-q", "https://git.example.test/fixture.git", work); err != nil {
 		t.Fatal("claim repository clone failed:", err)
+	}
+	// origin keeps its URL; gh reads the alias from git remote, still on the forge host.
+	stored, _ := run("-C", work, "config", "remote.origin.url")
+	if alias, _ := run("-C", work, "remote", "get-url", "origin"); stored != "https://git.example.test/fixture.git" || alias != "http://git.example.test/fixture.git" {
+		t.Fatalf("remote URLs: %q %q", stored, alias)
 	}
 	// Pushes follow the native runtime: any branch of a claim repository, nothing else.
 	if err := attempt("-C", work, "commit", "-q", "--allow-empty", "-m", "agent"); err != nil {
@@ -120,17 +129,27 @@ func TestGitRelayServesOnlyClaimRepositories(t *testing.T) {
 			t.Fatalf("unexpected upstream request: %s", request)
 		}
 	}
-	for name, r := range map[string]*http.Request{
-		"unlisted push": httptest.NewRequest("POST", "/git.example.test/other.git/git-receive-pack", nil),
-		"push refs GET": httptest.NewRequest("POST", "/git.example.test/fixture.git/info/refs?service=git-receive-pack", nil),
-		"dumb":          httptest.NewRequest("GET", "/git.example.test/fixture.git/HEAD", nil),
-		"extra query":   httptest.NewRequest("GET", "/git.example.test/fixture.git/info/refs?service=git-upload-pack&x=1", nil),
-		"traversal":     httptest.NewRequest("GET", "/git.example.test/x/../fixture.git/info/refs?service=git-upload-pack", nil),
+	fetch := "/fixture.git/info/refs?service=git-upload-pack"
+	for name, c := range map[string]struct {
+		method, target string
+		ok             bool
+	}{
+		"claim fetch":     {"GET", "http://git.example.test" + fetch, true},
+		"unlisted push":   {"POST", "http://git.example.test/other.git/git-receive-pack", false},
+		"push refs GET":   {"POST", "http://git.example.test/fixture.git/info/refs?service=git-receive-pack", false},
+		"dumb":            {"GET", "http://git.example.test/fixture.git/HEAD", false},
+		"extra query":     {"GET", "http://git.example.test" + fetch + "&x=1", false},
+		"traversal":       {"GET", "http://git.example.test/x/.." + fetch, false},
+		"origin form":     {"GET", fetch, false},
+		"https target":    {"GET", "https://git.example.test" + fetch, false},
+		"userinfo":        {"GET", "http://u@git.example.test" + fetch, false},
+		"other workspace": {"GET", "http://other.example.test/other.git/info/refs?service=git-upload-pack", false},
 	} {
+		r := httptest.NewRequest(c.method, c.target, nil)
 		r.Header.Set("Authorization", env["GIT_CONFIG_VALUE_0"][len("Authorization: "):])
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, r)
-		if w.Code < 400 {
+		if (w.Code == http.StatusOK) != c.ok {
 			t.Errorf("%s: %d", name, w.Code)
 		}
 	}

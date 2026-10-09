@@ -27,18 +27,22 @@ func (c *Client) Workspaces(ctx context.Context) ([]Workspace, error) {
 }
 
 // CoAuthoredBy mirrors upstream workspaceCoAuthoredByEnabled: the Co-authored-by hook
-// needs github_enabled and co_authored_by_enabled, both true when unknown.
-func (c *Client) CoAuthoredBy(ctx context.Context, workspace string) bool {
+// needs github_enabled and co_authored_by_enabled, both true when absent. Callers keep
+// their last value on error, as upstream keeps cached settings when a refresh fails.
+func (c *Client) CoAuthoredBy(ctx context.Context, workspace string) (bool, error) {
 	var out struct {
 		Settings struct {
 			GitHub   *bool `json:"github_enabled"`
 			CoAuthor *bool `json:"co_authored_by_enabled"`
 		} `json:"settings"`
 	}
-	if !validID(workspace) || c.call(ctx, http.MethodGet, "/api/daemon/workspaces/"+workspace+"/repos", nil, &out) != nil {
-		return true
+	if !validID(workspace) {
+		return true, fmt.Errorf("invalid workspace")
 	}
-	return (out.Settings.GitHub == nil || *out.Settings.GitHub) && (out.Settings.CoAuthor == nil || *out.Settings.CoAuthor)
+	if err := c.call(ctx, http.MethodGet, "/api/daemon/workspaces/"+workspace+"/repos", nil, &out); err != nil {
+		return true, err
+	}
+	return (out.Settings.GitHub == nil || *out.Settings.GitHub) && (out.Settings.CoAuthor == nil || *out.Settings.CoAuthor), nil
 }
 
 func (c *Client) ClaimBatch(ctx context.Context, daemon string, scopes map[string]string, limit int) ([]Task, error) {

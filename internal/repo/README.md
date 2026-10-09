@@ -4,7 +4,7 @@ Agents run the unchanged upstream `multica repo checkout <url> [--ref] [--fresh]
 inside their attempt, then commit and `git push` as under the native runtime (ADR 0015).
 The controller serves upstream's daemon `/repo/checkout` contract and mediates Git smart
 HTTP. No Git host or Multica credential enters the attempt. With `sessions`, follow-up
-tasks on an issue reuse its workdir and checkouts ([OpenCode README](../opencode/README.md)).
+tasks on an issue or chat session reuse its workdir and checkouts ([OpenCode README](../opencode/README.md)).
 With the forge relay, the unchanged `gh` opens pull requests.
 
 ## Configuration
@@ -20,7 +20,7 @@ Add these to `opencode` (`deploy/opencode.example.json`). They require `multica_
     configuration, auth stores and `HOME` stay in the `/workspace` tmpfs.
   - `sandbox-helper forward` serves `127.0.0.1:19514` (`MULTICA_DAEMON_PORT`) as the
     attempt user, towards the Multica relay listener.
-- `git_relay` (`listen`, `url`): the agent-facing Git relay. Give the controller the
+- `git_relay` (`listen`, an `http` `url`): the Git relay, the HTTP proxy of attempt Git remotes. Give the controller the
   `url` alias on the template network, like the other relays.
 - `git_file`: a controller-only version-1 file (`deploy/git.example.json`). Each entry
   binds a `workspace_id` and a claim URL `host` to an `upstream` origin (default
@@ -40,14 +40,18 @@ The agent image must contain `git`; startup checks it. Official-base users add i
 
 ## Behavior
 
-Attempts receive `GIT_CONFIG_*` entries:
-- `http.<relay>/.extraHeader` carries a per-attempt `msg_` credential;
-- `url.<relay>/<host>/.insteadOf` maps `https://<host>/` and `git@<host>:`.
+Attempts receive `GIT_CONFIG_*` entries per claim host, around the alias
+`http://<host>/` (ADR 0016):
+- `url.http://<host>/.insteadOf` maps `https://<host>/` and `git@<host>:`;
+- `http.http://<host>/.proxy` sends the alias to the relay `url` as an HTTP proxy;
+- `http.http://<host>/.extraHeader` carries a per-attempt `msg_` credential.
 
-`origin` keeps the real URL. The relay serves only smart HTTP fetch and push
-(`git-upload-pack`, `git-receive-pack`) for the claim's repositories on bound hosts.
-It replaces the credential and refuses redirects. Packs may reach 2 GiB, and the
-upstream gets 5 minutes to answer. Grants end at cleanup and on restart.
+`origin` keeps the real URL, and `git remote -v` shows the alias on the forge host,
+so `gh` resolves the repository as natively. The relay accepts only proxy requests
+and serves only smart HTTP fetch and push (`git-upload-pack`, `git-receive-pack`) for
+the claim's repositories on bound hosts. It replaces the credential and refuses
+redirects. Packs may reach 2 GiB, and the upstream gets 5 minutes to answer. Grants
+end at cleanup and on restart.
 
 `forge_relay` (`listen`, an `https` `url` on the controller alias) serves `gh`, as native
 `gh` uses host credentials:
@@ -55,15 +59,29 @@ upstream gets 5 minutes to answer. Grants end at cleanup and on restart.
   host, `/api/` only) to loopback, where the helper forwards port 443 to the relay.
 - The relay terminates TLS with certificates from a per-process CA. The CA is
   name-constrained to those names and trusted through `SSL_CERT_DIR`
-  (`/workspace/certs`).
+  (`/workspace/certs`). It checks that the Host header matches the TLS name.
 - `GH_TOKEN` and `GH_ENTERPRISE_TOKEN` carry the attempt's `msg_` credential, and
   `GH_HOST` names a single bound host. The relay sends `token <password>` upstream.
-- API scope is the deployment credential's. Images add `gh` themselves, as the Debian
-  example does.
+- `gh pr create` (gh 2.46) posts three GraphQL operations: `RepositoryInfo`,
+  `PullRequestForBranch` and `PullRequestCreate`, to `https://api.github.com/graphql`
+  or `https://<host>/api/graphql`. REST calls use `/api/v3/` on Enterprise Server.
+  The relay forwards both paths unchanged to the configured `api` origin.
+- Images add `gh` themselves, as the Debian example does.
 
-Pushes follow the native runtime, where agents push with the host's credentials: any
-ref the deployment credential may update. Scope that credential and protect branches
-on the forge.
+Deployment-owned bounds, as under the native runtime:
+- **Credential scope.** Pushes and `gh` may do anything the host's deployment
+  credential may do, on any repository it reaches; the relay limits only Git
+  transport to the claim's repositories. Use a GitHub App installation token or a
+  fine-grained token restricted to the intended repositories, with
+  `contents: write` and `pull_requests: write`, and no administration rights.
+- **Branch protection.** Pushes may update any ref the credential allows. Protect
+  default and release branches with rulesets or branch protection on the forge.
+
+Limits: the relay neither inspects GraphQL operations nor applies a REST path policy.
+`GH_HOST` is unset when a workspace binds several API hosts; `gh` then resolves only
+`github.com` remotes, so pass `--repo <host>/<owner>/<repo>` or `GH_HOST` for
+Enterprise Server. github.com and Enterprise Server behavior beyond the fixture is
+unverified.
 
 `/repo/checkout` authorizes requests in this order, with upstream's messages:
 1. the attempt's Multica relay credential;
@@ -87,13 +105,26 @@ b4ca5b4) with a fresh clone instead of the bare cache:
 - **Commits:** every checkout writes the host's commit identity to the repository
   config, standing in for the native host's global identity. It also reconciles
   upstream's `prepare-commit-msg` hook, which adds
-  `Co-authored-by: multica-agent <github@multica.ai>`. The hook is installed while the
-  workspace's `github_enabled` and `co_authored_by_enabled` are on (default) and
-  removed otherwise; the setting is read once per attempt.
+  `Co-authored-by: multica-agent <github@multica.ai>` while the workspace's
+  `github_enabled` and `co_authored_by_enabled` are on (default).
+
+The controller publishes that setting to live hooks like the native daemon:
+- It writes `1` or `0` to `/workspace/.multica_co_authored_by` in the attempt tmpfs.
+  Upstream's gated hook rereads it at every commit; a missing file keeps the trailer.
+- It rereads the setting at attempt start, before every checkout and every 10 s. The
+  poll replaces upstream's `daemon:workspaces_changed` websocket hint, which the polling
+  controller does not consume. A failed read keeps the last value.
+- On a change it reconciles checkouts up to two levels below the workdir, as upstream's
+  sweep: it removes its hook when off and installs it when on, leaving foreign hooks
+  alone. Retained checkouts converge at the next attempt's start.
+- As natively, the agent can edit the hook and the file; the trailer is attribution, not
+  a control.
 
 Differences from upstream:
 - only the claim's repositories, not the whole workspace registry;
 - every retained workdir pays for its own clone;
+- setting changes reach live hooks within 10 s rather than on a websocket hint, and a
+  failed settings read keeps the last value instead of failing the checkout;
 - the identity is repository config of the checkout, not a global one, so clones made
   without `multica repo checkout` have none;
 - claims with a non-HTTPS repository URL are rejected, as before; scp-style remotes

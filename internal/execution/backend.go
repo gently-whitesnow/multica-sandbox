@@ -12,10 +12,18 @@ type Result struct {
 	Disposable                                   bool
 }
 
-// Workdir asks for the retained workdir of an issue conversation (ADR 0015); the zero
-// value is a per-attempt workdir. Prior is the claim's prior_work_dir.
+// Workdir asks for the retained workdir of an issue or chat conversation (ADR 0015,
+// 0017); the zero value is a per-attempt workdir. Prior is the claim's prior_work_dir.
 type Workdir struct {
-	Workspace, Agent, Issue, Prior string
+	Workspace, Agent, Issue, Chat, Prior string
+}
+
+// Conversation keys the retained workdir: the chat session, else the issue.
+func (w Workdir) Conversation() string {
+	if w.Chat != "" {
+		return "chat:" + w.Chat
+	}
+	return w.Issue
 }
 
 // Backend owns only execution resources, never task scheduling or retries.

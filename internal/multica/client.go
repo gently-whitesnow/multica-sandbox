@@ -71,6 +71,8 @@ func (c *Client) call(ctx context.Context, method, path string, body, out any) e
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Client-Platform", "multica-sandbox-probe")
+	// Claims then carry structured coalesced comments instead of a folded trigger body.
+	req.Header.Set("X-Client-Capabilities", "coalesced-comments-v1")
 	resp, err := c.http.Do(req)
 	if err != nil {
 		if ctx.Err() != nil {

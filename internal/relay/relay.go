@@ -50,6 +50,9 @@ type Policy struct {
 	Withhold bool
 	// HeaderTimeout bounds the wait for upstream response headers (default 60s).
 	HeaderTimeout time.Duration
+	// Proxy admits only absolute-form http targets, as an HTTP proxy receives them;
+	// the authorizer resolves the upstream from the target host.
+	Proxy bool
 }
 
 type Relay struct {
@@ -137,7 +140,8 @@ func New(auth Authorizer, p Policy) (*Relay, error) {
 }
 
 func (r *Relay) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-	if req.URL.Scheme != "" || req.URL.Host != "" || req.Method == http.MethodConnect || req.Header.Get("Upgrade") != "" || !cleanPath(req.URL) || !r.policy.Allow(req.URL.Path) {
+	absolute := req.URL.Scheme != "" || req.URL.Host != ""
+	if absolute != r.policy.Proxy || (absolute && (req.URL.Scheme != "http" || req.URL.User != nil)) || req.Method == http.MethodConnect || req.Header.Get("Upgrade") != "" || !cleanPath(req.URL) || !r.policy.Allow(req.URL.Path) {
 		deny(w, http.StatusForbidden, "request not permitted")
 		return
 	}

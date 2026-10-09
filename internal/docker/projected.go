@@ -88,7 +88,7 @@ func (b *Projected) ValidateNetwork(ctx context.Context) error {
 	return nil
 }
 
-// Start creates an attempt; a Workdir with an issue asks for its retained session volume.
+// Start creates an attempt; a Workdir with a conversation asks for its retained session volume.
 func (b *Projected) Start(ctx context.Context, attempt string, w execution.Workdir) (execution.ProjectedRun, error) {
 	bundles, path, err := b.prepare(ctx)
 	if err != nil {
@@ -166,10 +166,10 @@ func (b *Projected) Start(ctx context.Context, attempt string, w execution.Workd
 	return projection, nil
 }
 
-// attachWorkdir gives the attempt its issue's session volume when it is free within
+// attachWorkdir gives the attempt its conversation's session volume when it is free within
 // sessionBusyWait, and a per-attempt volume otherwise.
 func (b *Projected) attachWorkdir(ctx context.Context, p *projectedRun, w execution.Workdir) error {
-	if b.Sessions != nil && w.Issue != "" {
+	if b.Sessions != nil && w.Conversation() != "" {
 		name, label := sessionName(b.Owner, w)
 		if b.Sessions.acquire(ctx, name) {
 			p.volume, p.sessions = name, b.Sessions

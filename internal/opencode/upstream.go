@@ -2,7 +2,9 @@ package opencode
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
+	"time"
 
 	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
 	"github.com/gently-whitesnow/multica-sandbox/internal/repo"
@@ -58,8 +60,8 @@ func upstreamTask(t multica.Task) bool {
 const sessionContinuityNotice = "## Session Continuity Notice\n\n" +
 	"This run was meant to continue an earlier conversation, but that provider session could not be restored, and this run does not continue it. The issue and its full comment history are unaffected — that record is the authoritative version of this conversation, and reading it (which your workflow already requires) reconstructs it. What is gone is your own working memory from the turns that did not come back: what you already tried, what you ruled out, and how far you had got. Re-derive what you need instead of assuming it, and do not claim continuity the record cannot back up. Do not open your reply by announcing this — raise it only where it actually matters, such as when the user refers to reasoning you never wrote down.\n\n"
 
-// upstreamPrompt carries no issue-wide comment delta, so a resumed run gets upstream's
-// unknown-delta hint and the issue read stays unconditional.
+// upstreamPrompt renders upstream buildCommentPrompt; resumed is upstream's single gate
+// for the warm issue-state and comment hints.
 func upstreamPrompt(t multica.Task, resumed bool) string {
 	var b strings.Builder
 	b.WriteString("You are running as a local coding agent for a Multica workspace.\n\n")
@@ -70,29 +72,49 @@ func upstreamPrompt(t multica.Task, resumed bool) string {
 		return b.String()
 	}
 	if t.TriggerCommentContent != "" {
-		author := "A user"
-		switch t.TriggerAuthorType {
-		case "system":
-			author = "The platform"
-		case "agent":
-			name := t.TriggerAuthorName
-			if name == "" {
-				name = "another agent"
-			}
-			author = fmt.Sprintf("Another agent (%s)", name)
-		}
-		fmt.Fprintf(&b, "[NEW COMMENT] %s just left a new comment. Focus on THIS comment — do not confuse it with previous ones:\n\n", author)
+		fmt.Fprintf(&b, "[NEW COMMENT] %s just left a new comment. Focus on THIS comment — do not confuse it with previous ones:\n\n", author(t.TriggerAuthorType, t.TriggerAuthorName, ""))
 		fmt.Fprintf(&b, "> %s\n\n", t.TriggerCommentContent)
+		if len(t.CoalescedComments) > 0 {
+			fmt.Fprintf(&b, "This run also covers %d earlier comment(s) posted before it started — you must read and address them too, not just the one above. They may be in different threads, so each is reproduced here with its own thread:\n\n", len(t.CoalescedComments))
+			for _, c := range t.CoalescedComments {
+				fmt.Fprintf(&b, "- comment %s", c.ID)
+				if c.CreatedAt != "" {
+					fmt.Fprintf(&b, " (%s, %s)", author(c.AuthorType, c.AuthorName, c.AuthorName), c.CreatedAt)
+				} else {
+					fmt.Fprintf(&b, " (%s)", author(c.AuthorType, c.AuthorName, c.AuthorName))
+				}
+				if c.ThreadID != "" {
+					fmt.Fprintf(&b, " [thread %s]", c.ThreadID)
+				}
+				fmt.Fprintf(&b, ":\n  > %s\n", strings.ReplaceAll(strings.TrimSpace(c.Content), "\n", "\n  > "))
+			}
+			fmt.Fprintf(&b, "\nIf you need the surrounding discussion for any of them, fetch its thread with `multica issue comment list %s --thread <thread-id> --tail 30 --compact --output json` using the thread id shown above.\n\n", t.IssueID)
+		}
 	}
-	fmt.Fprintf(&b, "Start by running `multica issue get %s --output json` to understand your task, then decide how to proceed.\n\n", t.IssueID)
+	b.WriteString(issueStateHint(t, resumed))
 	thread := t.TriggerThreadID
 	if thread == "" {
 		thread = t.TriggerCommentID
 	}
-	if resumed {
+	count, known := commentDelta(t)
+	switch {
+	case resumed && count > 0:
+		fmt.Fprintf(&b, "%d new comment(s) on this issue since your last run, across all threads — the server computed this delta, and reading it is the scan workflow step 2 requires. Read exactly those comments with `multica issue comment list %s --since %s --compact --output json` (every comment created after that anchor, in every thread — it also returns the triggering comment and your own replies, which the count above excludes, so expect more rows than that number). Triggering thread in full, if resumed memory is not enough for the reply: `multica issue comment list %s --thread %s --tail 30 --compact --output json`.\n\n", count, t.IssueID, t.NewCommentsSince, t.IssueID, thread)
+	case resumed && known:
+		fmt.Fprintf(&b, "You're resuming the prior session, and the triggering comment is already included above. No other new comments on this issue since your last run — this turn's issue-wide delta is empty, which answers the scan workflow step 2 requires. Triggering thread in full, if resumed memory is not enough for the reply: `multica issue comment list %s --thread %s --tail 30 --compact --output json`.\n\n", t.IssueID, thread)
+	case resumed:
 		fmt.Fprintf(&b, "You're resuming the prior session, and the triggering comment is already included above. This turn carries no issue-wide comment delta, so nothing here answers the scan workflow step 2 requires — run it: `multica issue comment list %s --roots-only --summary --compact --output json`, and expand what its `last_activity_at` shows has moved. Triggering thread in full, if resumed memory is not enough for the reply: `multica issue comment list %s --thread %s --tail 30 --compact --output json`.\n\n", t.IssueID, t.IssueID, thread)
-	} else {
+	default:
 		fmt.Fprintf(&b, "Triggering thread: `multica issue comment list %s --thread %s --tail 30 --compact --output json` (that thread's root + its 30 newest replies). The scan workflow step 2 requires is the same command with `--roots-only --summary` in place of `--thread ... --tail 30`.\n\n", t.IssueID, thread)
+	}
+	if targets := replyThreads(t); len(targets) >= 2 {
+		fmt.Fprintf(&b, "This run coalesced comments from %d DISTINCT threads. Post ONE reply per thread — %d in total. This OVERRIDES the \"post exactly one comment per run\" rule: for THIS run multiple replies are required and correct. Do NOT merge separate threads into one comment or post twice in the same thread.\n\n"+
+			"Reply targets, in posting order — OLDEST thread first, the newest (triggering) thread LAST. Use the exact `--parent` for each; never reuse a `--parent` from an earlier turn:\n", len(targets), len(targets))
+		for i, target := range targets {
+			fmt.Fprintf(&b, "%d. thread %s → reply with `--parent %s`\n", i+1, target[0], target[1])
+		}
+		b.WriteString("\nWrite and post each reply exactly as `## Comment Formatting` above directs, with ONE multi-thread delta: use a DISTINCT body file per thread (./reply-1.md, ./reply-2.md, …) so one reply's content can never leak into another's.\n")
+		return b.String()
 	}
 	fmt.Fprintf(&b, "Post your reply as a comment — always use the trigger comment ID below, do NOT reuse --parent values from previous turns in this session.\n\n"+
 		"Write the body file first (rules: ## Comment Formatting above — MUL-2904 / #4182):\n\n"+
@@ -100,6 +122,100 @@ func upstreamPrompt(t multica.Task, resumed bool) string {
 		"Keep the `&&`: as two separate statements a failed post is masked by the cleanup's success, and the body file is deleted.\n\n"+
 		"Do NOT write literal `\\n` escapes to simulate line breaks; the file preserves real newlines.\n", t.IssueID, t.TriggerCommentID)
 	return b.String()
+}
+
+// author is upstream's comment author label; members keep "A user" unless named.
+func author(kind, name, member string) string {
+	switch kind {
+	case "system":
+		return "The platform"
+	case "agent":
+		if name == "" {
+			name = "another agent"
+		}
+		return fmt.Sprintf("Another agent (%s)", name)
+	}
+	if member != "" {
+		return member
+	}
+	return "A user"
+}
+
+// issueStateHint is upstream execenv.BuildIssueStateHint; any shape the server would not
+// send keeps the cold read.
+func issueStateHint(t multica.Task, resumed bool) string {
+	read := fmt.Sprintf("`multica issue get %s --output json`", t.IssueID)
+	assignee := "unassigned"
+	if t.IssueAssigneeType != "" || t.IssueAssigneeID != "" {
+		assignee = t.IssueAssigneeType + " " + t.IssueAssigneeID
+	}
+	known := resumed && t.IssueStateDeltaKnown && statusKey.MatchString(t.IssueStatus) &&
+		(assignee == "unassigned" || multica.ValidID(t.IssueAssigneeID) && (t.IssueAssigneeType == "agent" || t.IssueAssigneeType == "member" || t.IssueAssigneeType == "squad"))
+	state := fmt.Sprintf("status: %s; assignee: %s", t.IssueStatus, assignee)
+	switch changed := strings.Join(t.IssueChangedFields, ", "); {
+	case known && changed == "":
+		return fmt.Sprintf("The issue is unchanged since your last run — the server compared title and description (%s). That answers workflow step 1: continue from your resumed context, and re-read with %s only if resumed memory is not enough.\n\n", state, read)
+	case known && (changed == "title" || changed == "description" || changed == "title, description"):
+		return fmt.Sprintf("Since your last run the issue changed: %s (%s). Read it: %s.\n\n", changed, state, read)
+	}
+	return fmt.Sprintf("Start by running %s to understand your task, then decide how to proceed.\n\n", read)
+}
+
+// commentDelta accepts only the comment delta shapes the server sends; others read as
+// not computed.
+func commentDelta(t multica.Task) (int, bool) {
+	if !t.NewCommentsDeltaKnown || t.NewCommentCount == 0 && t.NewCommentsSince == "" {
+		return 0, t.NewCommentsDeltaKnown
+	}
+	if _, err := time.Parse(time.RFC3339, t.NewCommentsSince); err != nil || t.NewCommentCount < 1 {
+		return 0, false
+	}
+	return t.NewCommentCount, true
+}
+
+// replyThreads is upstream commentReplyThreads: [thread, parent] pairs in first-seen
+// order, each answered under its newest triggering comment.
+func replyThreads(t multica.Task) [][2]string {
+	var order []string
+	parents := map[string]string{}
+	note := func(thread, id string) {
+		if thread == "" {
+			thread = id
+		}
+		if _, ok := parents[thread]; !ok {
+			order = append(order, thread)
+		}
+		parents[thread] = id
+	}
+	for _, c := range t.CoalescedComments {
+		note(c.ThreadID, c.ID)
+	}
+	note(t.TriggerThreadID, t.TriggerCommentID)
+	targets := make([][2]string, len(order))
+	for i, thread := range order {
+		targets[i] = [2]string{thread, parents[thread]}
+	}
+	return targets
+}
+
+var statusKey = regexp.MustCompile(`^[a-z0-9][a-z0-9_]{0,31}$`)
+
+// validComments bounds coalesced comments; upstream renders them only with a trigger body.
+func validComments(t multica.Task) bool {
+	if len(t.CoalescedComments) == 0 {
+		return len(t.CoalescedCommentIDs) == 0
+	}
+	if len(t.CoalescedComments) > 64 || len(t.CoalescedCommentIDs) != len(t.CoalescedComments) || t.TriggerCommentContent == "" {
+		return false
+	}
+	for i, c := range t.CoalescedComments {
+		if _, err := time.Parse(time.RFC3339, c.CreatedAt); (err != nil && c.CreatedAt != "") || t.CoalescedCommentIDs[i] != c.ID || !multica.ValidID(c.ID) ||
+			(c.ThreadID != "" && !multica.ValidID(c.ThreadID)) || len(c.AuthorName) > 256 || strings.ContainsAny(c.AuthorName, "\x00\r\n") ||
+			(c.AuthorType != "" && c.AuthorType != "member" && c.AuthorType != "agent" && c.AuthorType != "system") {
+			return false
+		}
+	}
+	return true
 }
 
 // upstreamBrief is the runtime brief OpenCode reads from AGENTS.md in its working directory.
@@ -131,28 +247,49 @@ func upstreamBrief(t multica.Task, repositories string, checkout bool) string {
 		b.WriteString("- `multica repo checkout <url> [--ref <branch-or-sha>] [--fresh]` — repository checkout on a dedicated branch. Re-running it keeps an existing checkout that has uncommitted or unpushed work, or is already on this task's branch, and only fetches. `--fresh` discards uncommitted and untracked files and starts a new branch; commits stay on the old branch, but push any you still need first.\n")
 	}
 	b.WriteString("\n")
-	b.WriteString("## Comment Formatting\n\n")
-	b.WriteString("For issue comments, **always write the comment body to a UTF-8 file with your file-write tool first, then post it with `--content-file <path>`**. Never use inline `--content` for agent-authored comments; never use `--content-stdin` HEREDOCs alongside other flags. Write the file inside your working directory, never `/tmp` or shared paths. Keep the same `--parent` value from the trigger comment when replying; delete the temp file (`rm ./reply.md`) only after the post succeeded; do not rely on `\\n` escapes.\n\n")
-	b.WriteString("For final-result comments, use `--output table` to confirm success without echoing the body. Use `--output json` instead when you need the returned comment ID. Gate the cleanup on the post succeeding (`&&`): a cleanup command run unconditionally succeeds after a failed post and makes the whole shell call exit 0.\n\n")
+	chat := chatTask(t)
+	if !chat {
+		b.WriteString("## Comment Formatting\n\n")
+		b.WriteString("For issue comments, **always write the comment body to a UTF-8 file with your file-write tool first, then post it with `--content-file <path>`**. Never use inline `--content` for agent-authored comments; never use `--content-stdin` HEREDOCs alongside other flags. Write the file inside your working directory, never `/tmp` or shared paths. Keep the same `--parent` value from the trigger comment when replying; delete the temp file (`rm ./reply.md`) only after the post succeeded; do not rely on `\\n` escapes.\n\n")
+		b.WriteString("For final-result comments, use `--output table` to confirm success without echoing the body. Use `--output json` instead when you need the returned comment ID. Gate the cleanup on the post succeeding (`&&`): a cleanup command run unconditionally succeeds after a failed post and makes the whole shell call exit 0.\n\n")
+	}
 	b.WriteString(repositories)
 	if t.ProjectTitle != "" || t.ProjectDescription != "" {
 		b.WriteString("## Project Context\n\n" + strings.TrimSpace(t.ProjectTitle+"\n\n"+t.ProjectDescription) + "\n\n")
 	}
 	b.WriteString("### Workflow\n\n")
+	if chat {
+		chatWorkflow(&b)
+	} else {
+		issueWorkflow(&b)
+	}
+	b.WriteString("## Important: Always Use the `multica` CLI\n\n")
+	b.WriteString("Access Multica platform resources only through the `multica` CLI — never `curl` / `wget`. For anything the CLI doesn't cover, post a comment mentioning the workspace owner rather than working around it.\n\n")
+	if chat {
+		chatOutput(&b)
+	} else {
+		issueOutput(&b)
+	}
+	return b.String()
+}
+
+// issueWorkflow is the issue workflow of upstream writeWorkflowIssue.
+func issueWorkflow(b *strings.Builder) {
 	b.WriteString("1. Read the issue (`multica issue get`) to understand the context.\n")
 	b.WriteString("2. Catch up on the comment history — this is mandatory — in two bounded reads, never one bulk pull: scan every thread cheaply (`--roots-only --summary --compact`), then expand only the threads that matter (`--thread <id> --tail 30 --compact`).\n")
 	b.WriteString("3. If any part of what this turn will produce is what the issue itself asks for, set `in_progress` FIRST (skip when the issue is already `in_progress`, or when your Agent Identity forbids status writes). Then complete the task within your Agent Identity boundaries.\n")
 	b.WriteString("4. **Post your final results as a comment — this step is mandatory**: post it with `multica issue comment add` using `--content-file`. When the per-turn user message carries a triggering comment, reply in its thread with the `--parent` value it gives you for THIS turn. With no triggering comment, post a new top-level comment.\n")
 	b.WriteString("5. Before exiting, confirm the status still matches where things actually stand.\n\n")
 	b.WriteString("Status reflects the state the ISSUE is in: delivered work awaiting acceptance → `in_review`; work continuing beyond this turn → `in_progress`; missing something you need → `blocked` with a comment explaining the blocker. Questions, discussion and acknowledgements never touch status. `done` stays human.\n\n")
-	b.WriteString("## Important: Always Use the `multica` CLI\n\n")
-	b.WriteString("Access Multica platform resources only through the `multica` CLI — never `curl` / `wget`. For anything the CLI doesn't cover, post a comment mentioning the workspace owner rather than working around it.\n\n")
+}
+
+// issueOutput is upstream writeOutput for issue tasks, without attachments.
+func issueOutput(b *strings.Builder) {
 	b.WriteString("## Output\n\n")
 	b.WriteString("⚠️ **Final results MUST be delivered via `multica issue comment add`.** The user does NOT see your terminal output or run logs — only comments on the issue.\n\n")
 	b.WriteString("**Post exactly ONE comment per run — your final result, before this turn exits.** Do NOT post progress updates or plans along the way.\n\n")
 	b.WriteString("Keep comments concise and natural — state the outcome, not the process.\n\n")
 	b.WriteString("**Runtime-local paths are never deliverables.** Your working directory exists only in this disposable sandbox — NEVER write an absolute path or a `file://` URL as a clickable link or an embedded image. Reference code locations as inline code.\n")
-	return b.String()
 }
 
 // checkoutRepositories mirrors upstream writeRepositories for the claim repositories.
