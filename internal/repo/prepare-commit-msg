@@ -1,0 +1,31 @@
+#!/bin/sh
+# multica:prepare-commit-msg:co-authored-by
+# Multica: add Co-authored-by trailer for the Multica Agent.
+# Installed by the Multica daemon. Do not edit — it will be overwritten.
+
+COMMIT_MSG_FILE="$1"
+COMMIT_SOURCE="$2"
+
+# Skip merge and squash commits.
+case "$COMMIT_SOURCE" in
+  merge|squash) exit 0 ;;
+esac
+
+# Current workspace setting, refreshed by the daemon. "0" means the
+# Co-authored-by toggle is off — leave the message alone.
+STATE_FILE='/workspace/.multica_co_authored_by'
+if [ -f "$STATE_FILE" ]; then
+  case "$(cat "$STATE_FILE" 2>/dev/null)" in
+    0) exit 0 ;;
+  esac
+fi
+
+TRAILER="Co-authored-by: multica-agent <github@multica.ai>"
+
+# Don't add if already present.
+if grep -qF "$TRAILER" "$COMMIT_MSG_FILE"; then
+  exit 0
+fi
+
+# Use git interpret-trailers for proper formatting.
+git interpret-trailers --in-place --trailer "$TRAILER" "$COMMIT_MSG_FILE"

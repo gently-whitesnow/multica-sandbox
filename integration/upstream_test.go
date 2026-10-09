@@ -189,6 +189,7 @@ func TestUpstreamLifecycle(t *testing.T) {
 			}
 		}
 	})
+	t.Run("issue-gc-check", func(t *testing.T) { issueGCCheck(t, api) })
 	t.Run("process-crash", func(t *testing.T) { restartProcess(t, api, rt, false) })
 	t.Run("containers", func(t *testing.T) { containerLifecycle(t, api, rt) })
 	t.Run("server-owned-retry", func(t *testing.T) { serverRetry(t, api, rt) })

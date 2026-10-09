@@ -32,11 +32,6 @@ type Status interface {
 	Status(context.Context, string) (string, error)
 }
 
-// Settings reads workspace settings that shape repository checkouts.
-type Settings interface {
-	CoAuthoredBy(context.Context, string) bool
-}
-
 // Grants issues per-attempt relay credentials; upstream credentials stay in controller memory.
 type Grants interface {
 	Issue(string, relay.Upstream) (string, error)
@@ -62,7 +57,6 @@ type Adapter struct {
 	// the Multica relay and a workload with a workdir volume.
 	GitRelay *repo.Relay
 	Checkout *repo.Checkout
-	Settings Settings
 }
 
 type running struct {
@@ -136,9 +130,13 @@ func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, 
 		cancel()
 		return nil, r.reject(err)
 	}
-	// Upstream issue conversations keep a retained workdir when the backend offers one.
+	// Upstream chat and issue conversations keep a retained workdir when the backend offers one.
 	var workdir execution.Workdir
-	if a.Relay != nil && upstreamTask(task) {
+	switch {
+	case a.Relay == nil:
+	case chatTask(task):
+		workdir = execution.Workdir{Workspace: task.WorkspaceID, Agent: task.AgentID, Chat: task.ChatSessionID, Prior: task.PriorWorkDir}
+	case upstreamTask(task):
 		workdir = execution.Workdir{Workspace: task.WorkspaceID, Agent: task.AgentID, Issue: task.IssueID, Prior: task.PriorWorkDir}
 	}
 	r.workload, err = a.Workloads.Start(runCtx, task.AttemptKey(), workdir)
@@ -164,9 +162,9 @@ func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, 
 		for _, repository := range task.Repos {
 			repos[strings.TrimSpace(repository.URL)] = repository.Ref
 		}
-		// Upstream snapshots the setting per checkout; an attempt is the sandbox's unit.
-		coAuthor := a.Settings == nil || a.Settings.CoAuthoredBy(runCtx, task.WorkspaceID)
-		a.Checkout.Register(task.AttemptKey(), repo.Task{Workspace: task.WorkspaceID, ID: task.ID, AgentName: task.Agent.Name, Repos: repos, Target: r.workload, Env: r.gitEnv, CoAuthor: coAuthor})
+		a.Checkout.Register(task.AttemptKey(), repo.Task{Workspace: task.WorkspaceID, ID: task.ID, AgentName: task.Agent.Name, Repos: repos, Target: r.workload, Env: r.gitEnv})
+		// Retained checkouts follow the current setting before the agent commits.
+		a.Checkout.Refresh(runCtx, task.AttemptKey())
 	}
 	r.events = &eventStream{reporter: a.Reporter, task: task.ID, model: r.model, workDir: r.workDir}
 	r.events.touch()
@@ -282,6 +280,13 @@ func (r *running) loop(ctx context.Context) {
 	}()
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
+	// Polling stands in for upstream's workspaces-changed hint (ADR 0015).
+	var settings <-chan time.Time
+	if r.adapter.Checkout != nil {
+		refresh := time.NewTicker(repo.SettingsRefresh)
+		defer refresh.Stop()
+		settings = refresh.C
+	}
 	var err error
 	agentDone := false
 loop:
@@ -301,6 +306,8 @@ loop:
 			if err = r.refresh(ctx); err != nil {
 				break loop
 			}
+		case <-settings:
+			r.adapter.Checkout.Refresh(ctx, r.task.AttemptKey())
 		}
 	}
 	r.cancel()

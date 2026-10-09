@@ -82,7 +82,7 @@ func Run(ctx context.Context, c Config, stateDir, tokenPath string, out io.Write
 	}
 	if c.OpenCode != nil {
 		c.Command = command
-		launch, err := openCodeAdapter(ctx, c, stateDir, api, backend)
+		launch, err := openCodeAdapter(ctx, c, stateDir, api, backend, out)
 		if err != nil {
 			return err
 		}
@@ -94,14 +94,24 @@ func Run(ctx context.Context, c Config, stateDir, tokenPath string, out io.Write
 	return serveFleet(ctx, c, stateDir, api, &p, out)
 }
 
-func openCodeAdapter(ctx context.Context, c Config, stateDir string, api *multica.Client, backend *docker.Backend) (*opencode.Adapter, error) {
+func openCodeAdapter(ctx context.Context, c Config, stateDir string, api *multica.Client, backend *docker.Backend, out io.Writer) (*opencode.Adapter, error) {
 	workloads := &docker.Projected{Backend: *backend, Network: c.OpenCode.Network, Peers: c.OpenCode.Peers, Helper: c.OpenCode.Helper}
 	if s := c.OpenCode.Sessions; s != nil {
 		ttl, err := time.ParseDuration(s.TTL)
-		if c.OpenCode.Helper == "" || err != nil || ttl <= 0 || s.Max < 1 || s.Max > 1024 {
-			return nil, fmt.Errorf("sessions require the helper, a positive ttl and max in [1,1024]")
+		interval, intervalErr := optionalDuration(s.Interval, 2*time.Hour)
+		grace, graceErr := optionalDuration(s.Grace, 24*time.Hour)
+		if c.OpenCode.Helper == "" || err != nil || intervalErr != nil || graceErr != nil || ttl <= 0 || s.Max < 1 || s.Max > 1024 {
+			return nil, fmt.Errorf("sessions require the helper, a positive ttl, interval and grace and max in [1,1024]")
 		}
-		workloads.Sessions = &docker.Sessions{Dir: filepath.Join(stateDir, "sessions"), TTL: ttl, Max: s.Max}
+		workloads.Sessions = &docker.Sessions{Dir: filepath.Join(stateDir, "sessions"), TTL: ttl, Max: s.Max, Interval: interval, Grace: grace,
+			Closed: func(ctx context.Context, workspace string, issues []string) map[string]time.Time {
+				// A failed check keeps the volumes (fail safe), as upstream GC skips them.
+				closed, err := api.ClosedIssues(ctx, workspace, issues)
+				if err != nil && ctx.Err() == nil {
+					fmt.Fprintf(out, "session issue check deferred workspace=%s: %v\n", workspace, err)
+				}
+				return closed
+			}}
 		if err := os.MkdirAll(workloads.Sessions.Dir, 0700); err != nil {
 			return nil, err
 		}
@@ -119,6 +129,9 @@ func openCodeAdapter(ctx context.Context, c Config, stateDir string, api *multic
 	}
 	if git != (c.OpenCode.GitFile != "") || (git && c.OpenCode.Helper == "") || (c.OpenCode.Helper != "" && c.OpenCode.MulticaRelay == nil) {
 		return nil, fmt.Errorf("git_relay and git_file require each other and the helper; the helper requires multica_relay")
+	}
+	if git && !strings.HasPrefix(c.OpenCode.GitRelay.URL, "http://") {
+		return nil, fmt.Errorf("git_relay requires an http url: Git uses it as the HTTP proxy of remote aliases")
 	}
 	var err error
 	if c.OpenCode.Helper != "" {
@@ -169,14 +182,14 @@ func openCodeAdapter(ctx context.Context, c Config, stateDir string, api *multic
 				return nil, err
 			}
 			adapter.GitRelay = repo.NewRelay(c.OpenCode.GitRelay.URL, hosts)
-			if err = serveRelay(ctx, "Git", adapter.GitRelay, *c.OpenCode.GitRelay, relay.Policy{Allow: repo.GitPath, Limit: repo.PushLimit, HeaderTimeout: repo.PushTimeout}, nil, nil); err != nil {
+			if err = serveRelay(ctx, "Git", adapter.GitRelay, *c.OpenCode.GitRelay, relay.Policy{Allow: repo.GitPath, Limit: repo.PushLimit, HeaderTimeout: repo.PushTimeout, Proxy: true}, nil, nil); err != nil {
 				return nil, err
 			}
 			if err = serveForge(ctx, c.OpenCode.ForgeRelay, adapter.GitRelay, hosts, workloads); err != nil {
 				return nil, err
 			}
 			// The upstream CLI authenticates checkout with its Multica relay credential.
-			adapter.Checkout, adapter.Settings = &repo.Checkout{Auth: grants, Hosts: hosts}, api
+			adapter.Checkout = &repo.Checkout{Auth: grants, Hosts: hosts, Settings: api}
 			routes = map[string]http.Handler{"/repo/checkout": adapter.Checkout}
 		}
 		if err = serveRelay(ctx, "Multica", grants, *c.OpenCode.MulticaRelay, relay.Policy{Allow: multica.RelayPath}, routes, nil); err != nil {
@@ -193,7 +206,21 @@ func openCodeAdapter(ctx context.Context, c Config, stateDir string, api *multic
 		adapter.Inference, adapter.InferenceRelay = source, grants
 		adapter.InferenceRelayURL = strings.TrimRight(c.OpenCode.InferenceRelay.URL, "/")
 	}
+	if workloads.Sessions != nil {
+		go workloads.Sessions.Sweep(ctx, c.Daemon, func(err error) { fmt.Fprintf(out, "session sweep failed: %v\n", err) })
+	}
 	return adapter, nil
+}
+
+func optionalDuration(value string, fallback time.Duration) (time.Duration, error) {
+	if value == "" {
+		return fallback, nil
+	}
+	d, err := time.ParseDuration(value)
+	if err == nil && d <= 0 {
+		err = fmt.Errorf("non-positive duration")
+	}
+	return d, err
 }
 
 // serveForge serves gh calls for the API names of Git hosts on TLS (ADR 0015); attempts

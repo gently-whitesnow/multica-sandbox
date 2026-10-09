@@ -10,12 +10,13 @@ import (
 	"net/http/cgi"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 )
 
 // gitFixture serves sandbox/fixture.git and sandbox/other.git over smart HTTP behind
-// basic auth with the fixture-only /secrets/git password, and an Enterprise-style
-// pull request API behind "token <password>" that logs to /srv/git/pulls (ADR 0015 tests).
+// basic auth with the fixture-only /secrets/git password, and the GraphQL pull request
+// API behind "token <password>" that logs to /srv/git/pulls (ADR 0015 and 0016 tests).
 func gitFixture() error {
 	password, err := os.ReadFile("/secrets/git")
 	if err != nil {
@@ -32,8 +33,8 @@ func gitFixture() error {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-		if strings.HasPrefix(r.URL.Path, "/api/v3/") {
-			pulls(w, r, bytes.TrimSpace(password))
+		if r.URL.Path == "/graphql" || r.URL.Path == "/api/graphql" {
+			graphql(w, r, bytes.TrimSpace(password))
 			return
 		}
 		user, pass, ok := r.BasicAuth()
@@ -54,30 +55,49 @@ func gitFixture() error {
 	}))
 }
 
-// pulls accepts pull requests on sandbox/fixture like the GitHub REST API.
-func pulls(w http.ResponseWriter, r *http.Request, password []byte) {
+var operation = regexp.MustCompile(`(?:^|\s)(query|mutation) (\w+)`)
+
+// graphql answers the three operations gh 2.46 pr create sends for sandbox/fixture:
+// RepositoryInfo, PullRequestForBranch (none open) and PullRequestCreate. It serves
+// github.com (/graphql) and Enterprise Server (/api/graphql) paths alike.
+func graphql(w http.ResponseWriter, r *http.Request, password []byte) {
 	token, _ := strings.CutPrefix(r.Header.Get("Authorization"), "token ")
 	if subtle.ConstantTimeCompare([]byte(token), password) != 1 {
 		http.Error(w, `{"message":"Bad credentials"}`, http.StatusUnauthorized)
 		return
 	}
-	var pr struct{ Title, Head, Base string }
-	if r.Method != http.MethodPost || r.URL.Path != "/api/v3/repos/sandbox/fixture/pulls" || json.NewDecoder(io.LimitReader(r.Body, 65536)).Decode(&pr) != nil || pr.Head == "" {
+	var req struct {
+		Query     string
+		Variables struct {
+			Owner, Name, Repo string
+			Input             struct{ RepositoryID, BaseRefName, HeadRefName, Title string }
+		}
+	}
+	if r.Method != http.MethodPost || json.NewDecoder(io.LimitReader(r.Body, 65536)).Decode(&req) != nil {
 		http.Error(w, `{"message":"Not Found"}`, http.StatusNotFound)
 		return
 	}
-	f, err := os.OpenFile("/srv/git/pulls", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
-	if err == nil {
-		_, err = fmt.Fprintf(f, "%s %s %q\n", pr.Head, pr.Base, pr.Title)
-		f.Close()
-	}
-	if err != nil {
-		http.Error(w, "store", http.StatusInternalServerError)
-		return
-	}
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	fmt.Fprint(w, `{"number":1,"html_url":"https://git.fixture.test/sandbox/fixture/pull/1"}`)
+	v, op := req.Variables, operation.FindStringSubmatch(req.Query)
+	switch {
+	case op != nil && op[2] == "RepositoryInfo" && v.Owner == "sandbox" && v.Name == "fixture":
+		fmt.Fprint(w, `{"data":{"repository":{"id":"R_fixture","name":"fixture","owner":{"login":"sandbox"},"viewerPermission":"WRITE","defaultBranchRef":{"name":"main"},"parent":null}}}`)
+	case op != nil && op[2] == "PullRequestForBranch" && v.Owner == "sandbox" && v.Repo == "fixture":
+		fmt.Fprint(w, `{"data":{"repository":{"pullRequests":{"nodes":[]},"defaultBranchRef":{"name":"main"}}}}`)
+	case op != nil && op[2] == "PullRequestCreate" && v.Input.RepositoryID == "R_fixture" && v.Input.HeadRefName != "":
+		f, err := os.OpenFile("/srv/git/pulls", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+		if err == nil {
+			_, err = fmt.Fprintf(f, "%s %s %q %s\n", v.Input.HeadRefName, v.Input.BaseRefName, v.Input.Title, r.URL.Path)
+			f.Close()
+		}
+		if err != nil {
+			http.Error(w, "store", http.StatusInternalServerError)
+			return
+		}
+		fmt.Fprint(w, `{"data":{"createPullRequest":{"pullRequest":{"id":"PR_fixture","url":"https://git.fixture.test/sandbox/fixture/pull/1"}}}}`)
+	default:
+		fmt.Fprint(w, `{"errors":[{"message":"unsupported fixture operation"}]}`)
+	}
 }
 
 func createRepository(bare, name string) error {

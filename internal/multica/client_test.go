@@ -72,3 +72,32 @@ func TestClaimRequiresFencing(t *testing.T) {
 		server.Close()
 	}
 }
+
+func TestClaimCarriesResumeDeltas(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Client-Capabilities") != "coalesced-comments-v1" {
+			t.Error("structured coalesced comments not advertised")
+		}
+		fmt.Fprintf(w, `{"task":{"id":%q,"runtime_id":%q,"dispatched_at":"2026-10-04T00:00:00Z","start_claim_supported":true,"new_comment_count":2,"new_comments_since":"2026-10-03T00:00:00Z","new_comments_delta_known":true,"issue_state_delta_known":true,"issue_changed_fields":["title"],"issue_status":"todo","prior_session_resume_unavailable":true,"coalesced_comment_ids":[%[1]q],"coalesced_comments":[{"id":%[1]q,"thread_id":%[1]q,"author_type":"member","author_name":"Member","content":"earlier","created_at":"2026-10-03T01:00:00Z"}]}}`, testID, testID)
+	}))
+	defer server.Close()
+	api, _ := New(server.URL, "token")
+	task, err := api.Claim(context.Background(), testID)
+	if err != nil || task.NewCommentCount != 2 || !task.NewCommentsDeltaKnown || !task.IssueStateDeltaKnown || task.IssueChangedFields[0] != "title" ||
+		task.IssueStatus != "todo" || !task.PriorSessionResumeUnavailable || task.CoalescedComments[0] != (Comment{testID, testID, "member", "Member", "earlier", "2026-10-03T01:00:00Z"}) {
+		t.Fatalf("claim deltas: %+v %v", task, err)
+	}
+}
+
+func TestClaimCarriesChatFields(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `{"task":{"id":%q,"runtime_id":%q,"dispatched_at":"2026-10-04T00:00:00Z","start_claim_supported":true,"chat_session_id":%[1]q,"chat_message":"hi","chat_channel_type":"slack","chat_type":"group","chat_intro":true,"chat_message_attachments":[{"id":%[1]q,"filename":"a.png","content_type":"image/png"}]}}`, testID, testID)
+	}))
+	defer server.Close()
+	api, _ := New(server.URL, "token")
+	task, err := api.Claim(context.Background(), testID)
+	if err != nil || task.ChatSessionID != testID || task.ChatMessage != "hi" || task.ChatChannelType != "slack" || task.ChatType != "group" ||
+		!task.ChatIntro || task.ChatMessageAttachments[0] != (Attachment{testID, "a.png", "image/png"}) {
+		t.Fatalf("chat claim: %+v %v", task, err)
+	}
+}

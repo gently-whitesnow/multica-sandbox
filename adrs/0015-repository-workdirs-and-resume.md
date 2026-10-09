@@ -48,16 +48,16 @@ naming the volume. `prior_session_id` is honoured only when `prior_work_dir`
 names that volume and it already existed with matching labels. Otherwise the run
 starts fresh with the upstream continuity notice. A resume that yields no session
 and no tool use is retried fresh once and reports `retired_session_id`.
-`session_rollout_missing` is reported only when no session is retained. An idle
-TTL, tracked in controller state, and a session count cap bound retention. Disk
-quotas are deployment-owned: the Docker `local` driver cannot limit persistent
-volumes.
+`session_rollout_missing` is reported only when no session is retained. Done or
+cancelled issues (upstream GC), an idle TTL and a session cap bound retention,
+swept periodically. Disk quotas are deployment-owned: the Docker `local` driver
+cannot limit volumes.
 
 **Checkout endpoint.** The controller serves the upstream `/repo/checkout`
 request and response contract on the attempt network. A static forwarder,
 image-mounted at `/opt/multica-sandbox/helper`, listens on
 `127.0.0.1:$MULTICA_DAEMON_PORT` as the attempt user. The controller authorizes
-each request by these checks:
+each request by:
 - the attempt's opaque Multica relay credential;
 - the claim's task and workspace;
 - the claim's repositories;
@@ -71,9 +71,7 @@ in the agent image; official-base users add it with `FROM`.
 
 **Git relay.** A controller relay mediates Git smart HTTP with a per-attempt
 opaque credential. The attempt receives it only through `GIT_CONFIG_*`
-environment entries:
-- `url.<relay>.insteadOf` maps HTTPS and scp-style remotes to the relay;
-- `http.<relay>.extraHeader` carries the opaque credential.
+environment entries that route HTTPS and scp-style remotes to the relay (ADR 0016).
 
 `origin` keeps the real URL. The relay attaches controller-only, workspace-scoped
 credentials per Git host and serves only the claim's repositories. Pushes follow
@@ -93,15 +91,15 @@ Rejected alternatives:
 - Pre-cloned mirrors: they are preparation caches and belong to #5.
 
 Refinement (#50, 2026-10-08). The helper is a separate digest-pinned image (Dockerfile
-target `helper`, config `helper`); its image also runs the volume init. Attempts get
+target `helper`, config `helper`); it also runs the volume init. Attempts get
 the workdir volume only with the helper. The checkout route shares the Multica relay
 listener. Checkout follows upstream isolated mode with a fresh clone and serves only
 the claim's repositories.
 
 Refinement (#52, 2026-10-08). Push follows the native runtime instead of an
 `agent/<agent>/*` ref policy: native agents push with host credentials, so the
-relay adds no ref checks. Checkouts set a per-host commit identity (default: the
-agent name) and reconcile upstream's Co-authored-by hook from workspace settings.
+relay adds no ref checks. Checkouts set a per-host commit identity (default: agent
+name) and upstream's Co-authored-by hook, following the setting polled every 10 s (#61).
 
 Refinement (#55, 2026-10-08). Pull requests use the unchanged `gh`, as native.
 Attempts resolve forge API names to loopback, and the helper forwards 443 to a
@@ -114,8 +112,8 @@ relay credential, sent as the `gh` token, for the workspace token.
 Agents can work on repositories and continue sessions without credentials inside
 the attempt. Retained volumes are part of the trust boundary. They are reused
 only for the same workspace, agent and issue, and must not be returned to any
-clean pool (ADR 0004). Each session pays for its first clone. Disk quotas, Git
-credential issuance and forge-side branch protection remain deployment-owned. The
+clean pool (ADR 0004). Each session pays for its first clone. Git credential
+issuance and forge-side branch protection remain deployment-owned. The
 relay bounds pushes only to the claim's repositories; credential scope and forge
 branch protection bound their refs.
 

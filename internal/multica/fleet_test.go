@@ -37,8 +37,8 @@ func TestCoAuthoredByFollowsWorkspaceSettings(t *testing.T) {
 			fmt.Fprint(w, body)
 		}))
 		api, _ := NewAllowHTTP(server.URL, "token")
-		if got := api.CoAuthoredBy(context.Background(), testID); got != want {
-			t.Errorf("%s: %t", body, got)
+		if got, err := api.CoAuthoredBy(context.Background(), testID); got != want || (err != nil) != (body == "not json") {
+			t.Errorf("%s: %t %v", body, got, err)
 		}
 		server.Close()
 	}

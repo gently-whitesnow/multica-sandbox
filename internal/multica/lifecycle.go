@@ -39,6 +39,26 @@ type Task struct {
 	RuntimeID             string            `json:"runtime_id"`
 	DispatchedAt          string            `json:"dispatched_at"`
 	StartClaimSupported   bool              `json:"start_claim_supported"`
+
+	// Resume deltas and coalesced comments feed the upstream per-turn hints.
+	CoalescedComments             []Comment `json:"coalesced_comments"`
+	CoalescedCommentIDs           []string  `json:"coalesced_comment_ids"`
+	IssueChangedFields            []string  `json:"issue_changed_fields"`
+	NewCommentsSince              string    `json:"new_comments_since"`
+	IssueStatus                   string    `json:"issue_status"`
+	IssueAssigneeType             string    `json:"issue_assignee_type"`
+	IssueAssigneeID               string    `json:"issue_assignee_id"`
+	NewCommentCount               int       `json:"new_comment_count"`
+	NewCommentsDeltaKnown         bool      `json:"new_comments_delta_known"`
+	IssueStateDeltaKnown          bool      `json:"issue_state_delta_known"`
+	PriorSessionResumeUnavailable bool      `json:"prior_session_resume_unavailable"`
+
+	// Chat claims carry the upstream chat prompt inputs (ADR 0017).
+	ChatSessionID          string       `json:"chat_session_id"`
+	ChatChannelType        string       `json:"chat_channel_type"`
+	ChatType               string       `json:"chat_type"`
+	ChatMessageAttachments []Attachment `json:"chat_message_attachments"`
+	ChatIntro              bool         `json:"chat_intro"`
 }
 
 type Recovery struct {
@@ -168,4 +188,21 @@ type Repository struct {
 	URL         string `json:"url"`
 	Description string `json:"description"`
 	Ref         string `json:"ref"`
+}
+
+// Attachment is a chat message attachment the agent downloads by ID.
+type Attachment struct {
+	ID          string `json:"id"`
+	Filename    string `json:"filename"`
+	ContentType string `json:"content_type"`
+}
+
+// Comment is an earlier comment the server folded into a comment-triggered run.
+type Comment struct {
+	ID         string `json:"id"`
+	ThreadID   string `json:"thread_id"`
+	AuthorType string `json:"author_type"`
+	AuthorName string `json:"author_name"`
+	Content    string `json:"content"`
+	CreatedAt  string `json:"created_at"`
 }

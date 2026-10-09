@@ -93,10 +93,10 @@ const (
 	Lost
 )
 
-// Prompt returns the per-turn prompt and, for upstream CLI tasks, the AGENTS.md brief.
+// Prompt returns the per-turn prompt and, for upstream CLI issue and chat tasks, the AGENTS.md brief.
 // With checkout, the brief offers `multica repo checkout` for the claim repositories.
 func Prompt(t multica.Task, upstream, checkout bool, c Continuity) ([]byte, []byte, error) {
-	if t.Agent == nil {
+	if t.Agent == nil || !validComments(t) || chatTask(t) && !validChat(t) {
 		return nil, nil, ErrDenied
 	}
 	sources, err := repositories(t)
@@ -104,8 +104,13 @@ func Prompt(t multica.Task, upstream, checkout bool, c Continuity) ([]byte, []by
 		return nil, nil, err
 	}
 	var prompt, brief string
-	if upstream && upstreamTask(t) {
-		prompt = upstreamPrompt(t, c == Resumed)
+	notice := sessionContinuityNotice
+	if upstream && (chatTask(t) || upstreamTask(t)) {
+		if chatTask(t) {
+			prompt, notice = chatPrompt(t), chatNotice()
+		} else {
+			prompt = upstreamPrompt(t, c == Resumed && !t.PriorSessionResumeUnavailable)
+		}
 		switch {
 		case checkout:
 			sources = checkoutRepositories(t.Repos)
@@ -114,15 +119,19 @@ func Prompt(t multica.Task, upstream, checkout bool, c Continuity) ([]byte, []by
 		}
 		brief = upstreamBrief(t, sources, checkout)
 	} else {
-		sections := []string{t.Agent.Instructions, t.WorkspaceContext, "Assigned issue: " + t.IssueID, t.ProjectTitle, t.ProjectDescription, t.TriggerCommentContent, t.ChatMessage}
+		sections := []string{t.Agent.Instructions, t.WorkspaceContext, "Assigned issue: " + t.IssueID, t.ProjectTitle, t.ProjectDescription, t.TriggerCommentContent}
+		for _, comment := range t.CoalescedComments {
+			sections = append(sections, comment.Content)
+		}
+		sections = append(sections, t.ChatMessage)
 		if sources != "" {
 			sections = append(sections, "Repository references (no local checkout; access through selected authorized MCP):\n"+sources)
 		}
 		prompt = strings.Join(sections, "\n\n")
 	}
-	if c == Lost {
+	if c == Lost || t.PriorSessionResumeUnavailable {
 		// Upstream appends the notice to the per-turn message, never the brief.
-		prompt = strings.TrimRight(prompt, "\n") + "\n\n" + strings.TrimRight(sessionContinuityNotice, "\n")
+		prompt = strings.TrimRight(prompt, "\n") + "\n\n" + strings.TrimRight(notice, "\n")
 	}
 	if len(prompt) > 65536 || len(brief) > 65536 {
 		return nil, nil, ErrDenied

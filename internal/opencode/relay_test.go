@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/gently-whitesnow/multica-sandbox/internal/execution"
@@ -105,7 +106,8 @@ func TestRepositoryAttemptGetsCheckoutAndGitRelay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	checkout := &repo.Checkout{Auth: grants}
+	settings := &countSettings{}
+	checkout := &repo.Checkout{Auth: grants, Settings: settings}
 	a := Adapter{Server: "https://multica.example.invalid", Issuer: &stubIssuer{}, Authority: &stubAuthority{}, Workloads: workload, Status: stubStatus{}, Relay: grants, RelayURL: "http://multica-relay:8091",
 		GitRelay: repo.NewRelay("http://git-relay:8093", hosts), Checkout: checkout}
 	task := relayTask(t)
@@ -115,7 +117,10 @@ func TestRepositoryAttemptGetsCheckoutAndGitRelay(t *testing.T) {
 		t.Fatal(err)
 	}
 	env := <-workload.envs
-	if env["MULTICA_DAEMON_PORT"] != repo.DaemonPort || env["GIT_CONFIG_KEY_1"] != "url.http://git-relay:8093/git.example.invalid/.insteadOf" || !strings.HasPrefix(env["GIT_CONFIG_VALUE_0"], "Authorization: Bearer "+repo.GitPrefix) {
+	if settings.reads.Load() == 0 {
+		t.Fatal("attempt start did not publish the co-author setting")
+	}
+	if env["MULTICA_DAEMON_PORT"] != repo.DaemonPort || env["GIT_CONFIG_KEY_1"] != "http.http://git.example.invalid/.proxy" || env["GIT_CONFIG_VALUE_1"] != "http://git-relay:8093" || !strings.HasPrefix(env["GIT_CONFIG_VALUE_0"], "Authorization: Bearer "+repo.GitPrefix) {
 		t.Fatalf("unexpected repository environment: %v", env)
 	}
 	brief := string(workload.files[BriefPath])
@@ -163,13 +168,20 @@ func TestForgeAttemptGetsGhTokenAndCA(t *testing.T) {
 		t.Fatal(err)
 	}
 	env := <-workload.envs
-	if env["GH_TOKEN"] != strings.TrimPrefix(env["GIT_CONFIG_VALUE_0"], "Authorization: Bearer ") || env["GH_HOST"] != "github.com" || env["SSL_CERT_DIR"] != repo.CertDir ||
+	if !strings.HasPrefix(env["GH_TOKEN"], repo.GitPrefix) || env["GH_HOST"] != "github.com" || env["SSL_CERT_DIR"] != repo.CertDir ||
 		string(workload.files[repo.CAPath]) != string(git.CA()) || strings.Contains(strings.Join(values(env), " "), "host-secret") {
 		t.Fatalf("gh environment or CA: %v", env)
 	}
 	if err := run.Remove(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+}
+
+type countSettings struct{ reads atomic.Int32 }
+
+func (c *countSettings) CoAuthoredBy(context.Context, string) (bool, error) {
+	c.reads.Add(1)
+	return true, nil
 }
 
 func values(m map[string]string) []string {

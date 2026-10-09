@@ -18,26 +18,31 @@ import (
 	"github.com/gently-whitesnow/multica-sandbox/internal/execution"
 )
 
-// sessionLabel binds a retained workdir volume to its workspace, agent and issue (ADR 0015).
+// sessionLabel binds a retained workdir volume to its workspace, agent and issue or
+// chat session (ADR 0015, 0017).
 const sessionLabel = "io.multica-sandbox.session"
 
 // sessionBusyWait is upstream's wait for the previous run of an (issue, agent) to
 // release its workdir before a fresh one is used instead.
 var sessionBusyWait = 15 * time.Second
 
-// Sessions retains one workdir volume per (controller, workspace, agent, issue) with
+// Sessions retains one workdir volume per (controller, workspace, agent, conversation) with
 // one writer at a time. Dir records last use; idle volumes past TTL, and the least
-// recently used beyond Max, are removed.
+// recently used beyond Max, are removed. Closed, when set, reports when done or
+// cancelled issues of a workspace were last updated; Sweep then also removes their
+// idle volumes after Grace, as upstream GC drops their workdirs.
 type Sessions struct {
-	Dir  string
-	TTL  time.Duration
-	Max  int
-	mu   sync.Mutex
-	busy map[string]bool
+	Dir        string
+	TTL, Grace time.Duration
+	Interval   time.Duration
+	Max        int
+	Closed     func(ctx context.Context, workspace string, issues []string) map[string]time.Time
+	mu         sync.Mutex
+	busy       map[string]bool
 }
 
 func sessionName(owner string, w execution.Workdir) (string, string) {
-	label := w.Workspace + "/" + w.Agent + "/" + w.Issue
+	label := w.Workspace + "/" + w.Agent + "/" + w.Conversation()
 	sum := sha256.Sum256([]byte(owner + ":session:" + label))
 	return "multica-sandbox-session-" + hex.EncodeToString(sum[:16]), label
 }
@@ -88,22 +93,99 @@ func (s *Sessions) touch(name string) error {
 // Collect removes idle session volumes of owner past the TTL, then the least
 // recently used beyond Max. Volumes without a record count as used now.
 func (s *Sessions) Collect(ctx context.Context, owner string) error {
-	data, err := command(ctx, "volume", "ls", "-q", "--filter", "label="+ownerLabel+"="+owner, "--filter", "label="+sessionLabel)
+	return s.collect(ctx, owner, false)
+}
+
+// Sweep collects, including closed issues, now and every Interval until ctx ends.
+func (s *Sessions) Sweep(ctx context.Context, owner string, report func(error)) {
+	sweep(ctx, s.Interval, func(ctx context.Context) error { return s.collect(ctx, owner, true) }, report)
+}
+
+func sweep(ctx context.Context, every time.Duration, collect func(context.Context) error, report func(error)) {
+	ticker := time.NewTicker(every)
+	defer ticker.Stop()
+	for {
+		if err := collect(ctx); err != nil && ctx.Err() == nil {
+			report(err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func (s *Sessions) collect(ctx context.Context, owner string, byIssue bool) error {
+	data, err := command(ctx, "volume", "ls", "--filter", "label="+ownerLabel+"="+owner, "--filter", "label="+sessionLabel, "--format", `{{.Name}} {{.Label "`+sessionLabel+`"}}`)
 	if err != nil {
 		return err
 	}
-	names := strings.Fields(string(data))
+	labels := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if name, label, _ := strings.Cut(line, " "); name != "" {
+			labels[name] = label
+		}
+	}
+	checked, closed := time.Now(), map[string]time.Time{}
+	if byIssue && s.Closed != nil {
+		closed = s.closed(ctx, labels)
+	}
+	doomed, err := s.plan(labels, closed, checked)
+	for _, name := range doomed {
+		_, rmErr := command(ctx, "volume", "rm", "-f", name)
+		if rmErr == nil {
+			rmErr = os.Remove(filepath.Join(s.Dir, name))
+		}
+		err = errors.Join(err, rmErr)
+	}
+	s.mu.Lock()
+	for _, name := range doomed {
+		delete(s.busy, name)
+	}
+	s.mu.Unlock()
+	return err
+}
+
+// closed asks each workspace only about its own session issues; keys are workspace/issue.
+func (s *Sessions) closed(ctx context.Context, labels map[string]string) map[string]time.Time {
+	issues := map[string][]string{}
+	for _, label := range labels {
+		if workspace, issue, ok := sessionIssue(label); ok {
+			issues[workspace] = append(issues[workspace], issue)
+		}
+	}
+	closed := map[string]time.Time{}
+	for workspace, ids := range issues {
+		for issue, updated := range s.Closed(ctx, workspace, ids) {
+			closed[workspace+"/"+issue] = updated
+		}
+	}
+	return closed
+}
+
+func sessionIssue(label string) (string, string, bool) {
+	parts := strings.Split(label, "/")
+	return parts[0], parts[len(parts)-1], len(parts) == 3
+}
+
+// plan reserves and returns the idle volumes to remove: past the TTL, of issues
+// closed Grace before checked and unused since, then the least recently used
+// beyond Max. Busy volumes stay.
+func (s *Sessions) plan(labels map[string]string, closed map[string]time.Time, checked time.Time) ([]string, error) {
 	type idle struct {
 		name string
 		used time.Time
+		gone bool
 	}
-	candidates := []idle{}
 	now := time.Now()
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.busy == nil {
 		s.busy = map[string]bool{}
 	}
-	for _, name := range names {
+	candidates, kept := []idle{}, len(labels)
+	for name, label := range labels {
 		if s.busy[name] {
 			continue
 		}
@@ -111,31 +193,30 @@ func (s *Sessions) Collect(ctx context.Context, owner string) error {
 		if info, err := os.Stat(filepath.Join(s.Dir, name)); err == nil {
 			used = info.ModTime()
 		} else if err := s.touch(name); err != nil {
-			s.mu.Unlock()
-			return err
+			return nil, err
 		}
-		// Reserved while collecting, so no run starts on a volume being removed.
-		s.busy[name] = true
-		candidates = append(candidates, idle{name, used})
+		workspace, issue, _ := sessionIssue(label)
+		updated, ok := closed[workspace+"/"+issue]
+		gone := now.Sub(used) > s.TTL || ok && checked.Sub(updated) > s.Grace && used.Before(checked)
+		if gone {
+			kept--
+		}
+		candidates = append(candidates, idle{name, used, gone})
 	}
-	s.mu.Unlock()
 	sort.Slice(candidates, func(i, j int) bool { return candidates[i].used.Before(candidates[j].used) })
-	excess := len(names) - s.Max
-	for i, c := range candidates {
-		if now.Sub(c.used) > s.TTL || i < excess {
-			_, rmErr := command(ctx, "volume", "rm", "-f", c.name)
-			if rmErr == nil {
-				rmErr = os.Remove(filepath.Join(s.Dir, c.name))
-			}
-			err = errors.Join(err, rmErr)
+	doomed := []string{}
+	for _, c := range candidates {
+		if !c.gone && kept > s.Max {
+			c.gone = true
+			kept--
+		}
+		if c.gone {
+			// Reserved while collecting, so no run starts on a volume being removed.
+			s.busy[c.name] = true
+			doomed = append(doomed, c.name)
 		}
 	}
-	s.mu.Lock()
-	for _, c := range candidates {
-		delete(s.busy, c.name)
-	}
-	s.mu.Unlock()
-	return err
+	return doomed, nil
 }
 
 // sessionVolume returns whether the labelled session volume existed, creating and

@@ -13,7 +13,9 @@ from verified behavior.
   multi-workspace authority (0008), attempt authorization (0009), external services/adapters (0010),
   managed MCP identity delivery (0011), workspace inference relay (0012),
   identity resolution contract (0013), Multica API relay (0014),
-  repository workdirs, mediated Git and session resume (0015).
+  repository workdirs, mediated Git and session resume (0015),
+  `gh pr create` through Git remote aliases (0016),
+  web chat tasks (0017).
 - `examples/end-to-end/`: opt-in real Multica/OpenCode/inference lab.
 - `examples/identity-mcp/`: disposable identity and MCP contract fixture.
 - `internal/inference/`: workspace gateway bindings, relay policy and advisory model catalogs.

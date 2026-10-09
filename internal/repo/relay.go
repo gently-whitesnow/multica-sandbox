@@ -21,9 +21,10 @@ const (
 	PushTimeout = 5 * time.Minute
 )
 
-// Relay authorizes Git smart HTTP for the claim's repositories of each attempt. Agents
-// address it as <URL>/<host>/<repository path>. Fetch and push follow the native
-// runtime: the deployment credential's scope and forge branch protection bound refs.
+// Relay authorizes Git smart HTTP for the claim's repositories of each attempt. It is
+// the HTTP proxy of per-host http://<host>/ remote aliases, so remotes keep a forge
+// host gh resolves (ADR 0016). Fetch and push follow the native runtime: the
+// deployment credential's scope and forge branch protection bound refs.
 type Relay struct {
 	URL    string
 	hosts  *Hosts
@@ -44,8 +45,8 @@ func NewRelay(relayURL string, hosts *Hosts) *Relay {
 }
 
 // Issue grants the attempt its claim repositories and returns the Git environment that
-// routes them through the relay. origin keeps the real URL. With the forge relay, the
-// same credential is the gh token for the workspace's forge APIs.
+// proxies their hosts through the relay. origin keeps the real URL. With the forge
+// relay, the same credential is the gh token for the workspace's forge APIs.
 func (g *Relay) Issue(attempt, workspace string, urls []string) (map[string]string, error) {
 	a := access{workspace: workspace, repos: map[string]bool{}}
 	hosts := []string{}
@@ -65,12 +66,13 @@ func (g *Relay) Issue(attempt, workspace string, urls []string) (map[string]stri
 	g.access[attempt] = a
 	g.mu.Unlock()
 	env := map[string]string{"GIT_TERMINAL_PROMPT": "0"}
-	config := [][2]string{{"http." + g.URL + "/.extraHeader", "Authorization: Bearer " + opaque}}
+	config := [][2]string{}
 	for _, host := range unique(hosts) {
-		base := "url." + g.URL + "/" + host + "/.insteadOf"
-		config = append(config, [2]string{base, "https://" + host + "/"})
+		alias := "http://" + host + "/"
+		config = append(config, [2]string{"http." + alias + ".extraHeader", "Authorization: Bearer " + opaque},
+			[2]string{"http." + alias + ".proxy", g.URL}, [2]string{"url." + alias + ".insteadOf", "https://" + host + "/"})
 		if !strings.Contains(host, ":") {
-			config = append(config, [2]string{base, "git@" + host + ":"})
+			config = append(config, [2]string{"url." + alias + ".insteadOf", "git@" + host + ":"})
 		}
 	}
 	if apis := g.hosts.apiHosts(workspace); g.ca != nil && len(apis) > 0 {
@@ -112,8 +114,8 @@ func (g *Relay) Authorize(r *http.Request) (relay.Lease, bool) {
 	g.mu.Lock()
 	a, granted := g.access[lease.Attempt]
 	g.mu.Unlock()
-	host, rest, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/"), "/")
-	repo, service := smartHTTP("/" + rest)
+	host := strings.ToLower(r.URL.Host)
+	repo, service := smartHTTP(r.URL.Path)
 	if service == "info/refs" {
 		service = r.URL.Query().Get("service")
 		if len(r.URL.Query()) != 1 || r.Method != http.MethodGet {
@@ -127,15 +129,14 @@ func (g *Relay) Authorize(r *http.Request) (relay.Lease, bool) {
 		lease.Release()
 		return relay.Lease{}, false
 	}
-	lease.Origin, lease.Path, lease.Authorization = origin, "/"+rest, authorization
+	lease.Origin, lease.Path, lease.Authorization = origin, r.URL.Path, authorization
 	return lease, true
 }
 
-// GitPath admits only smart HTTP endpoints below a host segment.
+// GitPath admits only smart HTTP endpoints of repository paths.
 func GitPath(p string) bool {
-	host, rest, ok := strings.Cut(strings.TrimPrefix(p, "/"), "/")
-	repo, service := smartHTTP("/" + rest)
-	return ok && hostName.MatchString(host) && service != "" && strings.Count(repo, "/") >= 1 && len(p) <= 1024
+	_, service := smartHTTP(p)
+	return service != "" && len(p) <= 1024
 }
 
 // smartHTTP splits a repository path from its smart HTTP endpoint.

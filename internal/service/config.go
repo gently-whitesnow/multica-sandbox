@@ -86,9 +86,13 @@ type OpenCodeConfig struct {
 }
 
 // SessionsConfig bounds retained workdirs: TTL after last use and a session count.
+// Every Interval (default 2h) a sweep also drops those of issues done or cancelled
+// for Grace (default 24h), the upstream GC defaults.
 type SessionsConfig struct {
-	TTL string `json:"ttl"`
-	Max int    `json:"max"`
+	TTL      string `json:"ttl"`
+	Max      int    `json:"max"`
+	Interval string `json:"interval,omitempty"`
+	Grace    string `json:"grace,omitempty"`
 }
 
 // RelayConfig enables an embedded relay: Multica API (ADR 0014) or inference (ADR 0012).

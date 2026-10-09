@@ -48,8 +48,7 @@ func origin(t *testing.T) string {
 // checkout runs the script with the default identity; the co-author hook is on unless disabled.
 func checkout(t *testing.T, root, url, ref, branch string, fresh bool, workdir string, coauthor ...bool) (response, string, string) {
 	t.Helper()
-	flag := map[bool]string{false: "0", true: "1"}
-	cmd := exec.Command("/bin/sh", "-c", script, "checkout", url, ref, branch, flag[fresh], workdir, Name(url), root, "Fixture Agent", DefaultEmail, flag[len(coauthor) == 0 || coauthor[0]])
+	cmd := exec.Command("/bin/sh", "-c", script, "checkout", url, ref, branch, flag[fresh], workdir, Name(url), root, "Fixture Agent", DefaultEmail, flag[len(coauthor) == 0 || coauthor[0]], hookText)
 	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0")
 	out, _ := cmd.Output()
 	return parse(out)
@@ -210,7 +209,7 @@ func TestCheckoutHandler(t *testing.T) {
 	if w.Code != 200 || strings.TrimSpace(w.Body.String()) != `{"path":"/workspace/work/fixture","branch_name":"agent/a/000000000042"}` {
 		t.Fatalf("checkout: %d %s", w.Code, w.Body)
 	}
-	if got := target.args[4:]; strings.Join(got, "|") != url+"|release|agent/a/000000000042|0|"+WorkDir+"|fixture|"+WorkDir+"|A|"+DefaultEmail+"|0" || target.env["GIT_TERMINAL_PROMPT"] != "0" {
+	if got := target.args[4:]; strings.Join(got, "|") != url+"|release|agent/a/000000000042|0|"+WorkDir+"|fixture|"+WorkDir+"|A|"+DefaultEmail+"|1|"+hookText || target.env["GIT_TERMINAL_PROMPT"] != "0" {
 		t.Fatalf("script arguments: %q", got)
 	}
 	for name, c := range map[string]struct {

@@ -49,15 +49,18 @@ case "$git" in msg_*) ;; *) exit 20 ;; esac
 printf '%s\n' "$env" | grep -qF "$1" && exit 21
 grep -rqF "$1" /proc/1/root/workspace /proc/1/root/tmp 2>/dev/null && exit 22
 grep -q 'url = https://git.fixture.test/sandbox/fixture.git' /proc/1/root/workspace/work/fixture/.git/config || exit 23
-r=http://git-relay:8093/git.fixture.test/sandbox
-wget -q -O /dev/null --header "Authorization: Bearer $git" "$r/fixture.git/info/refs?service=git-upload-pack" || exit 24
-wget -q -O /dev/null --header "Authorization: Bearer $git" "$r/other.git/info/refs?service=git-upload-pack" && exit 25
-wget -q -O /dev/null --header "Authorization: Bearer $git" "$r/other.git/info/refs?service=git-receive-pack" && exit 26
-wget -q -O /dev/null --header "Authorization: Bearer $git" "$r/fixture.git/info/refs?service=git-receive-pack" || exit 29
+[ "$(value GIT_CONFIG_KEY_1)=$(value GIT_CONFIG_VALUE_1)" = http.http://git.fixture.test/.proxy=http://git-relay:8093 ] || exit 33
+# The Git relay is the HTTP proxy of the http://git.fixture.test/ remote alias.
+relay() { http_proxy=http://git-relay:8093 wget -q -O /dev/null --header "Authorization: Bearer $1" "http://git.fixture.test/sandbox/$2"; }
+relay "$git" "fixture.git/info/refs?service=git-upload-pack" || exit 24
+relay "$git" "other.git/info/refs?service=git-upload-pack" && exit 25
+relay "$git" "other.git/info/refs?service=git-receive-pack" && exit 26
+relay "$git" "fixture.git/info/refs?service=git-receive-pack" || exit 29
+wget -q -O /dev/null --header "Authorization: Bearer $git" "http://git-relay:8093/git.fixture.test/sandbox/fixture.git/info/refs?service=git-upload-pack" && exit 34
 [ "$(value GH_ENTERPRISE_TOKEN)" = "$git" ] && [ "$(value GH_HOST)" = git.fixture.test ] || exit 30
 grep -q '^127.0.0.1[[:space:]]*git.fixture.test' /proc/1/root/etc/hosts || exit 31
 grep -q 'BEGIN CERTIFICATE' /proc/1/root/workspace/certs/multica-sandbox-forge.pem || exit 32
-wget -q -O /dev/null --header "Authorization: Bearer $token" "$r/fixture.git/info/refs?service=git-upload-pack" && exit 27
+relay "$token" "fixture.git/info/refs?service=git-upload-pack" && exit 27
 body="{\"url\":\"https://git.fixture.test/sandbox/fixture.git\",\"workspace_id\":\"$(value MULTICA_WORKSPACE_ID)\",\"task_id\":\"$(value MULTICA_TASK_ID)\",\"workdir\":\"/workspace\"}"
 wget -q -O /dev/null --header "Authorization: Bearer $token" --post-data "$body" http://127.0.0.1:` + repo.DaemonPort + `/repo/checkout 2>&1 | grep -q ' 403 ' || exit 28
 printf '%s' "$git"`
@@ -138,7 +141,7 @@ func multicaRelayService(t *testing.T, api *multica.Client, agentImage string, n
  INSERT INTO issue(id,workspace_id,title,description,status,creator_type,creator_id,number,assignee_type,assignee_id) VALUES('%s','%s','%s','Read me through the relay.','todo','member','%s',%d,'agent','%s');
  INSERT INTO agent_task_queue(id,agent_id,runtime_id,issue_id,status,max_attempts,originator_user_id,accountable_user_id) VALUES('%s','%s','%s','%s','queued',1,'%s','%s');`, agent, workspace, n, runtime, user, issue, workspace, title, user, 99900+n, agent, id, agent, runtime, issue, user, user))
 
-	opaque, inferenceOpaque, gitOpaque, secret := "", "", "", ""
+	opaque, inferenceOpaque, gitOpaque, secret, off := "", "", "", "", false
 	if full {
 		secret = strings.TrimSpace(dockerTest(t, "exec", project+"-git-1", "cat", "/secrets/git"))
 	}
@@ -160,7 +163,7 @@ func multicaRelayService(t *testing.T, api *multica.Client, agentImage string, n
 				if opaque != "" && full && gitOpaque == "" {
 					gitOpaque = liveProbe(t, container, "repository boundary", repositoryProbe, secret)
 				}
-				if opaque != "" && (w == nil || inferenceOpaque != "") && (!full || gitOpaque != "") {
+				if opaque != "" && (w == nil || inferenceOpaque != "") && (!full || gitOpaque != "" && coAuthorOff(t, container, &off)) {
 					if _, err := execOutput(container, "touch /proc/1/root/workspace/.probed"); err != nil {
 						t.Fatalf("mark probed attempt: %v", err)
 					}
@@ -188,6 +191,7 @@ func multicaRelayService(t *testing.T, api *multica.Client, agentImage string, n
 	if full {
 		repositoryEnded(t, network, project, controllerName, fmt.Sprintf("agent/relay-fixture-agent-%d/%012d", n, n), gitOpaque, secret, content)
 		sessionResumed(t, api, agent, runtime, issue, id, n, secret)
+		chatResumed(t, api, agent, runtime, n)
 	}
 	if w != nil {
 		denied := exec.Command("docker", "run", "--rm", "--network", network, "--entrypoint", "/bin/sh", "-e", "T="+inferenceOpaque, image, "-c", `wget -q -O /dev/null --header "Authorization: Bearer $T" --post-data '{}' http://`+controllerName+`:8092/v1/chat/completions 2>&1 | grep -q ' 401 '`)
@@ -245,15 +249,15 @@ func configureRepositories(t *testing.T, dir, project string, c *service.Config)
 // repositoryEnded checks the pushed task branch, that the ended Git grant is denied and
 // that the host password never left the controller.
 func repositoryEnded(t *testing.T, network, project, controller, branch, opaque, secret, content string) {
-	if pulls := dockerTest(t, "exec", project+"-git-1", "cat", "/srv/git/pulls"); strings.TrimSpace(pulls) != branch+` main "Fixture agent work"` || !strings.Contains(content, "Pull request: https://git.fixture.test/sandbox/fixture/pull/1") {
-		t.Fatalf("unchanged gh did not open the pull request through the forge relay: %q %q", pulls, content)
+	if pulls := dockerTest(t, "exec", project+"-git-1", "cat", "/srv/git/pulls"); strings.TrimSpace(pulls) != branch+` main "Fixture agent work" /api/graphql` || !strings.Contains(content, "Pull request: https://git.fixture.test/sandbox/fixture/pull/1") {
+		t.Fatalf("unchanged gh pr create did not open the pull request through the forge relay: %q %q", pulls, content)
 	}
-	pushed := dockerTest(t, "exec", project+"-git-1", "git", "-C", "/srv/git/sandbox/fixture.git", "log", "-1", "--format=%an <%ae>%n%s%n%(trailers:key=Co-authored-by)", "refs/heads/"+branch)
-	if strings.TrimSpace(pushed) != "Fixture Bot <bot@fixture.invalid>\nFixture agent work\nCo-authored-by: multica-agent <github@multica.ai>" {
-		t.Fatalf("task branch push did not reach the Git host with the configured identity and trailer: %q", pushed)
+	pushed := dockerTest(t, "exec", project+"-git-1", "git", "-C", "/srv/git/sandbox/fixture.git", "log", "-2", "--format=%an <%ae>|%s|%(trailers:key=Co-authored-by,valueonly,separator=%x2C)", "refs/heads/"+branch)
+	if strings.TrimSpace(pushed) != "Fixture Bot <bot@fixture.invalid>|Fixture co-author off|\nFixture Bot <bot@fixture.invalid>|Fixture agent work|multica-agent <github@multica.ai>" {
+		t.Fatalf("task branch push lacks the configured identity, the trailer, or the setting change: %q", pushed)
 	}
 	for _, service := range []string{"upload", "receive"} {
-		denied := exec.Command("docker", "run", "--rm", "--network", network, "--entrypoint", "/bin/sh", "-e", "T="+opaque, image, "-c", `wget -q -O /dev/null --header "Authorization: Bearer $T" "http://`+controller+`:8093/git.fixture.test/sandbox/fixture.git/info/refs?service=git-`+service+`-pack" 2>&1 | grep -q ' 401 '`)
+		denied := exec.Command("docker", "run", "--rm", "--network", network, "--entrypoint", "/bin/sh", "-e", "T="+opaque, "-e", "http_proxy=http://"+controller+":8093", image, "-c", `wget -q -O /dev/null --header "Authorization: Bearer $T" "http://git.fixture.test/sandbox/fixture.git/info/refs?service=git-`+service+`-pack" 2>&1 | grep -q ' 401 '`)
 		if out, err := denied.CombinedOutput(); err != nil {
 			t.Fatalf("ended Git credential not denied for %s-pack: %v %s", service, err, out)
 		}
@@ -261,18 +265,36 @@ func repositoryEnded(t *testing.T, network, project, controller, branch, opaque,
 	if strings.Contains(dockerTest(t, "logs", controller)+content, secret) {
 		t.Fatal("Git host password leaked into controller logs or comments")
 	}
-	t.Log("unchanged multica repo checkout cloned the claim repository through the Git relay; plain git pushed the task branch with the configured identity and the upstream co-author trailer; unchanged gh opened a pull request through the forge relay; host password stayed in the controller")
+	t.Log("unchanged multica repo checkout cloned the claim repository through the Git relay; plain git pushed the task branch with the configured identity and the upstream co-author trailer, dropped after the workspace setting changed mid-attempt; unchanged gh pr create opened a pull request over GraphQL through the forge relay; host password stayed in the controller")
 }
 
-// sessionResumed runs two follow-up tasks on the repository issue: the first resumes
-// the retained session; the second, pointed at a missing session, retires it and
-// starts fresh in the same workdir. The retained volume holds no credential.
+// coAuthorOff turns the workspace co-author setting off after the agent's first commit,
+// then reports whether the live attempt published it to its hooks.
+func coAuthorOff(t *testing.T, container string, off *bool) bool {
+	if !*off {
+		if _, err := execOutput(container, "grep -q 'commit: Fixture agent work' /proc/1/root/workspace/work/fixture/.git/logs/HEAD"); err != nil {
+			return false
+		}
+		sql(t, fmt.Sprintf(`UPDATE workspace SET settings = settings || '{"co_authored_by_enabled":false}' WHERE id='%s';`, workspace))
+		t.Cleanup(func() {
+			sql(t, fmt.Sprintf(`UPDATE workspace SET settings = settings - 'co_authored_by_enabled' WHERE id='%s';`, workspace))
+		})
+		*off = true
+	}
+	state, _ := execOutput(container, "cat /proc/1/root"+repo.StatePath)
+	return strings.TrimSpace(state) == "0"
+}
+
+// sessionResumed runs two follow-up tasks on the repository issue: the first, triggered by
+// a comment after a rename and an earlier comment in another thread, resumes the retained
+// session with the server-computed warm hints; the second, pointed at a missing session,
+// retires it and starts fresh in the same workdir. The retained volume holds no credential.
 func sessionResumed(t *testing.T, api *multica.Client, agent, runtime, issue, first string, n int, secret string) {
 	row := func(id string) []string {
 		return strings.Split(sql(t, fmt.Sprintf("SELECT coalesce(session_id,'') || '|' || coalesce(work_dir,'') || '|' || coalesce(retired_session_id,'') FROM agent_task_queue WHERE id='%s';", id)), "|")
 	}
-	followUp := func(id, want string) []string {
-		sql(t, fmt.Sprintf(`INSERT INTO agent_task_queue(id,agent_id,runtime_id,issue_id,status,max_attempts,originator_user_id,accountable_user_id) VALUES('%s','%s','%s','%s','queued',1,'%s','%s');`, id, agent, runtime, issue, user, user))
+	followUp := func(id, want, comments string) []string {
+		sql(t, fmt.Sprintf(`INSERT INTO agent_task_queue(id,agent_id,runtime_id,issue_id,status,max_attempts,originator_user_id,accountable_user_id,trigger_comment_id,coalesced_comment_ids) VALUES('%s','%s','%s','%s','queued',1,'%s','%s',%s);`, id, agent, runtime, issue, user, user, comments))
 		for deadline := time.Now().Add(90 * time.Second); ; time.Sleep(250 * time.Millisecond) {
 			state, err := api.Status(context.Background(), id)
 			if err != nil || state == "failed" || time.Now().After(deadline) {
@@ -283,7 +305,7 @@ func sessionResumed(t *testing.T, api *multica.Client, agent, runtime, issue, fi
 			}
 		}
 		if content := sql(t, fmt.Sprintf("SELECT coalesce(string_agg(content, ' '),'') FROM comment WHERE issue_id='%s' AND type='comment';", issue)); !strings.Contains(content, want+": first run") {
-			t.Fatalf("follow-up %s did not report %q: %q", id, want, content)
+			t.Fatalf("follow-up %s did not report %q: %q; transcript %q", id, want, content, sql(t, fmt.Sprintf("SELECT coalesce(string_agg(coalesce(content,'') || coalesce(input::text,'') || coalesce(output,''), ' '),'') FROM task_message WHERE task_id='%s';", id)))
 		}
 		return row(id)
 	}
@@ -291,12 +313,20 @@ func sessionResumed(t *testing.T, api *multica.Client, agent, runtime, issue, fi
 	if !strings.HasPrefix(initial[0], "ses_") || !strings.HasPrefix(initial[1], "multica-sandbox-session-") {
 		t.Fatalf("first task did not report a retained session: %v", initial)
 	}
-	resumed := followUp(fmt.Sprintf("a4000000-0000-4000-8000-%012d", n), "Resumed")
+	earlier, trigger := fmt.Sprintf("a6000000-0000-4000-8000-%012d", n), fmt.Sprintf("a7000000-0000-4000-8000-%012d", n)
+	for _, id := range []string{earlier, trigger} {
+		sql(t, fmt.Sprintf(`INSERT INTO comment(id,issue_id,workspace_id,author_type,author_id,content) SELECT '%s',id,workspace_id,'member','%s','Please continue.' FROM issue WHERE id='%s';`, id, user, issue))
+	}
+	sql(t, fmt.Sprintf(`UPDATE issue SET title='Repository fixture issue renamed' WHERE id='%s';`, issue))
+	resumed := followUp(fmt.Sprintf("a4000000-0000-4000-8000-%012d", n), "Resumed; 1 new comment(s) on this issue since your last run; the issue changed: title; 2 DISTINCT threads", fmt.Sprintf("'%s','{%s}'", trigger, earlier))
+	if threaded := sql(t, fmt.Sprintf("SELECT count(*) FROM comment WHERE issue_id='%s' AND parent_id='%s' AND author_type='agent';", issue, earlier)); threaded != "1" {
+		t.Fatalf("follow-up reply did not follow the oldest-thread routing: %s", threaded)
+	}
 	if resumed[0] != initial[0] || resumed[1] != initial[1] || resumed[2] != "" {
 		t.Fatalf("follow-up did not resume the retained session: %v after %v", resumed, initial)
 	}
 	sql(t, fmt.Sprintf("UPDATE agent_task_queue SET session_id='ses_missingfixture' WHERE id='a4000000-0000-4000-8000-%012d';", n))
-	fresh := followUp(fmt.Sprintf("a5000000-0000-4000-8000-%012d", n), "Fresh after lost session")
+	fresh := followUp(fmt.Sprintf("a5000000-0000-4000-8000-%012d", n), "Fresh after lost session", "NULL,'{}'")
 	if fresh[0] == "" || fresh[0] == initial[0] || fresh[1] != initial[1] || fresh[2] != "ses_missingfixture" {
 		t.Fatalf("missing session was not retired for a fresh one: %v", fresh)
 	}
@@ -304,7 +334,38 @@ func sessionResumed(t *testing.T, api *multica.Client, agent, runtime, issue, fi
 	if err != nil || strings.TrimSpace(string(out)) != "" {
 		t.Fatalf("retained volume lacks the session store or holds a credential: %v %q", err, out)
 	}
-	t.Log("follow-up tasks resumed the native OpenCode session in the retained workdir; a missing session was retired and replaced fresh; the volume holds no credential")
+	t.Log("a comment follow-up resumed the native OpenCode session in the retained workdir with upstream warm hints; a missing session was retired and replaced fresh; the volume holds no credential")
+}
+
+// chatResumed sends two web chat messages: the first gets the upstream chat prompt, reads
+// the stored transcript with the unchanged CLI and leaves a note in the chat's retained
+// workdir; the second resumes that native session in the same workdir and reads the note.
+func chatResumed(t *testing.T, api *multica.Client, agent, runtime string, n int) {
+	chat := fmt.Sprintf("a8000000-0000-4000-8000-%012d", n)
+	sql(t, fmt.Sprintf(`INSERT INTO chat_session(id,workspace_id,agent_id,creator_id,title) VALUES('%s','%s','%s','%s','Fixture chat');`, chat, workspace, agent, user))
+	send := func(id, message string) []string {
+		sql(t, fmt.Sprintf(`BEGIN; INSERT INTO chat_message(chat_session_id,role,content,task_id) VALUES('%s','user','%s','%s');
+ INSERT INTO agent_task_queue(id,agent_id,runtime_id,chat_session_id,chat_input_task_id,status,max_attempts,originator_user_id,accountable_user_id) VALUES('%s','%s','%s','%s','%s','queued',1,'%s','%s'); COMMIT;`, chat, message, id, id, agent, runtime, chat, id, user, user))
+		for deadline := time.Now().Add(90 * time.Second); ; time.Sleep(250 * time.Millisecond) {
+			state, err := api.Status(context.Background(), id)
+			if err != nil || state == "failed" || time.Now().After(deadline) {
+				t.Fatalf("chat task %s: %s %v %s", id, state, err, sql(t, fmt.Sprintf("SELECT coalesce(error,'') FROM agent_task_queue WHERE id='%s';", id)))
+			}
+			if state == "completed" {
+				break
+			}
+		}
+		return strings.Split(sql(t, fmt.Sprintf("SELECT coalesce(session_id,'') || '|' || coalesce(work_dir,'') || '|' || coalesce((SELECT string_agg(content, ' ') FROM chat_message WHERE task_id='%s' AND role='assistant'),'') FROM agent_task_queue WHERE id='%s';", id, id)), "|")
+	}
+	first := send(fmt.Sprintf("a9000000-0000-4000-8000-%012d", n), "Remember the code word violet.")
+	if !strings.HasPrefix(first[0], "ses_") || !strings.HasPrefix(first[1], "multica-sandbox-session-") || first[2] != "Chat started; history read" {
+		t.Fatalf("first chat message did not run the upstream chat prompt in a retained workdir: %v", first)
+	}
+	second := send(fmt.Sprintf("aa000000-0000-4000-8000-%012d", n), "What was the code word?")
+	if second[0] != first[0] || second[1] != first[1] || second[2] != "Chat resumed; violet" {
+		t.Fatalf("second chat message did not resume the first session: %v after %v", second, first)
+	}
+	t.Log("a second web chat message resumed the first message's native OpenCode session in the chat's retained workdir; the unchanged CLI read the stored transcript")
 }
 
 // startFixture builds and starts the identity-mcp services; cleanup removes them with their images.
