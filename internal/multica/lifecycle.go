@@ -39,6 +39,19 @@ type Task struct {
 	RuntimeID             string            `json:"runtime_id"`
 	DispatchedAt          string            `json:"dispatched_at"`
 	StartClaimSupported   bool              `json:"start_claim_supported"`
+
+	// Resume deltas and coalesced comments feed the upstream per-turn hints.
+	CoalescedComments             []Comment `json:"coalesced_comments"`
+	CoalescedCommentIDs           []string  `json:"coalesced_comment_ids"`
+	IssueChangedFields            []string  `json:"issue_changed_fields"`
+	NewCommentsSince              string    `json:"new_comments_since"`
+	IssueStatus                   string    `json:"issue_status"`
+	IssueAssigneeType             string    `json:"issue_assignee_type"`
+	IssueAssigneeID               string    `json:"issue_assignee_id"`
+	NewCommentCount               int       `json:"new_comment_count"`
+	NewCommentsDeltaKnown         bool      `json:"new_comments_delta_known"`
+	IssueStateDeltaKnown          bool      `json:"issue_state_delta_known"`
+	PriorSessionResumeUnavailable bool      `json:"prior_session_resume_unavailable"`
 }
 
 type Recovery struct {
@@ -168,4 +181,14 @@ type Repository struct {
 	URL         string `json:"url"`
 	Description string `json:"description"`
 	Ref         string `json:"ref"`
+}
+
+// Comment is an earlier comment the server folded into a comment-triggered run.
+type Comment struct {
+	ID         string `json:"id"`
+	ThreadID   string `json:"thread_id"`
+	AuthorType string `json:"author_type"`
+	AuthorName string `json:"author_name"`
+	Content    string `json:"content"`
+	CreatedAt  string `json:"created_at"`
 }

@@ -96,7 +96,7 @@ const (
 // Prompt returns the per-turn prompt and, for upstream CLI tasks, the AGENTS.md brief.
 // With checkout, the brief offers `multica repo checkout` for the claim repositories.
 func Prompt(t multica.Task, upstream, checkout bool, c Continuity) ([]byte, []byte, error) {
-	if t.Agent == nil {
+	if t.Agent == nil || !validComments(t) {
 		return nil, nil, ErrDenied
 	}
 	sources, err := repositories(t)
@@ -105,7 +105,7 @@ func Prompt(t multica.Task, upstream, checkout bool, c Continuity) ([]byte, []by
 	}
 	var prompt, brief string
 	if upstream && upstreamTask(t) {
-		prompt = upstreamPrompt(t, c == Resumed)
+		prompt = upstreamPrompt(t, c == Resumed && !t.PriorSessionResumeUnavailable)
 		switch {
 		case checkout:
 			sources = checkoutRepositories(t.Repos)
@@ -114,13 +114,17 @@ func Prompt(t multica.Task, upstream, checkout bool, c Continuity) ([]byte, []by
 		}
 		brief = upstreamBrief(t, sources, checkout)
 	} else {
-		sections := []string{t.Agent.Instructions, t.WorkspaceContext, "Assigned issue: " + t.IssueID, t.ProjectTitle, t.ProjectDescription, t.TriggerCommentContent, t.ChatMessage}
+		sections := []string{t.Agent.Instructions, t.WorkspaceContext, "Assigned issue: " + t.IssueID, t.ProjectTitle, t.ProjectDescription, t.TriggerCommentContent}
+		for _, comment := range t.CoalescedComments {
+			sections = append(sections, comment.Content)
+		}
+		sections = append(sections, t.ChatMessage)
 		if sources != "" {
 			sections = append(sections, "Repository references (no local checkout; access through selected authorized MCP):\n"+sources)
 		}
 		prompt = strings.Join(sections, "\n\n")
 	}
-	if c == Lost {
+	if c == Lost || t.PriorSessionResumeUnavailable {
 		// Upstream appends the notice to the per-turn message, never the brief.
 		prompt = strings.TrimRight(prompt, "\n") + "\n\n" + strings.TrimRight(sessionContinuityNotice, "\n")
 	}

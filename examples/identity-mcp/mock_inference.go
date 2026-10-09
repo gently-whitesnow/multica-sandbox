@@ -11,6 +11,12 @@ import (
 
 var issuePattern = regexp.MustCompile(`Your assigned issue ID is: ([0-9a-f-]{36})`)
 var titlePattern = regexp.MustCompile(`"title":\s*"([A-Za-z0-9 ]{1,64})"`)
+var parentPattern = regexp.MustCompile(`--parent ([0-9a-f-]{36})`)
+var warmHints = []*regexp.Regexp{
+	regexp.MustCompile(`\d+ new comment\(s\) on this issue since your last run`),
+	regexp.MustCompile(`the issue changed: [a-z]+(, [a-z]+)*`),
+	regexp.MustCompile(`\d+ DISTINCT threads`),
+}
 
 // No provider or account is contacted: deterministic tool turns test the MCP adapter.
 func mockInference(w http.ResponseWriter, r *http.Request) {
@@ -31,7 +37,7 @@ func mockInference(w http.ResponseWriter, r *http.Request) {
 	}
 	// count and result describe the turn since the latest prompt; a resumed session
 	// carries earlier prompts, and a dropped one the upstream continuity notice.
-	count, prompts, lost := 0, 0, false
+	count, prompts, latest := 0, 0, ""
 	ws := "10000000-0000-4000-8000-000000000001"
 	issue, result := "", ""
 	for _, message := range body.Messages {
@@ -42,8 +48,7 @@ func mockInference(w http.ResponseWriter, r *http.Request) {
 		}
 		if message.Role == "user" {
 			prompts++
-			count, result = 0, ""
-			lost = strings.Contains(text, "## Session Continuity Notice")
+			count, result, latest = 0, "", text
 		}
 		if message.Role == "tool" {
 			count++
@@ -78,10 +83,19 @@ func mockInference(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case count < 24 && name != "":
 		call(name, readArgs{Workspace: ws, Resource: "document"})
-	case bash && issue != "" && count == 0 && (prompts > 1 || lost):
-		// Follow-up runs report what the retained workdir and conversation still hold.
+	case bash && issue != "" && count == 0 && (prompts > 1 || strings.Contains(latest, "## Session Continuity Notice")):
+		// Follow-up runs report the retained workdir, the conversation and the prompt's warm hints.
 		state := map[bool]string{true: "Resumed", false: "Fresh after lost session"}[prompts > 1]
-		call("bash", map[string]string{"command": "printf '%s: %s\\n' '" + state + "' \"$(cat notes.txt)\" > reply.md && multica issue comment add " + issue + " --content-file ./reply.md --output table && rm reply.md", "description": "Post the follow-up"})
+		for _, hint := range warmHints {
+			if match := hint.FindString(latest); match != "" {
+				state += "; " + match
+			}
+		}
+		parent := ""
+		if match := parentPattern.FindStringSubmatch(latest); match != nil {
+			parent = " --parent " + match[1]
+		}
+		call("bash", map[string]string{"command": "printf '%s: %s\\n' '" + state + "' \"$(cat notes.txt)\" > reply.md && multica issue comment add " + issue + parent + " --content-file ./reply.md --output table && rm reply.md", "description": "Post the follow-up"})
 	case bash && issue != "" && count == 0:
 		// The upstream-style prompt names the issue; the agent reads it through the Multica relay.
 		call("bash", map[string]string{"command": "multica issue get " + issue + " --output json", "description": "Read the assigned issue"})

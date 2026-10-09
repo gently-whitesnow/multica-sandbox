@@ -264,15 +264,16 @@ func repositoryEnded(t *testing.T, network, project, controller, branch, opaque,
 	t.Log("unchanged multica repo checkout cloned the claim repository through the Git relay; plain git pushed the task branch with the configured identity and the upstream co-author trailer; unchanged gh opened a pull request through the forge relay; host password stayed in the controller")
 }
 
-// sessionResumed runs two follow-up tasks on the repository issue: the first resumes
-// the retained session; the second, pointed at a missing session, retires it and
-// starts fresh in the same workdir. The retained volume holds no credential.
+// sessionResumed runs two follow-up tasks on the repository issue: the first, triggered by
+// a comment after a rename and an earlier comment in another thread, resumes the retained
+// session with the server-computed warm hints; the second, pointed at a missing session,
+// retires it and starts fresh in the same workdir. The retained volume holds no credential.
 func sessionResumed(t *testing.T, api *multica.Client, agent, runtime, issue, first string, n int, secret string) {
 	row := func(id string) []string {
 		return strings.Split(sql(t, fmt.Sprintf("SELECT coalesce(session_id,'') || '|' || coalesce(work_dir,'') || '|' || coalesce(retired_session_id,'') FROM agent_task_queue WHERE id='%s';", id)), "|")
 	}
-	followUp := func(id, want string) []string {
-		sql(t, fmt.Sprintf(`INSERT INTO agent_task_queue(id,agent_id,runtime_id,issue_id,status,max_attempts,originator_user_id,accountable_user_id) VALUES('%s','%s','%s','%s','queued',1,'%s','%s');`, id, agent, runtime, issue, user, user))
+	followUp := func(id, want, comments string) []string {
+		sql(t, fmt.Sprintf(`INSERT INTO agent_task_queue(id,agent_id,runtime_id,issue_id,status,max_attempts,originator_user_id,accountable_user_id,trigger_comment_id,coalesced_comment_ids) VALUES('%s','%s','%s','%s','queued',1,'%s','%s',%s);`, id, agent, runtime, issue, user, user, comments))
 		for deadline := time.Now().Add(90 * time.Second); ; time.Sleep(250 * time.Millisecond) {
 			state, err := api.Status(context.Background(), id)
 			if err != nil || state == "failed" || time.Now().After(deadline) {
@@ -283,7 +284,7 @@ func sessionResumed(t *testing.T, api *multica.Client, agent, runtime, issue, fi
 			}
 		}
 		if content := sql(t, fmt.Sprintf("SELECT coalesce(string_agg(content, ' '),'') FROM comment WHERE issue_id='%s' AND type='comment';", issue)); !strings.Contains(content, want+": first run") {
-			t.Fatalf("follow-up %s did not report %q: %q", id, want, content)
+			t.Fatalf("follow-up %s did not report %q: %q; transcript %q", id, want, content, sql(t, fmt.Sprintf("SELECT coalesce(string_agg(coalesce(content,'') || coalesce(input::text,'') || coalesce(output,''), ' '),'') FROM task_message WHERE task_id='%s';", id)))
 		}
 		return row(id)
 	}
@@ -291,12 +292,20 @@ func sessionResumed(t *testing.T, api *multica.Client, agent, runtime, issue, fi
 	if !strings.HasPrefix(initial[0], "ses_") || !strings.HasPrefix(initial[1], "multica-sandbox-session-") {
 		t.Fatalf("first task did not report a retained session: %v", initial)
 	}
-	resumed := followUp(fmt.Sprintf("a4000000-0000-4000-8000-%012d", n), "Resumed")
+	earlier, trigger := fmt.Sprintf("a6000000-0000-4000-8000-%012d", n), fmt.Sprintf("a7000000-0000-4000-8000-%012d", n)
+	for _, id := range []string{earlier, trigger} {
+		sql(t, fmt.Sprintf(`INSERT INTO comment(id,issue_id,workspace_id,author_type,author_id,content) SELECT '%s',id,workspace_id,'member','%s','Please continue.' FROM issue WHERE id='%s';`, id, user, issue))
+	}
+	sql(t, fmt.Sprintf(`UPDATE issue SET title='Repository fixture issue renamed' WHERE id='%s';`, issue))
+	resumed := followUp(fmt.Sprintf("a4000000-0000-4000-8000-%012d", n), "Resumed; 1 new comment(s) on this issue since your last run; the issue changed: title; 2 DISTINCT threads", fmt.Sprintf("'%s','{%s}'", trigger, earlier))
+	if threaded := sql(t, fmt.Sprintf("SELECT count(*) FROM comment WHERE issue_id='%s' AND parent_id='%s' AND author_type='agent';", issue, earlier)); threaded != "1" {
+		t.Fatalf("follow-up reply did not follow the oldest-thread routing: %s", threaded)
+	}
 	if resumed[0] != initial[0] || resumed[1] != initial[1] || resumed[2] != "" {
 		t.Fatalf("follow-up did not resume the retained session: %v after %v", resumed, initial)
 	}
 	sql(t, fmt.Sprintf("UPDATE agent_task_queue SET session_id='ses_missingfixture' WHERE id='a4000000-0000-4000-8000-%012d';", n))
-	fresh := followUp(fmt.Sprintf("a5000000-0000-4000-8000-%012d", n), "Fresh after lost session")
+	fresh := followUp(fmt.Sprintf("a5000000-0000-4000-8000-%012d", n), "Fresh after lost session", "NULL,'{}'")
 	if fresh[0] == "" || fresh[0] == initial[0] || fresh[1] != initial[1] || fresh[2] != "ses_missingfixture" {
 		t.Fatalf("missing session was not retired for a fresh one: %v", fresh)
 	}
@@ -304,7 +313,7 @@ func sessionResumed(t *testing.T, api *multica.Client, agent, runtime, issue, fi
 	if err != nil || strings.TrimSpace(string(out)) != "" {
 		t.Fatalf("retained volume lacks the session store or holds a credential: %v %q", err, out)
 	}
-	t.Log("follow-up tasks resumed the native OpenCode session in the retained workdir; a missing session was retired and replaced fresh; the volume holds no credential")
+	t.Log("a comment follow-up resumed the native OpenCode session in the retained workdir with upstream warm hints; a missing session was retired and replaced fresh; the volume holds no credential")
 }
 
 // startFixture builds and starts the identity-mcp services; cleanup removes them with their images.
