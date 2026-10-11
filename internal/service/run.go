@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -148,7 +149,11 @@ func openCodeAdapter(ctx context.Context, c Config, stateDir string, api *multic
 	if err != nil {
 		return nil, fmt.Errorf("inspect agent image: %w", err)
 	}
-	if err = opencode.CheckImage(report, c.OpenCode.MulticaRelay != nil, git); err != nil {
+	revision, err := cliRevision(c.OpenCode)
+	if err != nil {
+		return nil, err
+	}
+	if err = opencode.CheckImageRevision(report, revision, git); err != nil {
 		return nil, err
 	}
 	if err = checkTools(ctx, workloads, c.Tools); err != nil {
@@ -246,4 +251,21 @@ func serveForge(ctx context.Context, c *RelayConfig, git *repo.Relay, hosts *rep
 func (a *agentFleetAPI) Message(ctx context.Context, id string) error { return a.AgentMessage(ctx, id) }
 func (a *agentFleetAPI) Complete(ctx context.Context, id string, result execution.Result) error {
 	return a.AgentComplete(ctx, id, result)
+}
+
+var commit = regexp.MustCompile(`^[0-9a-f]{40}$`)
+
+// cliRevision is the commit the mounted CLI artifact must report; empty without the relay.
+func cliRevision(c *OpenCodeConfig) (string, error) {
+	switch {
+	case c.MulticaRelay == nil && c.MulticaCLIRevision != "":
+		return "", fmt.Errorf("multica_cli_revision requires multica_cli")
+	case c.MulticaRelay == nil:
+		return "", nil
+	case c.MulticaCLIRevision == "":
+		return multica.UpstreamRevision, nil
+	case !commit.MatchString(c.MulticaCLIRevision):
+		return "", fmt.Errorf("multica_cli_revision must be a full lower-case commit hash")
+	}
+	return c.MulticaCLIRevision, nil
 }

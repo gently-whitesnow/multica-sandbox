@@ -22,6 +22,7 @@ from verified behavior.
 - `internal/identity/`: static/external identity resolution and verified Keycloak issuance.
 - `internal/relay/`: shared credential-translation reverse proxy and per-attempt grants
   (Multica API, inference, Git and forge).
+- `internal/baseurl/`: base-path validation for server and gateway URLs behind a prefix.
 - `internal/repo/`, `cmd/sandbox-helper`: upstream repository checkout, the Git and forge relays and
   the attempt helper (workdir volume, loopback forwarder).
 - `examples/agent-image/`: example user-owned OpenCode image on a Debian base; the

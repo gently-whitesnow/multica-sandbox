@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/gently-whitesnow/multica-sandbox/internal/docker"
+	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
 )
 
 func TestMulticaRelayRequiresCLIArtifact(t *testing.T) {
@@ -48,6 +49,28 @@ func TestSessionsRequireHelperAndBounds(t *testing.T) {
 	} {
 		if _, err := openCodeAdapter(t.Context(), Config{OpenCode: &c}, t.TempDir(), nil, &docker.Backend{}, io.Discard); err == nil || !strings.Contains(err.Error(), "sessions require") {
 			t.Errorf("%s accepted: %v", name, err)
+		}
+	}
+}
+
+func TestCLIRevision(t *testing.T) {
+	relay := &RelayConfig{Listen: ":8091", URL: "http://multica-relay:8091"}
+	fork := strings.Repeat("c", 40)
+	for _, test := range []struct {
+		c    OpenCodeConfig
+		want string
+		ok   bool
+	}{
+		{OpenCodeConfig{}, "", true},
+		{OpenCodeConfig{MulticaRelay: relay}, multica.UpstreamRevision, true},
+		{OpenCodeConfig{MulticaRelay: relay, MulticaCLIRevision: fork}, fork, true},
+		{OpenCodeConfig{MulticaCLIRevision: fork}, "", false},
+		{OpenCodeConfig{MulticaRelay: relay, MulticaCLIRevision: "v0.5.2"}, "", false},
+		{OpenCodeConfig{MulticaRelay: relay, MulticaCLIRevision: strings.ToUpper(fork)}, "", false},
+	} {
+		got, err := cliRevision(&test.c)
+		if (err == nil) != test.ok || got != test.want {
+			t.Fatalf("%+v: %q %v", test.c.MulticaCLIRevision, got, err)
 		}
 	}
 }

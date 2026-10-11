@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
 )
 
 const pinnedCLI = "cli-version multica dev (commit: b4ca5b4a23e68b26292a680dca7689a952bb1cd5, built: unknown)\n"
@@ -71,5 +73,16 @@ func TestOfficialImagesAreListed(t *testing.T) {
 	}
 	if len(found) != len(Images) || len(Images) == 0 {
 		t.Fatalf("found %d listed images, want all %d", len(found), len(Images))
+	}
+}
+
+func TestCheckImageRevision(t *testing.T) {
+	fork := strings.Repeat("c", 40)
+	cli := "cli " + multica.CLIDir + "/bin/multica\ncli-version multica dev (commit: " + fork + ", built: unknown)\n"
+	if err := CheckImageRevision([]byte("version 1.18.35\n"+cli+"git /usr/bin/git\n"), fork, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckImage([]byte("version 1.18.35\n"+cli+"git /usr/bin/git\n"), true, true); err == nil {
+		t.Fatal("CLI from another revision accepted against the default pin")
 	}
 }

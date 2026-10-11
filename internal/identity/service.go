@@ -4,6 +4,9 @@ import (
 	"context"
 	"net/url"
 	"path/filepath"
+	"strings"
+
+	"github.com/gently-whitesnow/multica-sandbox/internal/baseurl"
 )
 
 // Service has no background renewal loop and never accepts selectors from a workload.
@@ -16,7 +19,7 @@ type Service struct {
 
 func New(c Config, server string) (*Service, error) {
 	parsed, _ := url.Parse(server)
-	if c.Version != 1 || !endpoint(server, c.AllowHTTP) || parsed.Path != "" || (len(c.Bindings) > 0) == (c.External != nil) || len(c.Issuers) == 0 {
+	if c.Version != 1 || !endpoint(server, c.AllowHTTP) || !baseurl.Path(parsed) || strings.HasSuffix(server, "/") || (len(c.Bindings) > 0) == (c.External != nil) || len(c.Issuers) == 0 {
 		return nil, ErrDenied
 	}
 	s := &Service{server: server, issuers: map[string]*issuer{}}

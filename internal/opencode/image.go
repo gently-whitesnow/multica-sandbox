@@ -46,6 +46,17 @@ echo "git $(command -v git)"`}
 // With cli, multica must resolve to the controller artifact built from the pinned revision;
 // with git, repository checkout requires the image's git.
 func CheckImage(output []byte, cli, git bool) error {
+	revision := ""
+	if cli {
+		revision = multica.UpstreamRevision
+	}
+	return CheckImageRevision(output, revision, git)
+}
+
+// CheckImageRevision is CheckImage for a CLI artifact built from revision, the
+// commit of the deployment's Multica server; an empty revision means no CLI.
+func CheckImageRevision(output []byte, revision string, git bool) error {
+	cli := revision != ""
 	var problems []string
 	version, path, build, gitPath := "", "", "", ""
 	for _, line := range strings.Split(string(output), "\n") {
@@ -68,8 +79,8 @@ func CheckImage(output []byte, cli, git bool) error {
 	if cli && path != multica.CLIDir+"/bin/multica" {
 		problems = append(problems, fmt.Sprintf("multica resolves to %.64q, not the controller artifact", path))
 	}
-	if cli && !strings.Contains(build, "(commit: "+multica.UpstreamRevision+",") {
-		problems = append(problems, fmt.Sprintf("multica artifact %.96q is not built from Multica %s", build, multica.UpstreamRevision))
+	if cli && !strings.Contains(build, "(commit: "+revision+",") {
+		problems = append(problems, fmt.Sprintf("multica artifact %.96q is not built from Multica %s", build, revision))
 	}
 	if git && !strings.HasPrefix(gitPath, "/") {
 		problems = append(problems, "git is not installed; repository checkout requires it in the image")

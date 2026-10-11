@@ -47,7 +47,7 @@ func (a *agentFleetAPI) Heartbeat(ctx context.Context, rt string) error {
 			if label == "" {
 				label = name
 			}
-			entry := multica.ModelEntry{ID: "managed-inference/" + name, Provider: "managed-inference", Label: label, Default: name == catalog.DefaultModel}
+			entry := multica.ModelEntry{ID: inference.ModelID(name, m), Provider: inference.Provider(m.WireAPI()), Label: label, Default: name == catalog.DefaultModel}
 			if m.Thinking != nil {
 				entry.Thinking = &multica.ModelThinking{DefaultLevel: m.Thinking.DefaultLevel}
 				for _, level := range m.Thinking.SupportedLevels {

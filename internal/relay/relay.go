@@ -66,7 +66,7 @@ type leaseKey struct{}
 var errRedirect = errors.New("upstream redirect refused")
 
 // dropped never leave the relay: caller credentials, sessions and forwarding hints.
-var dropped = []string{"Authorization", "Cookie", "Proxy-Authorization", "Forwarded", "X-Real-Ip", "X-Actor-Source", "X-User-Id", "X-User-Email"}
+var dropped = []string{"Authorization", "X-Api-Key", "Api-Key", "Cookie", "Proxy-Authorization", "Forwarded", "X-Real-Ip", "X-Actor-Source", "X-User-Id", "X-User-Email"}
 
 func New(auth Authorizer, p Policy) (*Relay, error) {
 	if auth == nil || p.Allow == nil || p.Limit <= 0 || p.HeaderTimeout < 0 {
@@ -92,7 +92,7 @@ func New(auth Authorizer, p Policy) (*Relay, error) {
 			lease := pr.In.Context().Value(leaseKey{}).(Lease)
 			pr.SetURL(lease.Origin)
 			if lease.Path != "" {
-				pr.Out.URL.Path, pr.Out.URL.RawPath = lease.Path, ""
+				pr.Out.URL.Path, pr.Out.URL.RawPath = lease.Origin.Path+lease.Path, ""
 			}
 			for _, name := range dropped {
 				pr.Out.Header.Del(name)

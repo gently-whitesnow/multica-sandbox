@@ -12,6 +12,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/gently-whitesnow/multica-sandbox/internal/baseurl"
 )
 
 const UpstreamRevision = "b4ca5b4a23e68b26292a680dca7689a952bb1cd5"
@@ -39,8 +41,9 @@ func NewAllowHTTP(base, token string) (*Client, error) { return newClient(base, 
 
 func newClient(base, token string, allowHTTP bool) (*Client, error) {
 	u, err := url.Parse(base)
-	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
-		return nil, fmt.Errorf("server must be an HTTP(S) origin without credentials, query or path")
+	// A base path (Multica behind a shared ingress prefix) is kept and API paths are joined below it.
+	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.Opaque != "" || !baseurl.Path(u) {
+		return nil, fmt.Errorf("server must be an HTTP(S) URL without credentials, query or unclean path")
 	}
 	ip := net.ParseIP(u.Hostname())
 	if u.Scheme != "https" && !(u.Scheme == "http" && (allowHTTP || ip != nil && ip.IsLoopback())) {
@@ -49,7 +52,7 @@ func newClient(base, token string, allowHTTP bool) (*Client, error) {
 	if strings.TrimSpace(token) == "" {
 		return nil, fmt.Errorf("controller token required")
 	}
-	return &Client{base: strings.TrimRight(base, "/"), token: token, http: &http.Client{
+	return &Client{base: baseurl.Join(u), token: token, http: &http.Client{
 		Timeout:       10 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}}, nil

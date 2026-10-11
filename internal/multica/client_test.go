@@ -13,9 +13,26 @@ import (
 const testID = "11111111-1111-4111-8111-111111111111"
 
 func TestRejectUnsafeOrigins(t *testing.T) {
-	for _, base := range []string{"http://example.com", "https://user:secret@example.com", "https://example.com/path", "https://example.com?token=secret", "file:///tmp/api"} {
+	for _, base := range []string{"http://example.com", "https://user:secret@example.com", "https://example.com/path/../api", "https://example.com/a%2Fb", "https://example.com//path", "https://example.com?token=secret", "file:///tmp/api"} {
 		if _, err := New(base, "token"); err == nil {
 			t.Errorf("accepted %s", base)
+		}
+	}
+}
+func TestServerBasePathPrefixesAPI(t *testing.T) {
+	paths := make(chan string, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { paths <- r.URL.Path }))
+	defer server.Close()
+	for _, base := range []string{server.URL + "/multica", server.URL + "/multica/"} {
+		api, err := NewAllowHTTP(base, "token")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = api.Heartbeat(context.Background(), testID); err != nil {
+			t.Fatal(err)
+		}
+		if got := <-paths; got != "/multica/api/daemon/heartbeat" {
+			t.Fatalf("%s: requested %s", base, got)
 		}
 	}
 }

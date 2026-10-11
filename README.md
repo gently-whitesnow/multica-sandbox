@@ -55,7 +55,7 @@ mkdir -p var
 cp deploy/controller.example.json var/controller.json
 ```
 
-Edit the server origin (HTTPS; `allow_http` is only for isolated fixtures) and a unique, stable daemon UUID.
+Edit the server URL (HTTPS; `allow_http` is only for isolated fixtures; a base path such as `https://example.com/multica` is kept) and a unique, stable daemon UUID.
 Set a preloaded image pinned by digest, an absolute executable/arguments and timeout.
 Place the Multica controller token in `var/multica-token` with restrictive permissions.
 Both files stay outside Git. The token is mounted only into the trusted controller.

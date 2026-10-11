@@ -2,10 +2,12 @@ package relay
 
 import (
 	"bufio"
+	"context"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -108,6 +110,32 @@ func TestTranslatesCredentialToGrantOrigin(t *testing.T) {
 	}
 }
 
+func TestGrantOriginBasePathPrefixesRequests(t *testing.T) {
+	f := newFixture(t, nil, Policy{})
+	opaque, err := f.grants.Issue("attempt-a", Upstream{Origin: f.origin + "/multica/", Credential: upstreamA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp, _ := f.do(t, http.MethodGet, "/api/issues/x?output=json", opaque, nil, nil); resp.StatusCode != 200 {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+	if got := <-f.seen; got.URL.Path != "/multica/api/issues/x" || got.URL.RawQuery != "output=json" {
+		t.Fatalf("base path not joined: %s", got.URL)
+	}
+	// Authorizers that rewrite the path stay below the base path too.
+	lease := Lease{Origin: &url.URL{Scheme: "http", Host: strings.TrimPrefix(f.origin, "http://"), Path: "/multica"}, Path: "/api/other", Context: context.Background(), Release: func() {}}
+	handler, _ := New(fixedLease{lease}, Policy{Allow: multica.RelayPath, Limit: 1024})
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/issues/x", nil))
+	if got := <-f.seen; rec.Code != 200 || got.URL.Path != "/multica/api/other" {
+		t.Fatalf("lease path not joined: %d %s", rec.Code, got.URL)
+	}
+}
+
+type fixedLease struct{ lease Lease }
+
+func (f fixedLease) Authorize(*http.Request) (Lease, bool) { return f.lease, true }
+
 func TestGrantSelectsOriginAndAttribution(t *testing.T) {
 	other := make(chan *http.Request, 4)
 	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { other <- r.Clone(r.Context()) }))
@@ -133,7 +161,7 @@ func TestGrantSelectsOriginAndAttribution(t *testing.T) {
 	if len(f.seen) != 0 {
 		t.Fatal("workspace credential reached another workspace's gateway")
 	}
-	for _, bad := range []Upstream{{Origin: "http://gateway.invalid/v1", Credential: "k"}, {Origin: "ftp://gateway.invalid", Credential: "k"}, {Origin: "http://u:p@gateway.invalid", Credential: "k"}, {Origin: f.origin, Credential: "k\r\nX: y"}, {Origin: f.origin, Credential: "k", Header: map[string]string{"X-A": "b\nc"}}} {
+	for _, bad := range []Upstream{{Origin: "http://gateway.invalid//v1", Credential: "k"}, {Origin: "http://gateway.invalid/a/../v1", Credential: "k"}, {Origin: "http://gateway.invalid/a%2Fb", Credential: "k"}, {Origin: "ftp://gateway.invalid", Credential: "k"}, {Origin: "http://u:p@gateway.invalid", Credential: "k"}, {Origin: f.origin, Credential: "k\r\nX: y"}, {Origin: f.origin, Credential: "k", Header: map[string]string{"X-A": "b\nc"}}} {
 		if _, err := f.grants.Issue("attempt-bad", bad); err == nil {
 			t.Fatalf("unsafe upstream accepted: %+v", bad.Origin)
 		}
@@ -327,5 +355,39 @@ func TestBoundGrantsNeedResolvedUpstream(t *testing.T) {
 		if got.URL.Path != "/upstream/repo.git/info/refs" || got.URL.RawQuery != "service=git-upload-pack" || got.Header.Get("Authorization") != "Basic dXNlcjpzZWNyZXQ=" {
 			t.Fatalf("resolved upstream not applied: %s %v", got.URL, got.Header)
 		}
+	}
+}
+
+func TestAPIKeyHeaderCarriesOpaqueCredential(t *testing.T) {
+	f := newFixture(t, nil, Policy{Allow: func(p string) bool { return p == "/v1/messages" }, Limit: 1024})
+	opaque, err := f.grants.Issue("attempt-a", Upstream{Origin: f.origin, Credential: "sk-workspace-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, _ := f.do(t, http.MethodPost, "/v1/messages", "", strings.NewReader(`{}`), map[string]string{"X-Api-Key": opaque, "Api-Key": "forged"})
+	got := <-f.seen
+	if resp.StatusCode != 200 || got.Header.Get("Authorization") != "Bearer sk-workspace-a" || got.Header.Get("X-Api-Key") != "" || got.Header.Get("Api-Key") != "" {
+		t.Fatalf("x-api-key not translated: %d %v", resp.StatusCode, got.Header)
+	}
+	if resp, _ = f.do(t, http.MethodPost, "/v1/messages", opaque, strings.NewReader(`{}`), map[string]string{"X-Api-Key": opaque}); resp.StatusCode != 200 {
+		t.Fatal("matching bearer and x-api-key denied")
+	}
+	<-f.seen
+	other, _ := f.grants.Issue("attempt-b", Upstream{Origin: f.origin, Credential: "sk-workspace-b"})
+	for name, header := range map[string]map[string]string{
+		"mismatch":     {"X-Api-Key": other},
+		"basic":        {"Authorization": "Basic " + opaque},
+		"wrong prefix": {"X-Api-Key": "sk-" + opaque},
+	} {
+		bearer := ""
+		if name == "mismatch" {
+			bearer = opaque
+		}
+		if resp, _ := f.do(t, http.MethodPost, "/v1/messages", bearer, strings.NewReader(`{}`), header); resp.StatusCode != 401 {
+			t.Fatalf("%s: status %d", name, resp.StatusCode)
+		}
+	}
+	if len(f.seen) != 0 {
+		t.Fatal("denied request forwarded")
 	}
 }
