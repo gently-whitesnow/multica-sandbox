@@ -17,6 +17,7 @@ type Service struct {
 	gateways map[string]bool
 	bindings map[Scope]Binding
 	catalogs map[Scope]Catalog
+	gateway  *gatewayCatalog
 	client   *http.Client
 }
 

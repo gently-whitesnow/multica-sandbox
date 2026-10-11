@@ -33,8 +33,10 @@ attempt files.
 At attempt start the adapter resolves the binding and issues one opaque
 `inf_relay_<64 hex>` credential. OpenCode's `managed-inference` provider gets
 `baseURL: <inference_relay.url>/v1` and that credential as `apiKey`; nothing
-rotates. The relay (`internal/relay`) forwards only `/v1/chat/completions` to the
-binding's gateway origin. It replaces `Authorization` with the key and streams SSE
+rotates. The relay (`internal/relay`) forwards only `/v1/chat/completions`,
+`/v1/responses`, `/v1/messages` and `/v1/messages/count_tokens` to the binding's
+gateway. It accepts the credential as a bearer token or `X-Api-Key` (Anthropic
+clients), removes both, sets `Authorization` to the key and streams SSE
 responses. It refuses redirects and bounds bodies and in-flight requests. Upstream
 error bodies are replaced by a fixed body with the same status. Cleanup or a
 controller restart revokes the grant and cancels in-flight streams.
@@ -48,24 +50,42 @@ hash. Callers cannot spoof it.
 ## Catalogs and selection
 
 Catalog data is advisory and runtime-scoped: static `catalogs` keyed by
-`workspace_id` or `catalog_external`. Entries include `default_model` and a model
+`workspace_id`, `catalog_external` or `gateway_catalog` (at most one). Entries include `default_model` and a model
 map with context/output preparation metadata, optional `thinking.supported_levels`
-(value/label pairs) and `default_level`. These are capabilities, not grants.
+(value/label pairs) and `default_level`, `api` (`chat` default, `responses`,
+`messages`) and advisory `cost` (USD per million: `input`, `output`, `cache_read`).
+These are capabilities, not grants.
+
+`gateway_catalog: {ttl, default_model}` reads LiteLLM `/v1/model/info` with each
+workspace's key, so the catalog is exactly what the key may use (up to 512 models).
+Anthropic models get `messages`, OpenAI models `responses`, others `chat`; non-chat
+modes are skipped. Limits, reasoning support and prices come from the gateway;
+deployment parameters are discarded. A catalog is reused for `ttl` (default 5m),
+and a failed refresh keeps the last good one.
+
+The model's `api` selects the OpenCode provider and picker prefix:
+`managed-inference/` (`@ai-sdk/openai-compatible`, chat), `inference-codex/`
+(`@ai-sdk/openai`, Responses) and `inference-claude/` (`@ai-sdk/anthropic`,
+Messages). Native APIs keep prompt caching and reasoning state between turns.
+Only the selected model is projected into `opencode.json`.
 Catalog sources receive `{version: 1, workspace: {server, workspace_id}}` and
 return the echoed `workspace` and `catalog`. A catalog outage does not deny an
 explicit selection or the binding.
 
 An explicit model is passed through even if it is absent from the catalog or the
-catalog lookup fails. A `managed-inference/` prefix is stripped; otherwise the name
-is the gateway alias verbatim. Unknown models use native OpenCode defaults. An
+catalog lookup fails. A known provider prefix is stripped and selects the API, so
+legacy `managed-inference/` selections stay on chat; otherwise the name is the
+gateway alias verbatim and the catalog entry selects the API. Unknown models use native OpenCode defaults. An
 omitted model requires a catalog default and fails visibly without a fallback.
-A safe explicit thinking token maps to a native variant with `reasoningEffort`.
+A safe explicit thinking token maps to a native variant with `reasoningEffort`;
+for Messages, `low`/`medium`/`high`/`max` map to extended-thinking budgets and other
+tokens are denied.
 Omission uses the selected model's advertised default, or sends no effort.
 
 Discovery reuses Multica heartbeat pending requests and model result reports in
 upstream's shape. The controller registers one runtime per workspace, so the
 workspace comes from the registered runtime. Entries use IDs
-`managed-inference/<gateway-model>`, labels, default and thinking options; upstream
+`<provider>/<gateway-model>`, labels, default and thinking options; upstream
 entries have no context/output. The gateway refuses ungranted models or exhausted
 budgets at task time. Multica shows the numeric HTTP status without substitution.
 

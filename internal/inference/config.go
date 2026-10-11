@@ -29,6 +29,17 @@ type Config struct {
 	External        *identity.ExternalConfig `json:"external,omitempty"`
 	Catalogs        []CatalogBinding         `json:"catalogs,omitempty"`
 	CatalogExternal *identity.ExternalConfig `json:"catalog_external,omitempty"`
+	// GatewayCatalog reads each workspace's catalog from its gateway with the workspace key.
+	GatewayCatalog *GatewayCatalog `json:"gateway_catalog,omitempty"`
+}
+
+// GatewayCatalog discovers models from LiteLLM's /v1/model/info: only the models the
+// workspace key may use, with their limits, reasoning support, prices and wire API.
+type GatewayCatalog struct {
+	// TTL bounds how long a discovered catalog is reused (default 5m, 10s to 24h).
+	TTL string `json:"ttl,omitempty"`
+	// DefaultModel is used by agents without a selection when the gateway offers it.
+	DefaultModel string `json:"default_model,omitempty"`
 }
 type Binding struct {
 	WorkspaceID string `json:"workspace_id"`
@@ -40,6 +51,15 @@ type Model struct {
 	Context  int       `json:"context"`
 	Output   int       `json:"output"`
 	Thinking *Thinking `json:"thinking,omitempty"`
+	// API is the wire API: chat (default), responses or messages.
+	API string `json:"api,omitempty"`
+	// Cost is advisory USD per million tokens, shown by OpenCode; budgets stay with the gateway.
+	Cost *Cost `json:"cost,omitempty"`
+}
+type Cost struct {
+	Input     float64 `json:"input"`
+	Output    float64 `json:"output"`
+	CacheRead float64 `json:"cache_read,omitempty"`
 }
 type Thinking struct {
 	SupportedLevels []ThinkingLevel `json:"supported_levels"`

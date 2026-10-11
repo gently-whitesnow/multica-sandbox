@@ -357,3 +357,37 @@ func TestBoundGrantsNeedResolvedUpstream(t *testing.T) {
 		}
 	}
 }
+
+func TestAPIKeyHeaderCarriesOpaqueCredential(t *testing.T) {
+	f := newFixture(t, nil, Policy{Allow: func(p string) bool { return p == "/v1/messages" }, Limit: 1024})
+	opaque, err := f.grants.Issue("attempt-a", Upstream{Origin: f.origin, Credential: "sk-workspace-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, _ := f.do(t, http.MethodPost, "/v1/messages", "", strings.NewReader(`{}`), map[string]string{"X-Api-Key": opaque, "Api-Key": "forged"})
+	got := <-f.seen
+	if resp.StatusCode != 200 || got.Header.Get("Authorization") != "Bearer sk-workspace-a" || got.Header.Get("X-Api-Key") != "" || got.Header.Get("Api-Key") != "" {
+		t.Fatalf("x-api-key not translated: %d %v", resp.StatusCode, got.Header)
+	}
+	if resp, _ = f.do(t, http.MethodPost, "/v1/messages", opaque, strings.NewReader(`{}`), map[string]string{"X-Api-Key": opaque}); resp.StatusCode != 200 {
+		t.Fatal("matching bearer and x-api-key denied")
+	}
+	<-f.seen
+	other, _ := f.grants.Issue("attempt-b", Upstream{Origin: f.origin, Credential: "sk-workspace-b"})
+	for name, header := range map[string]map[string]string{
+		"mismatch":     {"X-Api-Key": other},
+		"basic":        {"Authorization": "Basic " + opaque},
+		"wrong prefix": {"X-Api-Key": "sk-" + opaque},
+	} {
+		bearer := ""
+		if name == "mismatch" {
+			bearer = opaque
+		}
+		if resp, _ := f.do(t, http.MethodPost, "/v1/messages", bearer, strings.NewReader(`{}`), header); resp.StatusCode != 401 {
+			t.Fatalf("%s: status %d", name, resp.StatusCode)
+		}
+	}
+	if len(f.seen) != 0 {
+		t.Fatal("denied request forwarded")
+	}
+}

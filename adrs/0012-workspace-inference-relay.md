@@ -43,9 +43,12 @@ the grant before the agent process is joined, which cancels in-flight streams.
 A controller restart loses every grant and fails closed. A changed key applies to
 new attempts only.
 
-The inference relay forwards only `/v1/chat/completions` and waits up to the
+The inference relay forwards only `/v1/chat/completions`, `/v1/responses`,
+`/v1/messages` and `/v1/messages/count_tokens` and waits up to the
 adapter's 10-minute idle bound for response headers. It keeps SSE flushing and the
-shared body, in-flight and redirect limits. It replaces `Authorization` and removes
+shared body, in-flight and redirect limits. The opaque credential arrives as a bearer
+token or, from Anthropic clients, as `X-Api-Key`. It replaces `Authorization`, removes
+`X-Api-Key`/`Api-Key` and removes
 every caller `x-litellm-*` header. It strips
 `x-litellm-*` response headers, which carry spend and provider details. Upstream
 error bodies are replaced by a fixed JSON body with the same status, so key
@@ -63,7 +66,14 @@ logs), next to the workspace key hash. Callers cannot spoof it.
 Model selection is unchanged from #30/#34: trusted claim `agent.model` /
 `agent.thinking_level` map to the native model and `reasoningEffort` variant.
 Catalogs stay advisory and workspace-scoped (`catalogs[].workspace_id`), so the
-Multica picker lists what the workspace key may use. The gateway refuses ungranted
+Multica picker lists what the workspace key may use. Native APIs keep provider
+prompt caching and reasoning state between turns, which chat completions lose:
+a model's `api` (`chat`, `responses`, `messages`) selects the OpenCode provider
+(`managed-inference` with `@ai-sdk/openai-compatible`, `inference-codex` with
+`@ai-sdk/openai`, `inference-claude` with `@ai-sdk/anthropic`) and so the picker ID
+prefix. Only the selected model is projected. `gateway_catalog` reads LiteLLM
+`/v1/model/info` with the workspace key (Anthropic models use Messages, OpenAI
+models Responses) and caches it for a TTL. The gateway refuses ungranted
 models or exhausted budgets. Multica shows the numeric status without model
 substitution.
 
