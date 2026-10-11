@@ -3,6 +3,7 @@ package multica
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/gently-whitesnow/multica-sandbox/internal/execution"
 	"net/http"
@@ -111,6 +112,32 @@ func TestUnsupportedRuntimeRequestsAreAnswered(t *testing.T) {
 	}
 	if len(reports) != 5 {
 		t.Fatalf("duplicate or missing reports: %v", reports)
+	}
+}
+
+// A failed answer never fails the heartbeat itself: the runtime stays live and the other
+// requests are still answered.
+func TestUnansweredRequestsKeepTheHeartbeat(t *testing.T) {
+	answered := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/daemon/heartbeat":
+			_, _ = w.Write([]byte(`{"pending_update":{"id":""},"pending_model_list":{"id":"m1"},"pending_local_skills":{"id":"s1"}}`))
+		case strings.Contains(r.URL.Path, "/models/"):
+			w.WriteHeader(http.StatusNotFound)
+		default:
+			answered++
+		}
+	}))
+	defer server.Close()
+	c, err := New(server.URL, "fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = c.Heartbeat(context.Background(), testID)
+	var unanswered *UnansweredError
+	if !errors.As(err, &unanswered) || !strings.Contains(err.Error(), "invalid update request ID") || !Missing(err) || answered != 1 {
+		t.Fatalf("error=%v answered=%d", err, answered)
 	}
 }
 

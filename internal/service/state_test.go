@@ -57,16 +57,22 @@ func TestConfigCapacity(t *testing.T) {
 		t.Fatal(err)
 	}
 	c, err := ReadConfig(path)
-	if err != nil || c.Concurrency != 1 {
+	if err != nil || c.Concurrency != DefaultConcurrency || c.WorkspaceConcurrency != 0 {
 		t.Fatalf("default fleet capacity: %+v %v", c, err)
 	}
-	for _, extra := range []string{`,"workspace":"10000000-0000-4000-8000-000000000001"}`, `,"workspaces":"all-accessible"}`, `,"concurrency":33}`, `,"concurrency":-1}`} {
+	for _, extra := range []string{`,"workspace":"10000000-0000-4000-8000-000000000001"}`, `,"workspaces":"all-accessible"}`, `,"concurrency":65}`, `,"concurrency":-1}`, `,"workspace_concurrency":-1}`, `,"workspace_concurrency":65}`} {
 		if err := os.WriteFile(path, []byte(valid[:len(valid)-1]+extra), 0600); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := ReadConfig(path); err == nil {
 			t.Fatal("invalid scope/capacity accepted")
 		}
+	}
+	if err := os.WriteFile(path, []byte(valid[:len(valid)-1]+`,"concurrency":64,"workspace_concurrency":3}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if c, err := ReadConfig(path); err != nil || c.Concurrency != 64 || c.WorkspaceConcurrency != 3 {
+		t.Fatalf("configured capacity: %+v %v", c, err)
 	}
 }
 

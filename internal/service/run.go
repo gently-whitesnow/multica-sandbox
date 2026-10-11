@@ -25,10 +25,10 @@ import (
 
 func Run(ctx context.Context, c Config, stateDir, tokenPath string, out io.Writer) error {
 	if c.Concurrency == 0 {
-		c.Concurrency = 1
+		c.Concurrency = DefaultConcurrency
 	}
-	if c.Concurrency < 1 || c.Concurrency > 32 {
-		return fmt.Errorf("concurrency must be in [1,32]")
+	if c.Concurrency < 1 || c.Concurrency > MaxConcurrency || c.WorkspaceConcurrency < 0 || c.WorkspaceConcurrency > MaxConcurrency {
+		return fmt.Errorf("concurrency must be in [1,64] and workspace_concurrency in [0,64]")
 	}
 	if !filepath.IsAbs(stateDir) {
 		return fmt.Errorf("absolute state directory required")

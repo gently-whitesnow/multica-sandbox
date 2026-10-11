@@ -79,6 +79,20 @@ protocol and cleanup uncertainty stop the entire controller.
 Revocation is eventually observed, not instantaneous. Active tasks also check
 server status every second; upstream membership caches can delay rejection.
 
+Refinement (2026-10-11). One attempt per workspace serialized a team's tasks,
+while the upstream daemon runs up to 20 at once and the server enforces each
+agent's `max_concurrent_tasks` at claim. Attempts are now keyed by their dispatch
+fence: `concurrency` (default 10, 1–64) bounds the controller and the optional
+`workspace_concurrency` (default 0, none) a workspace. Claim rounds still take one
+task per workspace; a poll keeps starting rounds while any claim succeeded, so a
+busy workspace drains its queue without starving peers. The per-agent limit stays
+server-side. Membership loss cancels every attempt of that workspace.
+
+Attempts no longer heartbeat; the runtime's 15-second heartbeat (the upstream
+default) alone answers pending requests and logs failed answers. HTTP 403/404
+there removes the runtime; on a task call, such as a task deleted before start,
+only that attempt ends.
+
 Startup removes all containers labeled with the persisted daemon identity before
 any claims, including executions whose workspace is no longer accessible. The
 runtime registry retains removed workspace mappings. Server task recovery waits

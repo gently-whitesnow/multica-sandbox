@@ -41,7 +41,7 @@ func (f *fleet) sync(ctx context.Context) error {
 			return err
 		}
 		// Never recover while a cancelled attempt from this workspace is still cleaning up.
-		if old := f.known[ws.ID]; f.active[old] != nil {
+		if old := f.known[ws.ID]; f.perRuntime[old] > 0 {
 			continue
 		}
 		f.known[ws.ID] = rt.ID
@@ -65,15 +65,25 @@ func (f *fleet) sync(ctx context.Context) error {
 func (f *fleet) remove(ws, rt string) {
 	delete(f.ready, ws)
 	delete(f.served, rt)
-	if cancel := f.active[rt]; cancel != nil {
-		cancel()
+	// Every attempt of the runtime ends; slots are released as they complete.
+	for _, attempt := range f.active {
+		if attempt.runtime == rt {
+			attempt.cancel()
+		}
 	}
 	fmt.Fprintf(f.out, "removed workspace=%s runtime=%s\n", ws, rt)
 }
 
+// beat is the only heartbeat of fleet runtimes and answers their pending requests;
+// attempts do not heartbeat (controller.Probe.Execute).
 func (f *fleet) beat(ctx context.Context) error {
 	for ws, rt := range f.ready {
 		err := f.api.Heartbeat(ctx, rt)
+		var unanswered *multica.UnansweredError
+		if errors.As(err, &unanswered) {
+			fmt.Fprintf(f.out, "runtime=%s %v\n", rt, err)
+			continue
+		}
 		if inaccessible(err) {
 			f.remove(ws, rt)
 			continue

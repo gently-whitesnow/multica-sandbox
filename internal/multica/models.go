@@ -30,9 +30,17 @@ type ThinkingLevel struct {
 // Heartbeat sends a liveness heartbeat and answers the runtime-scoped requests upstream
 // queues on it, like the upstream daemon: the model list from discover (nil: none), and
 // runtime updates and local skills as unsupported, so the UI never waits for a timeout.
+// Only one heartbeat per runtime should answer, or requests are answered twice.
 func (c *Client) Heartbeat(ctx context.Context, runtime string) error {
 	return c.HeartbeatModels(ctx, runtime, nil)
 }
+
+// UnansweredError reports requests a successful heartbeat could not answer. Upstream
+// times them out like requests of an offline daemon; the runtime stays live.
+type UnansweredError struct{ Err error }
+
+func (e *UnansweredError) Error() string { return "runtime requests unanswered: " + e.Err.Error() }
+func (e *UnansweredError) Unwrap() error { return e.Err }
 
 type pendingRequest struct {
 	ID string `json:"id"`
@@ -66,6 +74,7 @@ func (c *Client) HeartbeatModels(ctx context.Context, runtime string, discover f
 		body map[string]any
 	}
 	var reports []result
+	var unanswered error
 	if out.Models != nil {
 		report := map[string]any{"status": "failed", "error": "Inference model catalog unavailable"}
 		if discover != nil {
@@ -92,12 +101,15 @@ func (c *Client) HeartbeatModels(ctx context.Context, runtime string, discover f
 	}
 	for _, r := range reports {
 		if r.id == "" || len(r.id) > 128 {
-			err = errors.Join(err, fmt.Errorf("invalid %s request ID", r.path))
+			unanswered = errors.Join(unanswered, fmt.Errorf("invalid %s request ID", r.path))
 			continue
 		}
-		err = errors.Join(err, c.call(ctx, http.MethodPost, "/api/daemon/runtimes/"+runtime+"/"+r.path+"/"+url.PathEscape(r.id)+"/result", r.body, nil))
+		unanswered = errors.Join(unanswered, c.call(ctx, http.MethodPost, "/api/daemon/runtimes/"+runtime+"/"+r.path+"/"+url.PathEscape(r.id)+"/result", r.body, nil))
 	}
-	return err
+	if unanswered != nil {
+		return &UnansweredError{unanswered}
+	}
+	return nil
 }
 
 func deref(p *pendingRequest) []pendingRequest {

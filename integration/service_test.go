@@ -40,7 +40,8 @@ func dockerTest(t *testing.T, args ...string) string {
 }
 func prepareService(t *testing.T) serviceFixture {
 	t.Helper()
-	c := service.Config{Server: "http://127.0.0.1:8080", Daemon: daemon, Image: image, Command: []string{"/bin/sh", "-c", "sleep 3"}, Timeout: "30s"}
+	// One slot keeps the two tasks of the runtime sequential, so each environment is observed.
+	c := service.Config{Server: "http://127.0.0.1:8080", Concurrency: 1, Daemon: daemon, Image: image, Command: []string{"/bin/sh", "-c", "sleep 3"}, Timeout: "30s"}
 	return prepareServiceConfig(t, c)
 }
 func prepareServiceConfig(t *testing.T, c service.Config) serviceFixture {
