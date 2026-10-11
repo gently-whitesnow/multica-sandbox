@@ -30,12 +30,12 @@ func TestClaimTokenNeverFormats(t *testing.T) {
 }
 
 func TestRelayPathDeniesCredentialSurfaces(t *testing.T) {
-	for _, path := range []string{"/api/tokens", "/api/tokens/current/renew", "/api/daemon/tasks/claim", "/api/cli-token", "/api/auth/send-code", "/ws", "/health", "/api/integrations/composio/connect"} {
+	for _, path := range []string{"/api/tokens", "/api/tokens/current/renew", "/api/daemon/tasks/claim", "/api/cli-token", "/api/auth/send-code", "/ws", "/health", "/api/integrations/composio/connect", "/api/workspaces/joinable", "/api/workspaces/x/join", "/api/workspaces/x/leave"} {
 		if RelayPath(path) {
 			t.Fatalf("%s admitted", path)
 		}
 	}
-	for _, path := range []string{"/api/issues/x", "/api/issues/x/comments", "/api/upload-file", "/api/tokensx"} {
+	for _, path := range []string{"/api/issues/x", "/api/issues/x/comments", "/api/upload-file", "/api/tokensx", "/api/workspaces/x", "/api/workspaces/x/members", "/api/workspaces/x/join/x"} {
 		if !RelayPath(path) {
 			t.Fatalf("%s denied", path)
 		}
