@@ -59,17 +59,29 @@ func newClient(base, token string, allowHTTP bool) (*Client, error) {
 }
 
 func (c *Client) call(ctx context.Context, method, path string, body, out any) error {
+	data, err := c.send(ctx, method, path, body, out != nil)
+	if err != nil || out == nil {
+		return err
+	}
+	if err = json.Unmarshal(data, out); err != nil {
+		return fmt.Errorf("invalid Multica response")
+	}
+	return nil
+}
+
+// send returns the bounded response body when read is set.
+func (c *Client) send(ctx context.Context, method, path string, body any, read bool) ([]byte, error) {
 	var reader io.Reader
 	if body != nil {
 		data, err := json.Marshal(body)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		reader = bytes.NewReader(data)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, c.base+path, reader)
 	if err != nil {
-		return fmt.Errorf("invalid request")
+		return nil, fmt.Errorf("invalid request")
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Content-Type", "application/json")
@@ -79,29 +91,28 @@ func (c *Client) call(ctx context.Context, method, path string, body, out any) e
 	resp, err := c.http.Do(req)
 	if err != nil {
 		if ctx.Err() != nil {
-			return ctx.Err()
+			return nil, ctx.Err()
 		}
-		return errTransport
+		return nil, errTransport
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return &HTTPError{resp.StatusCode}
+		return nil, &HTTPError{resp.StatusCode}
 	}
-	if out == nil {
-		return nil
+	if !read {
+		return nil, nil
 	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20+1))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, responseLimit+1))
 	if err != nil {
-		return fmt.Errorf("read Multica response")
+		return nil, fmt.Errorf("read Multica response")
 	}
-	if len(data) > 2<<20 {
-		return fmt.Errorf("Multica response exceeds limit")
+	if len(data) > responseLimit {
+		return nil, fmt.Errorf("Multica response exceeds limit")
 	}
-	if err = json.Unmarshal(data, out); err != nil {
-		return fmt.Errorf("invalid Multica response")
-	}
-	return nil
+	return data, nil
 }
+
+const responseLimit = 2 << 20
 
 func validID(id string) bool {
 	if len(id) != 36 {
