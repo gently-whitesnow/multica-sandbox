@@ -72,20 +72,37 @@ func (g *Relay) Issue(attempt, workspace string, urls []string) (map[string]stri
 		config = append(config, [2]string{"http." + alias + ".extraHeader", "Authorization: Bearer " + opaque},
 			[2]string{"http." + alias + ".proxy", g.URL}, [2]string{"url." + alias + ".insteadOf", "https://" + host + "/"})
 		if !strings.Contains(host, ":") {
-			config = append(config, [2]string{"url." + alias + ".insteadOf", "git@" + host + ":"})
+			config = append(config, [2]string{"url." + alias + ".insteadOf", "git@" + host + ":"}, [2]string{"url." + alias + ".insteadOf", "ssh://git@" + host + "/"})
 		}
 	}
-	if apis := g.hosts.apiHosts(workspace); g.ca != nil && len(apis) > 0 {
-		env["GH_TOKEN"], env["GH_ENTERPRISE_TOKEN"], env["GH_PROMPT_DISABLED"], env["GH_NO_UPDATE_NOTIFIER"], env["SSL_CERT_DIR"] = opaque, opaque, "1", "1", CertDir
-		if len(apis) == 1 {
-			env["GH_HOST"] = apis[0]
-		}
+	if g.ca != nil {
+		forgeEnv(env, opaque, g.hosts.apiHosts(workspace, GitHub), g.hosts.apiHosts(workspace, GitLab))
 	}
 	env["GIT_CONFIG_COUNT"] = strconv.Itoa(len(config))
 	for i, entry := range config {
 		env["GIT_CONFIG_KEY_"+strconv.Itoa(i)], env["GIT_CONFIG_VALUE_"+strconv.Itoa(i)] = entry[0], entry[1]
 	}
 	return env, nil
+}
+
+// forgeEnv points the unchanged gh and glab at the forge relay with the opaque credential,
+// without prompts, update checks or telemetry; a single host of a kind is the default.
+func forgeEnv(env map[string]string, opaque string, github, gitlab []string) {
+	if len(github)+len(gitlab) > 0 {
+		env["SSL_CERT_DIR"] = CertDir
+	}
+	if len(github) > 0 {
+		env["GH_TOKEN"], env["GH_ENTERPRISE_TOKEN"], env["GH_PROMPT_DISABLED"], env["GH_NO_UPDATE_NOTIFIER"] = opaque, opaque, "1", "1"
+		if len(github) == 1 {
+			env["GH_HOST"] = github[0]
+		}
+	}
+	if len(gitlab) > 0 {
+		env["GITLAB_TOKEN"], env["GLAB_NO_PROMPT"], env["GLAB_CHECK_UPDATE"], env["GLAB_SEND_TELEMETRY"] = opaque, "true", "false", "false"
+		if len(gitlab) == 1 {
+			env["GITLAB_HOST"] = gitlab[0]
+		}
+	}
 }
 
 // Revoke ends the attempt's access and cancels its in-flight requests.

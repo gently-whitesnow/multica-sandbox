@@ -238,7 +238,7 @@ func optionalDuration(value string, fallback time.Duration) (time.Duration, erro
 	return d, err
 }
 
-// serveForge serves gh calls for the API names of Git hosts on TLS (ADR 0015); attempts
+// serveForge serves gh and glab calls for the API names of Git hosts on TLS (ADR 0015); attempts
 // resolve those names to loopback, where the helper forwards to the forge relay.
 func serveForge(ctx context.Context, c *RelayConfig, git *repo.Relay, hosts *repo.Hosts, workloads *docker.Projected) error {
 	if c == nil {
@@ -255,7 +255,7 @@ func serveForge(ctx context.Context, c *RelayConfig, git *repo.Relay, hosts *rep
 		return err
 	}
 	workloads.ForgeHosts = hosts.APINames()
-	return serveRelay(ctx, "forge", forge, *c, relay.Policy{Allow: repo.ForgePath}, nil, forge.TLSConfig())
+	return serveRelay(ctx, "forge", forge, *c, relay.Policy{Allow: repo.ForgePath, EncodedSlash: true}, nil, forge.TLSConfig())
 }
 
 func (a *agentFleetAPI) Message(ctx context.Context, id string) error { return a.AgentMessage(ctx, id) }

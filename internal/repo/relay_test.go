@@ -76,7 +76,7 @@ func TestGitRelayServesOnlyClaimRepositories(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(strings.Join(values(env), " "), "host-secret") || env["GIT_CONFIG_COUNT"] != "4" {
+	if strings.Contains(strings.Join(values(env), " "), "host-secret") || env["GIT_CONFIG_COUNT"] != "5" {
 		t.Fatalf("unexpected attempt Git environment: %v", env)
 	}
 	work := filepath.Join(t.TempDir(), "c")
@@ -100,6 +100,12 @@ func TestGitRelayServesOnlyClaimRepositories(t *testing.T) {
 	// The repository path has no .git suffix on disk lookups: the fixture is fixture.git.
 	if err := attempt("clone", "-q", "https://git.example.test/fixture.git", work); err != nil {
 		t.Fatal("claim repository clone failed:", err)
+	}
+	// SSH remote forms of claim repositories go through the relay as well.
+	for _, url := range []string{"git@git.example.test:fixture.git", "ssh://git@git.example.test/fixture.git"} {
+		if err := clone(url); err != nil {
+			t.Fatalf("%s not rewritten to the relay: %v", url, err)
+		}
 	}
 	// origin keeps its URL; gh reads the alias from git remote, still on the forge host.
 	stored, _ := run("-C", work, "config", "remote.origin.url")
