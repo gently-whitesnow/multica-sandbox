@@ -58,6 +58,37 @@ func TestInferenceTaskCanHaveNoMCP(t *testing.T) {
 	}
 }
 
+func TestOmittedMCPConfigSelectsNone(t *testing.T) {
+	for _, config := range []json.RawMessage{nil, json.RawMessage(``), json.RawMessage(`null`), json.RawMessage(" null\n")} {
+		task := safeTask()
+		task.Agent.MCPConfig = config
+		selected, err := Select(task)
+		if err != nil || selected == nil || len(selected) != 0 {
+			t.Fatalf("omitted mcp_config %q: %v", config, err)
+		}
+	}
+	// Only the whole document may be absent: a null server map or entry stays malformed.
+	for _, config := range []string{`{"mcpServers":{"x":null}}`, `nul`, `[]`} {
+		task := safeTask()
+		task.Agent.MCPConfig = json.RawMessage(config)
+		if _, err := Select(task); err == nil {
+			t.Fatalf("malformed mcp_config %q accepted", config)
+		}
+	}
+}
+
+func TestOmittedMCPConfigClaimDecodes(t *testing.T) {
+	// The server drops the field entirely (omitempty) for agents without MCP.
+	var task multica.Task
+	claim := `{"id":"40000000-0000-4000-8000-000000000001","runtime_id":"50000000-0000-4000-8000-000000000001","dispatched_at":"2026-10-05T12:00:00Z","start_claim_supported":true,"workspace_id":"10000000-0000-4000-8000-000000000001","agent_id":"20000000-0000-4000-8000-000000000001","agent":{"id":"20000000-0000-4000-8000-000000000001","name":"No MCP","instructions":""}}`
+	if err := json.Unmarshal([]byte(claim), &task); err != nil {
+		t.Fatal(err)
+	}
+	if selected, err := Select(task); err != nil || len(selected) != 0 {
+		t.Fatalf("claim without mcp_config denied: %v", err)
+	}
+}
+
 func TestPromptProjectsOnlySafeSourceReferences(t *testing.T) {
 	task := safeTask()
 	task.ChatMessage = "chat instruction"

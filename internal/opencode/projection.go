@@ -42,6 +42,10 @@ func Select(t multica.Task) (map[string]Remote, error) {
 	if !t.ValidAttempt() || len(t.RemoteMCPConnections) != 0 || len(t.Agent.MCPConfig) > 65536 {
 		return nil, ErrDenied
 	}
+	// Multica omits mcp_config for agents without MCP; an absent or null document selects none.
+	if raw := bytes.TrimSpace(t.Agent.MCPConfig); len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+		return map[string]Remote{}, nil
+	}
 	var document struct {
 		Servers map[string]Connection `json:"mcpServers"`
 	}
