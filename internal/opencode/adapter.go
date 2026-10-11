@@ -154,6 +154,10 @@ func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, 
 	r.workload, err = a.Workloads.Start(runCtx, task.AttemptKey(), workdir)
 	if err != nil {
 		cancel()
+		// A backend refusal left no resources: the task fails, the controller keeps serving.
+		if rejected := (*execution.RejectedError)(nil); errors.As(err, &rejected) {
+			return nil, r.reject(rejected.Err)
+		}
 		return nil, errors.Join(err, r.Remove(context.Background()))
 	}
 	// Like upstream, the prior session resumes only in the workdir it was recorded with.

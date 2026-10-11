@@ -66,7 +66,7 @@ docker compose up -d --build
 docker compose logs -f controller
 ```
 
-One controller serves all accessible workspaces with a shared `concurrency` limit (default 10, maximum 64) and an optional `workspace_concurrency` cap (default 0: none). Every attempt gets a fresh non-root,
+One controller serves all accessible workspaces with a shared `concurrency` limit (default 10, maximum 64) and an optional `workspace_concurrency` cap (default 0: none); each attempt takes one Docker network, so Docker `default-address-pools` must hold `concurrency` more subnets (for example base `10.200.0.0/16`, size 24). Every attempt gets a fresh non-root,
 networkless container with configurable resource bounds and temporary storage. Custom images
 need no inheritance; image-declared volumes are rejected. No service tokens or
 host mounts enter execution. Workload output/files are discarded; completion is a

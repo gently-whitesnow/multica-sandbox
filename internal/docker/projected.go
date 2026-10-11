@@ -362,7 +362,7 @@ func removeNetwork(ctx context.Context, name string, peers []string) error {
 }
 
 func (b *Projected) isolate(ctx context.Context, name string) (string, error) {
-	if _, err := command(ctx, "network", "create", "--internal", "--label", ownerLabel+"="+b.Owner, name); err != nil {
+	if err := createNetwork(ctx, b.Owner, name); err != nil {
 		return "", err
 	}
 	connected := []string{}
@@ -390,6 +390,32 @@ func (b *Projected) isolate(ctx context.Context, name string) (string, error) {
 		connected = append(connected, peer)
 	}
 	return name, nil
+}
+
+// createNetwork creates an attempt network. When the daemon refuses it, the task is
+// rejected instead of stopping the controller, after a best-effort removal in case a
+// partial network exists (Reconcile removes what remains); exhausted address pools are
+// named for the operator. Timeouts stay uncertain and fatal.
+func createNetwork(ctx context.Context, owner, name string) error {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "docker", "network", "create", "--internal", "--label", ownerLabel+"="+owner, name)
+	var stderr cappedOutput
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	var exit *exec.ExitError
+	switch {
+	case err == nil:
+		return nil
+	case ctx.Err() != nil || !errors.As(err, &exit):
+		return fmt.Errorf("docker network failed: %w", err)
+	}
+	_ = removeNetwork(ctx, name, nil)
+	switch {
+	case strings.Contains(stderr.String(), "address pools have been fully subnetted"):
+		return &execution.RejectedError{Err: errors.New("Docker address pools are exhausted: raise default-address-pools or lower concurrency")}
+	}
+	return &execution.RejectedError{Err: errors.New("Docker refused the attempt network")}
 }
 
 // reconcileVolumes removes owned per-attempt workdir volumes, which all belong to

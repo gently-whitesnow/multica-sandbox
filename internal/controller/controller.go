@@ -97,6 +97,7 @@ func (p *Probe) execute(ctx context.Context, t multica.Task, ticks <-chan time.T
 	if err != nil {
 		var rejected *execution.RejectedError
 		if errors.As(err, &rejected) {
+			p.observe("rejected ("+rejected.Error()+")", t.ID)
 			return p.finish(ctx, t.ID, err, func() error { return nil }, func() execution.Result { return execution.Result{Disposable: p.Launch != nil} })
 		}
 		return err

@@ -2,10 +2,13 @@ package docker
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/gently-whitesnow/multica-sandbox/internal/execution"
 )
 
 func TestUncertainCreateCleanup(t *testing.T) {
@@ -73,6 +76,36 @@ esac
 		err := b.Validate(context.Background())
 		if (want == "") != (err == nil) || (err != nil && !strings.Contains(err.Error(), want)) {
 			t.Fatalf("%s: got %v, want %q", image, err, want)
+		}
+	}
+}
+
+// A refused network leaves the task rejected and removes whatever the daemon kept.
+func TestRefusedNetworkIsRejectedAndRemoved(t *testing.T) {
+	for stderr, want := range map[string]string{
+		"all predefined address pools have been fully subnetted": "address pools are exhausted",
+		"plugin failed": "refused the attempt network",
+	} {
+		dir := t.TempDir()
+		t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+		t.Setenv("DOCKER_TEST_EVENTS", filepath.Join(dir, "events"))
+		t.Setenv("DOCKER_TEST_STDERR", stderr)
+		script := `#!/bin/sh
+printf '%s\n' "$*" >> "$DOCKER_TEST_EVENTS"
+case "$2" in
+create) printf '%s\n' "$DOCKER_TEST_STDERR" >&2; exit 1 ;;
+rm) exit 1 ;;
+esac
+exit 2
+`
+		if err := os.WriteFile(filepath.Join(dir, "docker"), []byte(script), 0700); err != nil {
+			t.Fatal(err)
+		}
+		err := createNetwork(context.Background(), "owner", "multica-sandbox-a-net")
+		var rejected *execution.RejectedError
+		events, _ := os.ReadFile(filepath.Join(dir, "events"))
+		if !errors.As(err, &rejected) || !strings.Contains(err.Error(), want) || !strings.HasSuffix(string(events), "network rm multica-sandbox-a-net\n") {
+			t.Fatalf("%v; events %q", err, events)
 		}
 	}
 }

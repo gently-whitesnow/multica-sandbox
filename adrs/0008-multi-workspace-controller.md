@@ -86,7 +86,10 @@ fence: `concurrency` (default 10, 1–64) bounds the controller and the optional
 `workspace_concurrency` (default 0, none) a workspace. Claim rounds still take one
 task per workspace; a poll keeps starting rounds while any claim succeeded, so a
 busy workspace drains its queue without starving peers. The per-agent limit stays
-server-side. Membership loss cancels every attempt of that workspace.
+server-side. Membership loss cancels every attempt of that workspace. Each
+attempt network takes a subnet from Docker's address pools; when the daemon
+refuses one, only that task fails (`environment_prepare_failed`) and the
+controller keeps serving after removing the network best-effort.
 
 Attempts no longer heartbeat; the runtime's 15-second heartbeat (the upstream
 default) alone answers pending requests and logs failed answers. HTTP 403/404
