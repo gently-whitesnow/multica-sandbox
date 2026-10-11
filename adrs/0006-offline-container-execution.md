@@ -50,6 +50,14 @@ capabilities, seccomp, no-new-privileges, limits and network policy. `/workspace
 is therefore explicitly `exec,nosuid,nodev`; `/tmp` stays `noexec`. The policy
 check and a containers test pin both.
 
+Refinement (2026-10-11). Fixed limits stopped real builds, and `TMPDIR` on the
+`noexec` `/tmp` broke `go test`. OpenCode attempts take `opencode.resources`
+(CPUs, memory, processes, `nofile`, workspace, `/tmp` and shared-memory sizes;
+defaults 2 CPUs, 4 GiB, 1024, 4096, 1 GiB, 256 MiB, 64 MiB), swap stays equal to
+memory, and inspection must match the configuration exactly. `TMPDIR` is
+`/workspace/tmp`, as upstream points it at the task directory. The upstream
+daemon sets no limits; the probe backend keeps the fixed ones above.
+
 Use deterministic names from daemon identity, task and dispatch fence; label
 containers by their trusted controller owner. Before registration or Multica
 orphan recovery, remove all owned containers. Abort recovery on cleanup errors.

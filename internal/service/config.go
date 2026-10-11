@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gently-whitesnow/multica-sandbox/internal/attempt"
+	"github.com/gently-whitesnow/multica-sandbox/internal/docker"
 )
 
 type Config struct {
@@ -89,6 +90,8 @@ type OpenCodeConfig struct {
 	EnvAllow []string `json:"env_allow,omitempty"`
 	// IdleWatchdog fails runs without OpenCode events for this long (default 10m).
 	IdleWatchdog string `json:"idle_watchdog,omitempty"`
+	// Resources bound every attempt container (docker.DefaultResources when unset).
+	Resources *docker.ResourceSpec `json:"resources,omitempty"`
 }
 
 // SessionsConfig bounds retained workdirs: TTL after last use and a session count.

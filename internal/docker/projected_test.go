@@ -29,7 +29,8 @@ func TestProjectedAttemptIsolation(t *testing.T) {
 	invoke("network", "create", "--internal", template)
 	invoke("run", "-d", "--name", peer, "--network", template, "--network-alias", "gateway", testImage, "sleep", "600")
 	backend := &Projected{Backend: Backend{Image: testImage, Owner: owner, Command: []string{"/bin/sh"}}, Network: template, Peers: []string{peer},
-		Bundles: []Bundle{{Image: cliBundle(t, pinnedCLI), Target: "/opt/multica-sandbox/multica"}}}
+		Bundles:   []Bundle{{Image: cliBundle(t, pinnedCLI), Target: "/opt/multica-sandbox/multica"}},
+		Resources: Resources{NanoCPUs: 15e8, Memory: 512 << 20, Pids: 128, NoFile: 1024, Workspace: 128 << 20, Tmp: 32 << 20, Shm: 16 << 20}}
 	t.Cleanup(func() {
 		_ = backend.Reconcile(context.Background())
 		_, _ = command(context.Background(), "rm", "-fv", peer)
@@ -56,6 +57,13 @@ func TestProjectedAttemptIsolation(t *testing.T) {
 	// A hostile attempt resolves only approved peer aliases: no route, external DNS or IPv6 egress.
 	if err := b.Execute(ctx, []string{"/bin/sh", "-c", `set -e; nslookup gateway >/dev/null; ! ip route | grep -q default; ! ip -6 route | grep -q default; ! timeout 2 nslookup example.com; ! wget -T 1 -q -O /tmp/leak http://[2606:4700:4700::1111]/`}); err != nil {
 		t.Fatal("attempt network allows egress beyond approved peers:", err)
+	}
+	// Configured limits apply; TMPDIR is executable while /tmp stays noexec.
+	if err := b.Execute(ctx, []string{"/bin/sh", "-c", `set -e; test "$(cat /sys/fs/cgroup/pids.max)" = 128; test "$(cat /sys/fs/cgroup/memory.max)" = 536870912
+test "$(cat /sys/fs/cgroup/cpu.max)" = "150000 100000"; test "$(ulimit -n)" = 1024; test "$TMPDIR" = /workspace/tmp
+printf '#!/bin/sh\necho ok\n' > "$TMPDIR/run"; chmod +x "$TMPDIR/run"; test "$("$TMPDIR/run")" = ok
+cp "$TMPDIR/run" /tmp/run; ! /tmp/run; df -k /workspace | awk 'NR==2 { exit !($2 == 131072) }'; df -k /dev/shm | awk 'NR==2 { exit !($2 == 16384) }'`}); err != nil {
+		t.Fatal("configured resources or executable TMPDIR not applied:", err)
 	}
 	rA, rB := a.(*projectedRun), b.(*projectedRun)
 	if rA.network == rB.network {

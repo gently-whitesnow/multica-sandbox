@@ -103,7 +103,11 @@ func openCodeAdapter(ctx context.Context, c Config, stateDir string, api *multic
 	if err = opencode.ValidEnvAllow(c.OpenCode.EnvAllow); err != nil {
 		return nil, err
 	}
-	workloads := &docker.Projected{Backend: *backend, Network: c.OpenCode.Network, Peers: c.OpenCode.Peers, Helper: c.OpenCode.Helper}
+	resources, err := c.OpenCode.Resources.Resolve()
+	if err != nil {
+		return nil, err
+	}
+	workloads := &docker.Projected{Backend: *backend, Network: c.OpenCode.Network, Peers: c.OpenCode.Peers, Helper: c.OpenCode.Helper, Resources: resources}
 	if s := c.OpenCode.Sessions; s != nil {
 		ttl, err := time.ParseDuration(s.TTL)
 		interval, intervalErr := optionalDuration(s.Interval, 2*time.Hour)

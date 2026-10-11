@@ -42,10 +42,15 @@ with the released glibc OpenCode build. A compatible image:
   reporting a verified version (`Supported` in `image.go`); `/opt/multica-sandbox` is reserved;
 - ships no `/etc/opencode`, `/opencode.json[c]` or `/.opencode`, which OpenCode merges
   over the projected configuration, and no `OPENCODE_*` or `MULTICA_*` image `ENV`;
-- runs as uid 65532 on a read-only rootfs without network: `HOME` and `XDG_*` are
-  in the executable `/workspace` tmpfs, `/tmp` is `noexec`; install tools at build time;
+- runs as uid 65532 on a read-only rootfs without network: `HOME`, `XDG_*` and
+  `TMPDIR` (`/workspace/tmp`) are in the executable `/workspace` tmpfs, `/tmp` is
+  `noexec`; install tools at build time;
 - carries no secrets: everything in the image is visible to the agent.
 
+`resources` (`cpus`, `memory`, `pids`, `nofile`, `workspace_size`, `tmp_size`,
+`shm_size`; defaults 2, `4g`, 1024, 4096, `1g`, `256m`, `64m`) bound every attempt and
+the image inspection; swap equals memory and the created container must match them
+exactly. The upstream daemon sets no limits; size them for the builds agents run.
 Entrypoint, command, `USER` and `HEALTHCHECK` are ignored. The version check is a
 compatibility contract, not a security boundary: host policy holds for any image.
 

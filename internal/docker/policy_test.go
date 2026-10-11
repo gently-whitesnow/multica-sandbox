@@ -11,7 +11,7 @@ import (
 const safePolicy = `[{"Config":{"User":"65532:65532","WorkingDir":"/workspace","Healthcheck":{"Test":["NONE"]}},"HostConfig":{
 "NetworkMode":"none","Runtime":"runc","IpcMode":"private","CgroupnsMode":"private","ReadonlyRootfs":true,
 "CapDrop":["ALL"],"SecurityOpt":["no-new-privileges=true"],"Memory":134217728,"MemorySwap":134217728,
-"NanoCpus":500000000,"PidsLimit":64,"ShmSize":8388608,"RestartPolicy":{"Name":"no"},"LogConfig":{"Type":"none"},
+"NanoCpus":500000000,"PidsLimit":64,"ShmSize":8388608,"Ulimits":[{"Name":"nofile","Hard":256,"Soft":256}],"RestartPolicy":{"Name":"no"},"LogConfig":{"Type":"none"},
 "Tmpfs":{"/workspace":"rw,exec,nosuid,nodev,size=67108864,mode=1777","/tmp":"rw,noexec,nosuid,nodev,size=16777216,mode=1777"}}}]`
 
 func TestRejectWeakenedPolicy(t *testing.T) {
@@ -20,7 +20,7 @@ func TestRejectWeakenedPolicy(t *testing.T) {
 	}
 	mutations := map[string]map[string]any{
 		"HostConfig": {"NetworkMode": "bridge", "Privileged": true, "PidMode": "host", "ReadonlyRootfs": false,
-			"Binds": []string{"/:/host"}, "Memory": 0, "PidsLimit": 0, "CapAdd": []string{"SYS_ADMIN"}, "SecurityOpt": []string{},
+			"Binds": []string{"/:/host"}, "Memory": 0, "MemorySwap": -1, "NanoCpus": 0, "ShmSize": 1 << 30, "Ulimits": []any{}, "PidsLimit": 0, "CapAdd": []string{"SYS_ADMIN"}, "SecurityOpt": []string{},
 			"RestartPolicy": map[string]string{"Name": "always"}, "Tmpfs": map[string]string{"/workspace": "rw"},
 			"ExtraHosts": []string{"api.github.com:127.0.0.1"}},
 		"Config": {"User": "0", "Volumes": map[string]any{"/data": map[string]any{}}, "Healthcheck": map[string]any{"Test": []string{"CMD", "/bin/evil"}}},
@@ -59,7 +59,7 @@ func TestAcceptOnlyBundleMounts(t *testing.T) {
 			change(c, config, host)
 		}
 		data, _ := json.Marshal(fixture)
-		return checkExpectedPolicy(data, "none", 128*1024*1024, 64, "rw,exec,nosuid,nodev,size=67108864,mode=1777", bundles, path, strings.Join(volume, ""), nil)
+		return checkExpectedPolicy(data, "none", probeResources, bundles, path, strings.Join(volume, ""), nil)
 	}
 	if err := check([]Bundle{cli}, nil); err != nil {
 		t.Fatal(err)
@@ -115,7 +115,7 @@ func TestAcceptOnlyWorkdirVolume(t *testing.T) {
 			change(c, host)
 		}
 		data, _ := json.Marshal(fixture)
-		return checkExpectedPolicy(data, "none", 128*1024*1024, 64, "rw,exec,nosuid,nodev,size=67108864,mode=1777", []Bundle{cli}, path, volume, nil)
+		return checkExpectedPolicy(data, "none", probeResources, []Bundle{cli}, path, volume, nil)
 	}
 	if err := check(nil); err != nil {
 		t.Fatal(err)
@@ -149,7 +149,7 @@ func TestAcceptOnlyLoopbackForgeHosts(t *testing.T) {
 		}
 		fixture[0]["HostConfig"].(map[string]any)["ExtraHosts"] = extra
 		data, _ := json.Marshal(fixture)
-		return checkExpectedPolicy(data, "none", 128*1024*1024, 64, "rw,exec,nosuid,nodev,size=67108864,mode=1777", nil, "", "", hosts)
+		return checkExpectedPolicy(data, "none", probeResources, nil, "", "", hosts)
 	}
 	if err := check([]string{"api.github.com:127.0.0.1"}, []string{"api.github.com"}); err != nil {
 		t.Fatal(err)
