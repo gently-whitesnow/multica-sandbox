@@ -102,7 +102,10 @@ func (c *Client) Claim(ctx context.Context, runtime string) (*Task, error) {
 	var out struct {
 		Task *Task `json:"task"`
 	}
-	if err := c.runtimePost(ctx, runtime, "/tasks/claim", &out); err != nil {
+	if !validID(runtime) {
+		return nil, fmt.Errorf("invalid runtime ID")
+	}
+	if err := c.callLimit(ctx, http.MethodPost, "/api/daemon/runtimes/"+runtime+"/tasks/claim", map[string]any{}, &out, claimLimit); err != nil {
 		return nil, err
 	}
 	if out.Task != nil {

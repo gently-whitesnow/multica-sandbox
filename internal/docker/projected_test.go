@@ -103,6 +103,18 @@ cp "$TMPDIR/run" /tmp/run; ! /tmp/run; df -k /workspace | awk 'NR==2 { exit !($2
 	if err := a.Write(ctx, "/etc/forbidden", []byte("secret")); err == nil {
 		t.Fatal("unapproved projection path")
 	}
+	// Skill trees land under the approved root as the attempt user, including non-ASCII paths.
+	tree := map[string][]byte{"review/SKILL.md": []byte("---\nname: review\n---\n"), "review/references/обзор.md": []byte("ok"), "deploy/SKILL.md": nil}
+	if err := a.WriteTree(ctx, "/workspace/config/opencode/skills", tree); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Execute(ctx, []string{"/bin/sh", "-c", `set -e; cd /workspace/config/opencode/skills; test "$(cat review/references/обзор.md)" = ok; test -f deploy/SKILL.md
+test "$(stat -c %u review/SKILL.md)" = 65532; test "$(find . | wc -l)" = 7`}); err != nil {
+		t.Fatal("skill tree not projected:", err)
+	}
+	if a.WriteTree(ctx, "/workspace", tree) == nil || a.WriteTree(ctx, "/workspace/config/opencode/skills", map[string][]byte{"../x": nil}) == nil {
+		t.Fatal("unapproved tree root or escaping path accepted")
+	}
 	if err := backend.Reconcile(ctx); err != nil {
 		t.Fatal(err)
 	}

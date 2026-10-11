@@ -1,16 +1,20 @@
 package docker
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"os"
 	"os/exec"
+	"path"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -269,6 +273,57 @@ func (r *projectedRun) Write(ctx context.Context, path string, data []byte) erro
 		return fmt.Errorf("atomic projection failed")
 	}
 	return nil
+}
+
+// treeRoots are the directories WriteTree may fill; the attempt user creates them.
+var treeRoots = map[string]bool{"/workspace/config/opencode/skills": true}
+
+// WriteTree streams a controller-built tar of regular files to the attempt. Paths are
+// clean and relative, so extraction stays under root; the agent has not run yet.
+func (r *projectedRun) WriteTree(ctx context.Context, root string, files map[string][]byte) error {
+	if !treeRoots[root] {
+		return fmt.Errorf("invalid projection tree")
+	}
+	var archive bytes.Buffer
+	if err := writeTar(&archive, files, 16<<20); err != nil {
+		return err
+	}
+	cmd := exec.CommandContext(ctx, "docker", "exec", "-i", r.name, "/bin/sh", "-c", `set -eu; umask 022; mkdir -p "$1"; tar -x -f - -C "$1"`, "projection", root)
+	cmd.Stdin = &archive
+	if cmd.Run() != nil {
+		return fmt.Errorf("tree projection failed")
+	}
+	return nil
+}
+
+func writeTar(w io.Writer, files map[string][]byte, limit int) error {
+	names := slices.Sorted(maps.Keys(files))
+	tw, dirs, total, now := tar.NewWriter(w), map[string]bool{}, 0, time.Now()
+	for _, name := range names {
+		if name == "" || name == "." || path.Clean(name) != name || path.IsAbs(name) || name == ".." || strings.HasPrefix(name, "../") || strings.ContainsAny(name, "\\\x00") {
+			return fmt.Errorf("invalid projection tree path")
+		}
+		if total += len(files[name]); total > limit {
+			return fmt.Errorf("projection tree exceeds limit")
+		}
+		var parents []string
+		for dir := path.Dir(name); dir != "." && !dirs[dir]; dir = path.Dir(dir) {
+			parents = append(parents, dir)
+		}
+		for i := len(parents) - 1; i >= 0; i-- {
+			dirs[parents[i]] = true
+			if err := tw.WriteHeader(&tar.Header{Typeflag: tar.TypeDir, Name: parents[i] + "/", Mode: 0755, ModTime: now}); err != nil {
+				return err
+			}
+		}
+		if err := tw.WriteHeader(&tar.Header{Typeflag: tar.TypeReg, Name: name, Mode: 0644, Size: int64(len(files[name])), ModTime: now}); err != nil {
+			return err
+		}
+		if _, err := tw.Write(files[name]); err != nil {
+			return err
+		}
+	}
+	return tw.Close()
 }
 
 func (r *projectedRun) Execute(ctx context.Context, args []string) error {

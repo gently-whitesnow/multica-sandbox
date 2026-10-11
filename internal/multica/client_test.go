@@ -92,7 +92,7 @@ func TestClaimRequiresFencing(t *testing.T) {
 
 func TestClaimCarriesResumeDeltas(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-Client-Capabilities") != "coalesced-comments-v1" {
+		if r.Header.Get("X-Client-Capabilities") != "coalesced-comments-v1,platform-skill-v1" {
 			t.Error("structured coalesced comments not advertised")
 		}
 		fmt.Fprintf(w, `{"task":{"id":%q,"runtime_id":%q,"dispatched_at":"2026-10-04T00:00:00Z","start_claim_supported":true,"new_comment_count":2,"new_comments_since":"2026-10-03T00:00:00Z","new_comments_delta_known":true,"issue_state_delta_known":true,"issue_changed_fields":["title"],"issue_status":"todo","prior_session_resume_unavailable":true,"coalesced_comment_ids":[%[1]q],"coalesced_comments":[{"id":%[1]q,"thread_id":%[1]q,"author_type":"member","author_name":"Member","content":"earlier","created_at":"2026-10-03T01:00:00Z"}]}}`, testID, testID)
@@ -116,5 +116,28 @@ func TestClaimCarriesChatFields(t *testing.T) {
 	if err != nil || task.ChatSessionID != testID || task.ChatMessage != "hi" || task.ChatChannelType != "slack" || task.ChatType != "group" ||
 		!task.ChatIntro || task.ChatMessageAttachments[0] != (Attachment{testID, "a.png", "image/png"}) {
 		t.Fatalf("chat claim: %+v %v", task, err)
+	}
+}
+
+// Only claims, which carry inline skills, may exceed the 2 MiB response limit.
+func TestOnlyClaimsCarryLargeResponses(t *testing.T) {
+	padding := strings.Repeat("x", 3<<20)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/claim") {
+			fmt.Fprintf(w, `{"task":{"id":%q,"runtime_id":%q,"start_claim_supported":true,"dispatched_at":"2026-10-04T00:00:00Z","prompt":%q}}`, testID, testID, padding)
+			return
+		}
+		fmt.Fprintf(w, `{"status":"running","padding":%q}`, padding)
+	}))
+	defer server.Close()
+	c, err := NewAllowHTTP(server.URL, "token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task, err := c.Claim(context.Background(), testID); err != nil || task == nil {
+		t.Fatalf("large claim: %v", err)
+	}
+	if _, err := c.Status(context.Background(), testID); err == nil || !strings.Contains(err.Error(), "exceeds limit") {
+		t.Fatalf("large status: %v", err)
 	}
 }

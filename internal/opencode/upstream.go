@@ -298,7 +298,9 @@ func upstreamBrief(t multica.Task, repositories string, checkout bool) string {
 		chatWorkflow(&b)
 	} else {
 		issueWorkflow(&b)
+		writeSubIssueCreation(&b, t.Agent.Skills)
 	}
+	writeSkills(&b, t.Agent.Skills)
 	b.WriteString("## Important: Always Use the `multica` CLI\n\n")
 	b.WriteString("Access Multica platform resources only through the `multica` CLI — never `curl` / `wget`. For anything the CLI doesn't cover, post a comment mentioning the workspace owner rather than working around it.\n\n")
 	if chat {

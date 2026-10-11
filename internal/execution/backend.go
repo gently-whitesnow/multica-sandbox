@@ -42,6 +42,8 @@ type Run interface {
 type ProjectedRun interface {
 	Run
 	Write(context.Context, string, []byte) error
+	// WriteTree lays down files (relative path to content) under an approved empty root.
+	WriteTree(context.Context, string, map[string][]byte) error
 	Execute(context.Context, []string) error
 	// Stream passes env through the exec client environment, never through argv.
 	Stream(context.Context, []string, map[string]string, func(io.Reader) error) error

@@ -40,11 +40,12 @@ env | grep -oE '^(OPENCODE|MULTICA)_[A-Za-z0-9_]+=' | sed 's/^/env /;s/=$//'
 echo "version $(opencode --version 2>/dev/null | head -n 1)"
 echo "cli $(command -v multica)"
 echo "cli-version $(multica version 2>/dev/null | head -n 1)"
-echo "git $(command -v git)"`}
+echo "git $(command -v git)"
+echo "tar $(command -v tar)"`}
 
 // CheckImage fails closed with every incompatibility an operator must fix in the image.
 // With cli, multica must resolve to the controller artifact built from the pinned revision;
-// with git, repository checkout requires the image's git.
+// with git, repository checkout requires the image's git; the CLI path also needs tar.
 func CheckImage(output []byte, cli, git bool) error {
 	revision := ""
 	if cli {
@@ -58,7 +59,7 @@ func CheckImage(output []byte, cli, git bool) error {
 func CheckImageRevision(output []byte, revision string, git bool) error {
 	cli := revision != ""
 	var problems []string
-	version, path, build, gitPath := "", "", "", ""
+	version, path, build, gitPath, tarPath := "", "", "", "", ""
 	for _, line := range strings.Split(string(output), "\n") {
 		kind, value, _ := strings.Cut(line, " ")
 		switch kind {
@@ -74,6 +75,8 @@ func CheckImageRevision(output []byte, revision string, git bool) error {
 			build = value
 		case "git":
 			gitPath = value
+		case "tar":
+			tarPath = value
 		}
 	}
 	if cli && path != multica.CLIDir+"/bin/multica" {
@@ -81,6 +84,10 @@ func CheckImageRevision(output []byte, revision string, git bool) error {
 	}
 	if cli && !strings.Contains(build, "(commit: "+revision+",") {
 		problems = append(problems, fmt.Sprintf("multica artifact %.96q is not built from Multica %s", build, revision))
+	}
+	// Upstream tasks receive skills, laid down with the image's tar.
+	if cli && !strings.HasPrefix(tarPath, "/") {
+		problems = append(problems, "tar is not installed; agent skills require it in the image")
 	}
 	if git && !strings.HasPrefix(gitPath, "/") {
 		problems = append(problems, "git is not installed; repository checkout requires it in the image")

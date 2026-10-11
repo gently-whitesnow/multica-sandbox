@@ -9,7 +9,7 @@ import (
 
 // Text below mirrors Multica b4ca5b4 server/internal/daemon/prompt.go (buildChatPrompt,
 // sessionContinuityNoticeFor) and execenv/{channel_type,runtime_config_sections}.go chat
-// sections for web chat, without the skill selection this adapter does not support (ADR 0017).
+// sections for web chat, with the explicit skill selection of slash links (ADR 0017).
 
 // chatTask reports a web chat claim; upstream discriminates chat before issue tasks.
 // Channel-backed chats keep the legacy prompt.
@@ -48,6 +48,13 @@ func chatPrompt(t multica.Task) string {
 		return b.String()
 	}
 	b.WriteString(audience(t))
+	if selected := selectedSkills(t); len(selected) > 0 {
+		b.WriteString("Explicitly selected skills:\n")
+		for _, name := range selected {
+			fmt.Fprintf(&b, "- %s\n", name)
+		}
+		b.WriteString("\n")
+	}
 	fmt.Fprintf(&b, "User message:\n%s\n", t.ChatMessage)
 	if len(t.ChatMessageAttachments) > 0 {
 		b.WriteString("\nAttachments on this message:\n")

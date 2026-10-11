@@ -60,7 +60,7 @@ func (c *Client) HeartbeatModels(ctx context.Context, runtime string, discover f
 		Import  *pendingRequest  `json:"pending_local_skill_import"`
 		Imports []pendingRequest `json:"pending_local_skill_imports"`
 	}
-	data, err := c.send(ctx, http.MethodPost, "/api/daemon/heartbeat", map[string]string{"runtime_id": runtime}, true)
+	data, err := c.send(ctx, http.MethodPost, "/api/daemon/heartbeat", map[string]string{"runtime_id": runtime}, responseLimit)
 	if err != nil {
 		return err
 	}

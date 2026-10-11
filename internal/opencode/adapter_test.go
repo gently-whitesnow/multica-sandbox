@@ -50,6 +50,7 @@ func (stubStatus) Status(context.Context, string) (string, error) { return "runn
 
 type stubWorkload struct {
 	writes  int
+	trees   int
 	removed bool
 	runs    int
 	files   map[string][]byte
@@ -72,6 +73,15 @@ func (s *stubWorkload) Write(_ context.Context, path string, data []byte) error 
 	if s.files != nil {
 		s.files[path] = data
 	}
+	return nil
+}
+func (s *stubWorkload) WriteTree(_ context.Context, root string, files map[string][]byte) error {
+	for name, data := range files {
+		if s.files != nil {
+			s.files[root+"/"+name] = data
+		}
+	}
+	s.trees++
 	return nil
 }
 func (s *stubWorkload) Execute(ctx context.Context, args []string) error {

@@ -14,7 +14,7 @@ import (
 )
 
 const pinnedCLI = "cli-version multica dev (commit: b4ca5b4a23e68b26292a680dca7689a952bb1cd5, built: unknown)\n"
-const controllerCLI = "cli /opt/multica-sandbox/multica/bin/multica\n" + pinnedCLI
+const controllerCLI = "cli /opt/multica-sandbox/multica/bin/multica\n" + pinnedCLI + "tar /bin/tar\n"
 
 func TestCheckImage(t *testing.T) {
 	for _, version := range Supported {
@@ -27,6 +27,9 @@ func TestCheckImage(t *testing.T) {
 	}
 	if err := CheckImage([]byte("version 1.18.35\n"+controllerCLI+"git \n"), true, true); err == nil || !strings.Contains(err.Error(), "git is not installed") {
 		t.Fatalf("missing git accepted for repository checkout: %v", err)
+	}
+	if err := CheckImage([]byte("version 1.18.35\n"+strings.Replace(controllerCLI, "tar /bin/tar", "tar ", 1)), true, false); err == nil || !strings.Contains(err.Error(), "tar is not installed") {
+		t.Fatalf("missing tar accepted for skills: %v", err)
 	}
 	for name, test := range map[string]struct{ output, want string }{
 		"unsupported": {"version 1.18.33\n", `OpenCode "1.18.33" is not verified (supported: 1.18.34, 1.18.35)`},
@@ -78,7 +81,7 @@ func TestOfficialImagesAreListed(t *testing.T) {
 
 func TestCheckImageRevision(t *testing.T) {
 	fork := strings.Repeat("c", 40)
-	cli := "cli " + multica.CLIDir + "/bin/multica\ncli-version multica dev (commit: " + fork + ", built: unknown)\n"
+	cli := "cli " + multica.CLIDir + "/bin/multica\ncli-version multica dev (commit: " + fork + ", built: unknown)\ntar /usr/bin/tar\n"
 	if err := CheckImageRevision([]byte("version 1.18.35\n"+cli+"git /usr/bin/git\n"), fork, true); err != nil {
 		t.Fatal(err)
 	}

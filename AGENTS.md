@@ -15,7 +15,7 @@ from verified behavior.
   identity resolution contract (0013), Multica API relay (0014),
   repository workdirs, mediated Git and session resume (0015),
   `gh pr create` through Git remote aliases (0016),
-  web chat tasks (0017).
+  web chat tasks (0017), agent skills (0018).
 - `examples/end-to-end/`: opt-in real Multica/OpenCode/inference lab.
 - `examples/identity-mcp/`: disposable identity and MCP contract fixture.
 - `internal/inference/`: workspace gateway bindings, relay policy and advisory model catalogs.

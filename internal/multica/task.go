@@ -16,6 +16,21 @@ type Agent struct {
 	MCPConfig     json.RawMessage `json:"mcp_config"`
 	// CustomEnv reaches attempts only for names the deployment allows (opencode.env_allow).
 	CustomEnv SecretEnv `json:"custom_env"`
+	// Skills are inline: the controller does not advertise skill-bundles-v1.
+	Skills []Skill `json:"skills"`
+}
+
+// Skill is an agent skill with its supporting files, as upstream AgentSkillData.
+type Skill struct {
+	ID          string      `json:"id"`
+	Name        string      `json:"name"`
+	Description string      `json:"description"`
+	Content     string      `json:"content"`
+	Files       []SkillFile `json:"files"`
+}
+type SkillFile struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
 }
 
 // SecretEnv holds an agent's custom_env; like Secret, its values never format or marshal.

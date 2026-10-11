@@ -1,7 +1,11 @@
 package docker
 
 import (
+	"archive/tar"
+	"bytes"
 	"encoding/json"
+	"fmt"
+	"io"
 	"slices"
 	"testing"
 )
@@ -54,5 +58,34 @@ func TestPolicyMatchesConfiguredResources(t *testing.T) {
 	data, _ = json.Marshal(fixture)
 	if checkProjectedPolicy(data, "none", limits, nil, "", "", nil) == nil {
 		t.Fatal("raised hard nofile accepted")
+	}
+}
+
+func TestTreeArchiveHoldsOnlyCleanRelativeFiles(t *testing.T) {
+	var archive bytes.Buffer
+	if err := writeTar(&archive, map[string][]byte{"b/c/d.md": []byte("d"), "a.md": []byte("a"), "b/e.md": nil}, 1<<20); err != nil {
+		t.Fatal(err)
+	}
+	var entries []string
+	for r := tar.NewReader(&archive); ; {
+		h, err := r.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		entries = append(entries, fmt.Sprintf("%c %s %o", h.Typeflag, h.Name, h.Mode))
+	}
+	if want := []string{"0 a.md 644", "5 b/ 755", "5 b/c/ 755", "0 b/c/d.md 644", "0 b/e.md 644"}; !slices.Equal(entries, want) {
+		t.Fatalf("entries %v", entries)
+	}
+	for _, name := range []string{"", ".", "..", "../x", "/x", "a/../b", "a//b", "a/", `a\b`, "a\x00b"} {
+		if writeTar(io.Discard, map[string][]byte{name: nil}, 1<<20) == nil {
+			t.Errorf("accepted %q", name)
+		}
+	}
+	if writeTar(io.Discard, map[string][]byte{"a": make([]byte, 11)}, 10) == nil {
+		t.Error("oversized tree accepted")
 	}
 }

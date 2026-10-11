@@ -54,9 +54,9 @@ over issue fields, as in upstream.
 
 **Prompt and brief.** Web chat tasks get upstream's chat prompt and stored
 transcript continuity notice byte for byte, and the issue brief's sections with
-upstream's chat workflow and web chat output. The skill selection block is omitted because the adapter
-does not project skills. Without the relay the agent has no CLI, so chat keeps
-the legacy prompt.
+upstream's chat workflow and web chat output. Since ADR 0018 the prompt also
+renders upstream's explicit skill selection from `slash://skill/<id>` links. Without
+the relay the agent has no CLI, so chat keeps the legacy prompt.
 
 **Workdirs and resume.** `execution.Workdir` gains a chat key. Session volumes
 are named and labelled from (controller, workspace, agent, `chat:<session>`).
