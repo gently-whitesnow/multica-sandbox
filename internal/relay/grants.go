@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+
+	"github.com/gently-whitesnow/multica-sandbox/internal/baseurl"
 )
 
 const inflight = 16
@@ -121,12 +123,14 @@ func (g *Grants) Authorize(r *http.Request) (Lease, bool) {
 	return Lease{Attempt: entry.attempt, Origin: entry.origin, Credential: entry.credential, Header: entry.header, Context: entry.ctx, Release: func() { <-entry.slots }}, true
 }
 
+// parseOrigin admits an HTTP(S) origin with an optional base path, such as a
+// service published under a shared ingress prefix; requests are joined below it.
 func parseOrigin(origin string) (*url.URL, error) {
 	u, err := url.Parse(origin)
-	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || !baseurl.Path(u) {
 		return nil, errors.New("relay origin must be an HTTP(S) origin")
 	}
-	return &url.URL{Scheme: u.Scheme, Host: u.Host}, nil
+	return &url.URL{Scheme: u.Scheme, Host: u.Host, Path: strings.TrimSuffix(u.Path, "/")}, nil
 }
 
 // reserved reports whether a header name starts with one of the lower-case prefixes.

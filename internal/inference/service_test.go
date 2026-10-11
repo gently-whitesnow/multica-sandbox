@@ -68,8 +68,9 @@ func TestStaticBindingRereadsKeyAndIsolatesWorkspaces(t *testing.T) {
 }
 func TestConfigBoundaries(t *testing.T) {
 	for name, mutate := range map[string]func(*Config){
-		"gateway path": func(c *Config) { c.Gateways[0] += "/v1"; c.Bindings[0].Gateway = c.Gateways[0] },
-		"unapproved":   func(c *Config) { c.Bindings[0].Gateway = "https://other.example.invalid" },
+		"gateway slash": func(c *Config) { c.Gateways[0] += "/inference/"; c.Bindings[0].Gateway = c.Gateways[0] },
+		"gateway dots":  func(c *Config) { c.Gateways[0] += "/a/../b"; c.Bindings[0].Gateway = c.Gateways[0] },
+		"unapproved":    func(c *Config) { c.Bindings[0].Gateway = "https://other.example.invalid" },
 		"http": func(c *Config) {
 			c.Gateways[0] = "http://gateway.example.invalid"
 			c.Bindings[0].Gateway = c.Gateways[0]
@@ -88,7 +89,17 @@ func TestConfigBoundaries(t *testing.T) {
 			t.Fatalf("%s accepted", name)
 		}
 	}
-	var c Config
+	c := testConfig(t)
+	c.Gateways[0] += "/inference"
+	c.Bindings[0].Gateway = c.Gateways[0]
+	if _, err := New(c, "https://multica.example.invalid/multica"); err != nil {
+		t.Fatal("base paths of the gateway and server denied")
+	}
+	for _, server := range []string{"https://multica.example.invalid/multica/", "https://multica.example.invalid/a/../b"} {
+		if _, err := New(testConfig(t), server); err == nil {
+			t.Fatalf("server %s accepted", server)
+		}
+	}
 	if decode([]byte(`{"version":1,"gateways":[],"bindings":[{"workspace_id":"w","agent_id":"a","gateway":"g","key_file":"/k"}]}`), &c) == nil {
 		t.Fatal("agent-scoped binding accepted")
 	}

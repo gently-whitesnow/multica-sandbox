@@ -16,7 +16,7 @@ Keep the gateway on the control network, off attempt networks.
 The file (`deploy/inference.example.json`) holds approved gateway origins
 (`gateways`) and either static `bindings` or an authenticated `external` resolver:
 
-- a static binding has `workspace_id`, `gateway` (an approved origin, no path)
+- a static binding has `workspace_id`, `gateway` (an approved origin, optionally with a clean base path)
   and `key_file`, an absolute controller-only file with the key. The file is
   re-read for each new attempt, so a rotated key applies to new attempts only;
 - an external resolver receives `{version: 1, workspace: {server, workspace_id}}`

@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/gently-whitesnow/multica-sandbox/internal/baseurl"
 )
 
 type Service struct {
@@ -20,7 +22,7 @@ type Service struct {
 
 func New(c Config, server string) (*Service, error) {
 	parsed, _ := url.Parse(server)
-	if c.Version != 1 || parsed == nil || parsed.Path != "" || !endpoint(server, c.AllowHTTP) || len(c.Gateways) == 0 || (len(c.Bindings) > 0) == (c.External != nil) {
+	if c.Version != 1 || parsed == nil || !baseurl.Path(parsed) || !endpoint(server, c.AllowHTTP) || len(c.Gateways) == 0 || (len(c.Bindings) > 0) == (c.External != nil) {
 		return nil, ErrDenied
 	}
 	if c.External != nil {

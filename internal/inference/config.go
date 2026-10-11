@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/gently-whitesnow/multica-sandbox/internal/baseurl"
 	"github.com/gently-whitesnow/multica-sandbox/internal/identity"
 )
 
@@ -144,10 +145,10 @@ func readFile(path string, limit int64) ([]byte, error) {
 	return b, nil
 }
 
-// origin admits a gateway origin; the relay forwards only the OpenAI-compatible /v1 path.
+// origin admits a gateway origin with an optional base path; the relay joins only the admitted /v1 paths below it.
 func origin(s string, allowHTTP bool) bool {
 	u, err := url.Parse(s)
-	return err == nil && endpoint(s, allowHTTP) && u.Path == ""
+	return err == nil && endpoint(s, allowHTTP) && baseurl.Path(u)
 }
 func endpoint(s string, allowHTTP bool) bool {
 	u, err := url.Parse(s)

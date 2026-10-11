@@ -2,10 +2,12 @@ package relay
 
 import (
 	"bufio"
+	"context"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -108,6 +110,32 @@ func TestTranslatesCredentialToGrantOrigin(t *testing.T) {
 	}
 }
 
+func TestGrantOriginBasePathPrefixesRequests(t *testing.T) {
+	f := newFixture(t, nil, Policy{})
+	opaque, err := f.grants.Issue("attempt-a", Upstream{Origin: f.origin + "/multica/", Credential: upstreamA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp, _ := f.do(t, http.MethodGet, "/api/issues/x?output=json", opaque, nil, nil); resp.StatusCode != 200 {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+	if got := <-f.seen; got.URL.Path != "/multica/api/issues/x" || got.URL.RawQuery != "output=json" {
+		t.Fatalf("base path not joined: %s", got.URL)
+	}
+	// Authorizers that rewrite the path stay below the base path too.
+	lease := Lease{Origin: &url.URL{Scheme: "http", Host: strings.TrimPrefix(f.origin, "http://"), Path: "/multica"}, Path: "/api/other", Context: context.Background(), Release: func() {}}
+	handler, _ := New(fixedLease{lease}, Policy{Allow: multica.RelayPath, Limit: 1024})
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/issues/x", nil))
+	if got := <-f.seen; rec.Code != 200 || got.URL.Path != "/multica/api/other" {
+		t.Fatalf("lease path not joined: %d %s", rec.Code, got.URL)
+	}
+}
+
+type fixedLease struct{ lease Lease }
+
+func (f fixedLease) Authorize(*http.Request) (Lease, bool) { return f.lease, true }
+
 func TestGrantSelectsOriginAndAttribution(t *testing.T) {
 	other := make(chan *http.Request, 4)
 	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { other <- r.Clone(r.Context()) }))
@@ -133,7 +161,7 @@ func TestGrantSelectsOriginAndAttribution(t *testing.T) {
 	if len(f.seen) != 0 {
 		t.Fatal("workspace credential reached another workspace's gateway")
 	}
-	for _, bad := range []Upstream{{Origin: "http://gateway.invalid/v1", Credential: "k"}, {Origin: "ftp://gateway.invalid", Credential: "k"}, {Origin: "http://u:p@gateway.invalid", Credential: "k"}, {Origin: f.origin, Credential: "k\r\nX: y"}, {Origin: f.origin, Credential: "k", Header: map[string]string{"X-A": "b\nc"}}} {
+	for _, bad := range []Upstream{{Origin: "http://gateway.invalid//v1", Credential: "k"}, {Origin: "http://gateway.invalid/a/../v1", Credential: "k"}, {Origin: "http://gateway.invalid/a%2Fb", Credential: "k"}, {Origin: "ftp://gateway.invalid", Credential: "k"}, {Origin: "http://u:p@gateway.invalid", Credential: "k"}, {Origin: f.origin, Credential: "k\r\nX: y"}, {Origin: f.origin, Credential: "k", Header: map[string]string{"X-A": "b\nc"}}} {
 		if _, err := f.grants.Issue("attempt-bad", bad); err == nil {
 			t.Fatalf("unsafe upstream accepted: %+v", bad.Origin)
 		}

@@ -247,10 +247,13 @@ func TestRemoteContextCancellation(t *testing.T) {
 }
 
 func TestServerIsSuppliedByController(t *testing.T) {
-	for _, server := range []string{"", "https://multica.example/path"} {
+	for _, server := range []string{"", "https://multica.example/", "https://multica.example/path/", "https://multica.example/a/../b"} {
 		if _, err := New(config(t), server); err == nil {
 			t.Fatal("invalid controller origin accepted")
 		}
+	}
+	if _, err := New(config(t), "https://multica.example/path"); err != nil {
+		t.Fatal("controller base path denied")
 	}
 	p := filepath.Join(t.TempDir(), "identity.json")
 	if err := os.WriteFile(p, []byte(`{"version":1,"server":"https://override.invalid"}`), 0600); err != nil {

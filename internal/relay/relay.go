@@ -92,7 +92,7 @@ func New(auth Authorizer, p Policy) (*Relay, error) {
 			lease := pr.In.Context().Value(leaseKey{}).(Lease)
 			pr.SetURL(lease.Origin)
 			if lease.Path != "" {
-				pr.Out.URL.Path, pr.Out.URL.RawPath = lease.Path, ""
+				pr.Out.URL.Path, pr.Out.URL.RawPath = lease.Origin.Path+lease.Path, ""
 			}
 			for _, name := range dropped {
 				pr.Out.Header.Del(name)
