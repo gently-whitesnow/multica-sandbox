@@ -155,3 +155,9 @@ func TestIdleWatchdogTracksStreamActivity(t *testing.T) {
 		t.Fatal("silent stream not reported idle")
 	}
 }
+
+func TestIdleWatchdogIsConfigurable(t *testing.T) {
+	if (&Adapter{}).idleWatchdog() != 10*time.Minute || (&Adapter{IdleWatchdog: time.Hour}).idleWatchdog() != time.Hour {
+		t.Fatal("idle watchdog ignores the configuration or the upstream default")
+	}
+}

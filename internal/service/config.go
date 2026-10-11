@@ -85,6 +85,10 @@ type OpenCodeConfig struct {
 	ForgeRelay *RelayConfig `json:"forge_relay,omitempty"`
 	// Sessions, with the helper, retains issue workdirs and resumes sessions (ADR 0015).
 	Sessions *SessionsConfig `json:"sessions,omitempty"`
+	// EnvAllow names the agent custom_env variables passed to attempts; custom_args never are.
+	EnvAllow []string `json:"env_allow,omitempty"`
+	// IdleWatchdog fails runs without OpenCode events for this long (default 10m).
+	IdleWatchdog string `json:"idle_watchdog,omitempty"`
 }
 
 // SessionsConfig bounds retained workdirs: TTL after last use and a session count.

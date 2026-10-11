@@ -57,6 +57,10 @@ type Adapter struct {
 	// the Multica relay and a workload with a workdir volume.
 	GitRelay *repo.Relay
 	Checkout *repo.Checkout
+	// EnvAllow names the agent custom_env variables attempts receive (ValidEnvAllow).
+	EnvAllow []string
+	// IdleWatchdog fails a run without native events for this long (default 10m, upstream's).
+	IdleWatchdog time.Duration
 }
 
 type running struct {
@@ -299,8 +303,8 @@ loop:
 			agentDone = true
 			break loop
 		case <-ticker.C:
-			if r.events.idle(idleWatchdog) {
-				err = &execution.IdleError{After: idleWatchdog}
+			if watchdog := r.adapter.idleWatchdog(); r.events.idle(watchdog) {
+				err = &execution.IdleError{After: watchdog}
 				break loop
 			}
 			if err = r.refresh(ctx); err != nil {
@@ -316,6 +320,13 @@ loop:
 		<-agent
 	}
 	r.done <- err
+}
+
+func (a *Adapter) idleWatchdog() time.Duration {
+	if a.IdleWatchdog > 0 {
+		return a.IdleWatchdog
+	}
+	return idleWatchdog
 }
 
 // retryFresh follows upstream shouldRetryWithFreshSession for OpenCode: a resume that

@@ -96,6 +96,13 @@ func Run(ctx context.Context, c Config, stateDir, tokenPath string, out io.Write
 }
 
 func openCodeAdapter(ctx context.Context, c Config, stateDir string, api *multica.Client, backend *docker.Backend, out io.Writer) (*opencode.Adapter, error) {
+	watchdog, err := optionalDuration(c.OpenCode.IdleWatchdog, 10*time.Minute)
+	if err != nil {
+		return nil, fmt.Errorf("idle_watchdog must be a positive duration")
+	}
+	if err = opencode.ValidEnvAllow(c.OpenCode.EnvAllow); err != nil {
+		return nil, err
+	}
 	workloads := &docker.Projected{Backend: *backend, Network: c.OpenCode.Network, Peers: c.OpenCode.Peers, Helper: c.OpenCode.Helper}
 	if s := c.OpenCode.Sessions; s != nil {
 		ttl, err := time.ParseDuration(s.TTL)
@@ -134,7 +141,6 @@ func openCodeAdapter(ctx context.Context, c Config, stateDir string, api *multic
 	if git && !strings.HasPrefix(c.OpenCode.GitRelay.URL, "http://") {
 		return nil, fmt.Errorf("git_relay requires an http url: Git uses it as the HTTP proxy of remote aliases")
 	}
-	var err error
 	if c.OpenCode.Helper != "" {
 		// The forwarder reaches the checkout endpoint on the Multica relay listener.
 		if workloads.Forward, err = relayAddress("Multica", *c.OpenCode.MulticaRelay); err != nil {
@@ -177,7 +183,7 @@ func openCodeAdapter(ctx context.Context, c Config, stateDir string, api *multic
 	if err = workloads.ValidateNetwork(ctx); err != nil {
 		return nil, err
 	}
-	adapter := &opencode.Adapter{Server: strings.TrimRight(c.Server, "/"), Controller: c.Daemon, Issuer: issuer, Authority: authority, Status: api, Reporter: api, Workloads: workloads, Command: c.Command}
+	adapter := &opencode.Adapter{Server: strings.TrimRight(c.Server, "/"), Controller: c.Daemon, Issuer: issuer, Authority: authority, Status: api, Reporter: api, Workloads: workloads, Command: c.Command, EnvAllow: c.OpenCode.EnvAllow, IdleWatchdog: watchdog}
 	if c.OpenCode.MulticaRelay != nil {
 		grants := relay.NewGrants(multica.RelayPrefix)
 		var routes map[string]http.Handler
