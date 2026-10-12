@@ -1,0 +1,39 @@
+#!/bin/sh
+# Prototype of `sandbox-helper dind` (ADR 0019) for attempts under sysbox-runc, run as
+#   docker-init -- /usr/local/libexec/dind [extra dockerd flags]
+# docker-init (tini) reaps zombies and forwards signals; this script starts the inner
+# dockerd without systemd, waits for its API and lives as long as dockerd does. The
+# socket /run/docker.sock belongs to the agent group, so `docker exec --user 65532`
+# can drive it. Settings (configuration in the controller):
+#   DIND_SOCKET_GID           socket group, default 65532
+#   DIND_REGISTRY_MIRRORS     space-separated, for example http://mirror:5000
+#   DIND_INSECURE_REGISTRIES  space-separated, for example mirror:5000
+#   DIND_READY_TIMEOUT        seconds to wait for the API, default 60
+set -eu
+log=/run/dockerd.log
+sock=/run/docker.sock
+set -- --host="unix://$sock" --group="${DIND_SOCKET_GID:-65532}" --exec-root=/run/docker \
+  --pidfile=/run/docker.pid --log-level=warn "$@"
+for m in ${DIND_REGISTRY_MIRRORS:-}; do set -- "$@" --registry-mirror="$m"; done
+for r in ${DIND_INSECURE_REGISTRIES:-}; do set -- "$@" --insecure-registry="$r"; done
+
+rm -f /run/dockerd.ready
+# sysbox-runc with --workdir=/workspace recreates the mount point as 0755 root (runc keeps
+# the tmpfs mode=1777), and uid 65532 could not write its HOME. Restore the attempt mode.
+[ -d /workspace ] && chmod "${DIND_WORKSPACE_MODE:-1777}" /workspace
+dockerd "$@" >"$log" 2>&1 &
+pid=$!
+trap 'kill -TERM "$pid" 2>/dev/null; wait "$pid"; exit 0' TERM INT
+
+limit=$(( ${DIND_READY_TIMEOUT:-60} * 20 ))
+i=0
+until docker -H "unix://$sock" version >/dev/null 2>&1; do
+  if ! kill -0 "$pid" 2>/dev/null; then
+    echo "dind: dockerd exited" >&2; tail -20 "$log" >&2; exit 1
+  fi
+  i=$((i + 1))
+  [ "$i" -lt "$limit" ] || { echo "dind: dockerd not ready" >&2; tail -20 "$log" >&2; exit 1; }
+  sleep 0.05
+done
+date +%s.%N >/run/dockerd.ready
+wait "$pid"
