@@ -10,7 +10,7 @@ the OpenCode adapter treated a chat claim like any other non-issue task. It used
 the bounded legacy prompt, offered no repository checkout and always started a
 fresh session.
 
-Upstream Multica (`b4ca5b4`) handles chat claims as follows:
+Upstream Multica (v0.5.2) handles chat claims as follows:
 - The claim carries `chat_session_id`, the batch of user messages as
   `chat_message`, `chat_message_attachments`, and, for IM channels,
   `chat_channel_type`, `chat_type`, `chat_in_thread` and

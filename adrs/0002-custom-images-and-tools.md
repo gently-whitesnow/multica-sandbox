@@ -39,7 +39,7 @@ With the Multica relay (ADR 0014), the OpenCode adapter also requires the upstre
 
 Refinement (#4, 2026-10-07). Upstream Multica has no image concept: its daemon
 runs on the user's host and executes agent CLIs from `PATH` above a minimum version,
-branching on major versions (`pkg/agent/version.go`, `opencode_v2.go` at `b4ca5b4`).
+branching on major versions (`pkg/agent/version.go`, `opencode_v2.go` at v0.5.2).
 We keep that ownership: the image contains the agent and its runtime. Injecting
 agents into foreign images is rejected because every future agent would bring its
 own libc and runtime constraints. Adapters list conformance-verified agent versions,

@@ -5,7 +5,7 @@ Date: 2026-10-08
 
 ## Context
 
-Upstream Multica (`b4ca5b4`) checks out lazily. The claim lists `repos[{url, ref}]`.
+Upstream Multica (v0.5.2) checks out lazily. The claim lists `repos[{url, ref}]`.
 The agent runs `multica repo checkout`, which posts to the daemon's
 `127.0.0.1:$MULTICA_DAEMON_PORT/repo/checkout` with the `mat_` bearer. The daemon
 clones with host credentials into `<workdir>/<repo>` on the branch

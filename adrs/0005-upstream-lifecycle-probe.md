@@ -24,6 +24,19 @@ Seed users, workspace and queued tasks in fixture SQL; exercise registration,
 claims, preparation lease, start, heartbeat, messages, completion, failure,
 cancellation and orphan recovery over HTTP. This does not test UI task creation.
 
+Refinement (2026-10-12). The pin moves back to release v0.5.2
+(`d45aba1cd7582bef9210b921bbb7dc198b48e1ee`), 84 commits before `b4ca5b4`: we test
+on the upstream version self-hosted deployments run, and develop against unmodified
+Multica. Contract tests, the CLI artifact, the lab and every mirrored text follow
+`multica.UpstreamRevision`; a downstream build that diverges from it is fixed there,
+not here. Mirrors were rechecked against v0.5.2: the web chat brief has no "Charts
+and diagrams" line, the sub-issue pointer still falls back to the pre-merge
+`multica-working-on-issues` skill, and `/repo/checkout` refuses a foreign workdir
+without a reason. Claims advertise only capabilities v0.5.2 defines
+(`coalesced-comments-v1`, `platform-skill-v1`); later ones such as
+`joined-wakeups-v1`, and the wakeup and initiator changes after v0.5.2, are not
+used. Fixture SQL touches only tables and columns of the v0.5.2 schema.
+
 Require the claim's runtime ID, dispatch timestamp and start-claim support.
 Never start execution before acknowledgment. Decode only the small lifecycle
 projection; drop credentials and other claim context. Keep authentication inside
@@ -59,5 +72,5 @@ capabilities only after the corresponding contract and failure tests exist.
 ## References
 
 - [Delivery task](https://github.com/gently-whitesnow/multica-sandbox/issues/1)
-- [Upstream client](https://github.com/multica-ai/multica/blob/b4ca5b4a23e68b26292a680dca7689a952bb1cd5/server/internal/daemon/client.go)
-- [Upstream recovery handler](https://github.com/multica-ai/multica/blob/b4ca5b4a23e68b26292a680dca7689a952bb1cd5/server/internal/handler/task_lifecycle.go)
+- [Upstream client](https://github.com/multica-ai/multica/blob/d45aba1cd7582bef9210b921bbb7dc198b48e1ee/server/internal/daemon/client.go)
+- [Upstream recovery handler](https://github.com/multica-ai/multica/blob/d45aba1cd7582bef9210b921bbb7dc198b48e1ee/server/internal/handler/task_lifecycle.go)

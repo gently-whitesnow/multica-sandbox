@@ -93,7 +93,7 @@ Complete/fail follow cleanup and use a durable at-least-once queue.
 
 Supported means this path only: persistent controller, Docker projected backend,
 native OpenCode. Evidence is fixture-based for the pinned stack, not production
-certification. Pins: Multica `b4ca5b4a23e68b26292a680dca7689a952bb1cd5`
+certification. Pins: Multica v0.5.2 `d45aba1cd7582bef9210b921bbb7dc198b48e1ee`
 (unmodified); OpenCode 1.18.34 (`aec0b9a6`) and 1.18.35 (`53d1eabb`), official images in `images.txt`; LiteLLM v1.104.0 with
 Postgres virtual keys; Keycloak 26.8.0; MCP Go SDK 1.8.0; go-oidc 3.21.0; Docker
 Engine 29.2.1 (runc, cgroup v2, `linux/arm64`; `amd64` is unverified). Reproduce with `MULTICA_SOURCE=<checkout>` and

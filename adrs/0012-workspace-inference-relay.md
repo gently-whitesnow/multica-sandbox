@@ -91,8 +91,8 @@ Removed without compatibility: controller-issued inference JWTs and renewal,
 the `auth.json` marker and their projection paths, the separate inference
 identity file and the JWT/Keycloak/custom-auth fixtures.
 
-Verified at Multica `b4ca5b4` with LiteLLM v1.104.0 (Postgres-backed virtual keys)
-and OpenCode 1.18.34 and 1.18.35:
+Verified at Multica v0.5.2 (first at `b4ca5b4`) with LiteLLM v1.104.0
+(Postgres-backed virtual keys) and OpenCode 1.18.34 and 1.18.35:
 
 - unit: cross-workspace grants, ended, forged and upstream credentials, restart,
   caller attribution stripping, error and header withholding, SSE flushing and
@@ -120,10 +120,10 @@ needed now (#29).
 
 ## References
 
-- [Claim assembly](https://github.com/multica-ai/multica/blob/b4ca5b4a23e68b26292a680dca7689a952bb1cd5/server/internal/handler/daemon.go)
-- [Discovery requests and model entries](https://github.com/multica-ai/multica/blob/b4ca5b4a23e68b26292a680dca7689a952bb1cd5/server/internal/handler/runtime_models.go)
-- [Runtime catalog cache](https://github.com/multica-ai/multica/blob/b4ca5b4a23e68b26292a680dca7689a952bb1cd5/server/internal/handler/runtime_model_catalog.go)
-- [OpenCode selection mapping](https://github.com/multica-ai/multica/blob/b4ca5b4a23e68b26292a680dca7689a952bb1cd5/server/pkg/agent/opencode.go)
+- [Claim assembly](https://github.com/multica-ai/multica/blob/d45aba1cd7582bef9210b921bbb7dc198b48e1ee/server/internal/handler/daemon.go)
+- [Discovery requests and model entries](https://github.com/multica-ai/multica/blob/d45aba1cd7582bef9210b921bbb7dc198b48e1ee/server/internal/handler/runtime_models.go)
+- [Runtime catalog cache](https://github.com/multica-ai/multica/blob/d45aba1cd7582bef9210b921bbb7dc198b48e1ee/server/internal/handler/runtime_model_catalog.go)
+- [OpenCode selection mapping](https://github.com/multica-ai/multica/blob/d45aba1cd7582bef9210b921bbb7dc198b48e1ee/server/pkg/agent/opencode.go)
 - [OpenAI-compatible effort option](https://github.com/vercel/ai/blob/%40ai-sdk%2Fopenai-compatible%402.0.41/packages/openai-compatible/src/chat/openai-compatible-chat-options.ts)
 - [LiteLLM virtual keys](https://docs.litellm.ai/docs/proxy/virtual_keys)
 - [LiteLLM customer/end-user tracking](https://docs.litellm.ai/docs/proxy/users)
