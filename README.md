@@ -11,7 +11,7 @@ for running AI coding agents in your infrastructure.
 
 **Status:** experimental controller with offline probes and opt-in OpenCode MCP
 identity rotation; a separate subscription-backed lab exists.
-Docker/runc tested; Sysbox and Kubernetes remain planned. Independent runtime, no Multica fork.
+Docker with runc or Sysbox (nested Docker) tested; Kubernetes remains planned. Independent runtime, no Multica fork.
 
 ## Design
 

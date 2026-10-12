@@ -17,7 +17,20 @@ func (w *limitedOutput) Write(p []byte) (int, error) {
 	return w.Buffer.Write(p)
 }
 func command(ctx context.Context, args ...string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	return commandWithin(ctx, 30*time.Second, args...)
+}
+
+// RemoveTimeout bounds attempt removal apart from the caller's cleanup deadline: killed
+// attempt processes throttled at memory.high and swapped out exit slowly (ADR 0020), and
+// a failed cleanup restarts the controller and every running task with it.
+const RemoveTimeout = 3 * time.Minute
+
+func removal(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), RemoveTimeout)
+}
+
+func commandWithin(ctx context.Context, timeout time.Duration, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	var out limitedOutput

@@ -1,0 +1,14 @@
+# Controller override for a host with the attempt pool (ADR 0020):
+#   docker compose -f compose.yaml -f examples/sysbox-host/compose.pool.yaml up -d
+# The controller stays outside the pool, is the last OOM candidate after the engine and
+# reads the slice read-only for admission and OOM reports (pool.cgroup_dir).
+services:
+  controller:
+    oom_score_adj: -900
+    volumes:
+      - type: bind
+        source: /sys/fs/cgroup/multica_attempts.slice
+        target: /run/multica-sandbox/pool
+        read_only: true
+        bind:
+          create_host_path: false

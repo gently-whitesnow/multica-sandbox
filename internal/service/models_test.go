@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 	"time"
 
@@ -73,9 +74,24 @@ func TestFailureReasonsMatchUpstreamDaemon(t *testing.T) {
 		{&execution.RejectedError{Err: errors.New("private detail")}, "Sandbox rejected the task before OpenCode started", "environment_prepare_failed"},
 		{fmt.Errorf("wrapped: %w", &execution.AgentFailure{Status: 429}), "Agent inference request failed (HTTP 429)", ""},
 		{errors.New("private detail"), "OpenCode execution or identity delivery failed", ""},
+		{errors.Join(&execution.OOMError{Killed: 3, Peak: 4 << 30, Limit: 4 << 30}), "Out of memory: the kernel killed 3 process(es) in the attempt after it reached the attempt memory limit (4.0 GiB), peak usage 4.0 GiB. " + oomAdvice, "agent_error.process_failure"},
+		{&execution.OOMError{Killed: 1, Peak: 7 << 30, Limit: 10 << 30, Pool: true}, "Out of memory: the kernel killed 1 process(es) in the attempt after it reached the shared attempt memory pool (10.0 GiB), peak usage 7.0 GiB. " + oomAdvice, "agent_error.process_failure"},
+		{&execution.OOMError{Peak: -1, Limit: -1}, "Out of memory: the kernel killed processes in the attempt after it reached the attempt memory limit. " + oomAdvice, "agent_error.process_failure"},
 	} {
 		if message, reason := failure(tc.cause); message != tc.message || reason != tc.reason {
 			t.Errorf("%v -> %q %q", tc.cause, message, reason)
 		}
+	}
+}
+
+const oomAdvice = "Not retried automatically: reduce the task's memory use or raise the limit."
+
+// Multica retries only these reasons automatically (server TaskService retryableReasons);
+// an attempt that ran out of memory would run out again.
+func TestOutOfMemoryIsNotRetried(t *testing.T) {
+	_, reason := failure(&execution.OOMError{Killed: 1})
+	retryable := []string{"runtime_offline", "runtime_recovery", "timeout", "codex_semantic_inactivity", "agent_error.provider_network", "skill_bundle_unavailable"}
+	if reason == "" || slices.Contains(retryable, reason) {
+		t.Fatalf("out of memory reported as %q", reason)
 	}
 }

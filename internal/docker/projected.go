@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/gently-whitesnow/multica-sandbox/internal/execution"
+	"github.com/gently-whitesnow/multica-sandbox/internal/pool"
 	"github.com/gently-whitesnow/multica-sandbox/internal/repo"
 )
 
@@ -41,15 +42,31 @@ type Projected struct {
 	ForgeForward string
 	// Sessions, with the helper, retains issue workdirs across attempts.
 	Sessions *Sessions
-	// Resources bound attempts and image inspection; zero means DefaultResources.
+	// Resources bound attempts and image inspection; zero means the runtime's defaults.
 	Resources Resources
+	// DinD configures the nested engine under sysbox, which requires the helper.
+	DinD DinD
+	// Pool reads the slice of Resources.Pool (ADR 0020); Preflight records its memory.max.
+	Pool    *pool.Pool
+	poolMax int64
+}
+
+// DinD configures the nested engine of sysbox attempts (ADR 0019).
+type DinD struct {
+	RegistryMirrors, InsecureRegistries []string
+	ReadyTimeout                        time.Duration
+	// RyukDisabled sets TESTCONTAINERS_RYUK_DISABLED: removing the attempt removes its containers.
+	RyukDisabled bool
 }
 
 func (b *Projected) limits() Resources {
-	if b.Resources == (Resources{}) {
-		return DefaultResources
+	switch {
+	case b.Resources != (Resources{}):
+		return b.Resources
+	case b.Runtime == Sysbox:
+		return SysboxResources
 	}
-	return b.Resources
+	return DefaultResources
 }
 
 // HelperDir holds the helper image mount; the workdir volume is mounted at repo.WorkDir.
@@ -129,12 +146,15 @@ func (b *Projected) Start(ctx context.Context, attempt string, w execution.Workd
 			return nil, fmt.Errorf("invalid forge host name")
 		}
 	}
+	if b.Runtime == Sysbox && b.Helper == "" {
+		return nil, fmt.Errorf("sysbox attempts require the helper")
+	}
 	r := &run{name: b.name(attempt)}
 	isolated, err := b.isolate(ctx, r.name+"-net")
 	if err != nil {
 		return nil, err
 	}
-	projection := &projectedRun{run: r, network: isolated, peers: b.Peers, owner: b.Owner}
+	projection := &projectedRun{run: r, network: isolated, peers: b.Peers, owner: b.Owner, pool: b.Pool, poolMax: b.poolMax}
 	cleanup := func() error {
 		cleanCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
@@ -149,30 +169,26 @@ func (b *Projected) Start(ctx context.Context, attempt string, w execution.Workd
 	for _, host := range loopbackHosts(b.ForgeHosts) {
 		bundles = append(bundles, "--add-host="+host)
 	}
-	args := attemptNetwork(b.createArgs(r.name, b.limits(), bundles...), isolated)
-	// The holding process never handles tokens or executes task-supplied shell text.
-	args = args[:len(args)-len(b.Command)-2]
-	args = append(args, "--env=TMPDIR="+TmpDir, "--env=XDG_DATA_HOME=/workspace/data", "--env=XDG_CONFIG_HOME=/workspace/config", "--env=XDG_CACHE_HOME=/workspace/cache", "--env=XDG_STATE_HOME=/workspace/state", "--env=OPENCODE_DISABLE_AUTOUPDATE=true", "--env=OPENCODE_DISABLE_MODELS_FETCH=true", "--env=OPENCODE_DISABLE_DEFAULT_PLUGINS=true", "--env=OPENCODE_DISABLE_LSP_DOWNLOAD=true", "--entrypoint", "/bin/sh", b.Image, "-c", "exec sleep 86400")
-	if _, err := command(ctx, args...); err != nil {
-		return nil, errors.Join(err, errors.Join(b.cleanupUncertainCreate(r), cleanup()))
+	bundles = append(bundles, "--env=TMPDIR="+TmpDir, "--env=XDG_DATA_HOME=/workspace/data", "--env=XDG_CONFIG_HOME=/workspace/config", "--env=XDG_CACHE_HOME=/workspace/cache", "--env=XDG_STATE_HOME=/workspace/state", "--env=OPENCODE_DISABLE_AUTOUPDATE=true", "--env=OPENCODE_DISABLE_MODELS_FETCH=true", "--env=OPENCODE_DISABLE_DEFAULT_PLUGINS=true", "--env=OPENCODE_DISABLE_LSP_DOWNLOAD=true")
+	if b.Runtime == Sysbox && b.DinD.RyukDisabled {
+		bundles = append(bundles, "--env=TESTCONTAINERS_RYUK_DISABLED=true")
 	}
-	data, err := command(ctx, "inspect", r.name)
-	if err == nil {
-		err = checkProjectedPolicy(data, isolated, b.limits(), b.mounts(), path, projection.volume, b.ForgeHosts)
-	}
+	want := expected{network: isolated, limits: b.limits(), bundles: b.mounts(), path: path, volume: projection.volume, hosts: b.ForgeHosts, runtime: b.Runtime}
+	projection.id, err = b.launch(ctx, r, want, bundles)
 	if err != nil {
-		return nil, errors.Join(err, cleanup())
-	}
-	if _, err := command(ctx, "start", r.name); err != nil {
-		return nil, errors.Join(err, cleanup())
+		cleanErr := cleanup()
+		if errors.Is(err, errEngine) && cleanErr == nil {
+			return nil, &execution.RejectedError{Err: err}
+		}
+		return nil, errors.Join(err, cleanErr)
 	}
 	// Like the upstream task directory, TMPDIR allows executables (go test, build caches).
-	if _, err := command(ctx, "exec", r.name, "mkdir", "-p", "-m", "700", TmpDir); err != nil {
+	if _, err := command(ctx, "exec", "--user", AttemptUser, r.name, "mkdir", "-p", "-m", "700", TmpDir); err != nil {
 		return nil, errors.Join(err, cleanup())
 	}
 	if b.Helper != "" {
 		// The forwarder runs as the attempt user and reaches only the attempt network.
-		forward := []string{"exec", "-d", r.name, HelperDir + "/sandbox-helper", "forward", "127.0.0.1:" + repo.DaemonPort, b.Forward}
+		forward := []string{"exec", "-d", "--user", AttemptUser, r.name, HelperDir + "/sandbox-helper", "forward", "127.0.0.1:" + repo.DaemonPort, b.Forward}
 		if b.ForgeForward != "" {
 			forward = append(forward, "127.0.0.1:"+repo.ForgePort, b.ForgeForward)
 		}
@@ -181,6 +197,72 @@ func (b *Projected) Start(ctx context.Context, attempt string, w execution.Workd
 		}
 	}
 	return projection, nil
+}
+
+// errEngine marks a nested engine that did not become ready: the task is rejected.
+var errEngine = errors.New("nested Docker engine did not become ready")
+
+// launch creates the attempt with the controller-owned entrypoint, compares it with the
+// policy, starts it and waits until it may run commands. It returns the container ID.
+func (b *Projected) launch(ctx context.Context, r *run, want expected, extra []string) (string, error) {
+	args := attemptNetwork(b.createArgs(r.name, want.limits, extra...), want.network)
+	args = append(args[:len(args)-len(b.Command)-2], b.entrypoint()...)
+	out, err := command(ctx, args...)
+	if err != nil {
+		return "", errors.Join(err, b.cleanupUncertainCreate(r))
+	}
+	id := strings.TrimSpace(string(out))
+	data, err := command(ctx, "inspect", r.name)
+	if err == nil {
+		err = checkExpectedPolicy(data, want)
+	}
+	if err == nil {
+		_, err = command(ctx, "start", r.name)
+	}
+	if err == nil && b.Runtime == Sysbox {
+		err = b.waitEngine(ctx, r.name)
+	}
+	if err == nil {
+		err = checkRuntime(ctx, r.name, b.Runtime == Sysbox)
+	}
+	if err == nil && b.Pool != nil {
+		err = b.Pool.CheckAttempt(id, want.limits.Memory)
+	}
+	return id, err
+}
+
+// entrypoint is the holding process, which never handles tokens or executes task-supplied
+// shell text: sleep under runc, the helper's nested engine supervisor under sysbox.
+func (b *Projected) entrypoint() []string {
+	if b.Runtime != Sysbox {
+		return []string{"--entrypoint", "/bin/sh", b.Image, "-c", "exec sleep 86400"}
+	}
+	args := []string{"--entrypoint", HelperDir + "/sandbox-helper", b.Image, "dind"}
+	for _, mirror := range b.DinD.RegistryMirrors {
+		args = append(args, "--registry-mirror="+mirror)
+	}
+	for _, registry := range b.DinD.InsecureRegistries {
+		args = append(args, "--insecure-registry="+registry)
+	}
+	return args
+}
+
+// waitEngine waits for the supervisor's readiness marker (sandbox-helper dind-wait).
+func (b *Projected) waitEngine(ctx context.Context, name string) error {
+	timeout := b.DinD.ReadyTimeout
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout+10*time.Second)
+	defer cancel()
+	err := exec.CommandContext(ctx, "docker", "exec", "--user", AttemptUser, name, HelperDir+"/sandbox-helper", "dind-wait", timeout.String()).Run()
+	if err != nil && ctx.Err() == nil {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
+			return fmt.Errorf("%w within %s", errEngine, timeout)
+		}
+	}
+	return err
 }
 
 // attachWorkdir gives the attempt its conversation's session volume when it is free within
@@ -218,7 +300,8 @@ func (b *Projected) workdir(ctx context.Context, volume string, labels ...string
 
 // Output inspects the agent image offline within attempt resource limits and returns its bounded stdout.
 func (b *Projected) Output(ctx context.Context, args []string) ([]byte, error) {
-	probe := Projected{Backend: Backend{Image: b.Image, Owner: b.Owner, Command: args}, Bundles: b.Bundles, Resources: b.Resources}
+	// Inspection reads files only: it runs under runc within the attempt resources.
+	probe := Projected{Backend: Backend{Image: b.Image, Owner: b.Owner, Command: args}, Bundles: b.Bundles, Resources: b.limits()}
 	bundles, path, err := probe.prepare(ctx)
 	if err != nil {
 		return nil, err
@@ -229,7 +312,7 @@ func (b *Projected) Output(ctx context.Context, args []string) ([]byte, error) {
 	}
 	data, err := command(ctx, "inspect", r.name)
 	if err == nil {
-		err = checkProjectedPolicy(data, "none", probe.limits(), b.Bundles, path, "", nil)
+		err = checkExpectedPolicy(data, expected{network: "none", limits: probe.limits(), bundles: b.Bundles, path: path})
 	}
 	if err != nil {
 		return nil, errors.Join(err, r.cleanup())
@@ -249,8 +332,11 @@ func attemptNetwork(args []string, network string) []string {
 
 type projectedRun struct {
 	*run
-	network, volume, owner string
-	peers                  []string
+	id, network, volume, owner string
+	peers                      []string
+	// pool, when set, holds the attempt cgroup; poolMax is its memory.max.
+	pool    *pool.Pool
+	poolMax int64
 	// sessions holds the retained volume's writer slot; reused means it already existed.
 	sessions *Sessions
 	reused   bool
@@ -267,7 +353,7 @@ func (r *projectedRun) Write(ctx context.Context, path string, data []byte) erro
 	if !projectionPaths[path] || len(data) > 65536 {
 		return fmt.Errorf("invalid projection")
 	}
-	cmd := exec.CommandContext(ctx, "docker", "exec", "-i", r.name, "/bin/sh", "-c", `set -eu; umask 077; mkdir -p "${1%/*}"; cat > "$1.next"; chmod 600 "$1.next"; mv -f "$1.next" "$1"`, "projection", path)
+	cmd := exec.CommandContext(ctx, "docker", "exec", "-i", "--user", AttemptUser, r.name, "/bin/sh", "-c", `set -eu; umask 077; mkdir -p "${1%/*}"; cat > "$1.next"; chmod 600 "$1.next"; mv -f "$1.next" "$1"`, "projection", path)
 	cmd.Stdin = bytes.NewReader(data)
 	if cmd.Run() != nil {
 		return fmt.Errorf("atomic projection failed")
@@ -288,7 +374,7 @@ func (r *projectedRun) WriteTree(ctx context.Context, root string, files map[str
 	if err := writeTar(&archive, files, 16<<20); err != nil {
 		return err
 	}
-	cmd := exec.CommandContext(ctx, "docker", "exec", "-i", r.name, "/bin/sh", "-c", `set -eu; umask 022; mkdir -p "$1"; tar -x -f - -C "$1"`, "projection", root)
+	cmd := exec.CommandContext(ctx, "docker", "exec", "-i", "--user", AttemptUser, r.name, "/bin/sh", "-c", `set -eu; umask 022; mkdir -p "$1"; tar -x -f - -C "$1"`, "projection", root)
 	cmd.Stdin = &archive
 	if cmd.Run() != nil {
 		return fmt.Errorf("tree projection failed")
@@ -327,7 +413,7 @@ func writeTar(w io.Writer, files map[string][]byte, limit int) error {
 }
 
 func (r *projectedRun) Execute(ctx context.Context, args []string) error {
-	cmd := exec.CommandContext(ctx, "docker", append([]string{"exec", r.name}, args...)...)
+	cmd := exec.CommandContext(ctx, "docker", append([]string{"exec", "--user", AttemptUser, r.name}, args...)...)
 	var out limitedOutput
 	cmd.Stdout = &out
 	err := cmd.Run()
@@ -338,6 +424,8 @@ func (r *projectedRun) Execute(ctx context.Context, args []string) error {
 }
 
 func (r *projectedRun) Remove(ctx context.Context) error {
+	ctx, cancel := removal(ctx)
+	defer cancel()
 	err := r.run.Remove(ctx)
 	switch {
 	case r.sessions != nil:
@@ -482,6 +570,13 @@ func (r *projectedRun) Stream(ctx context.Context, args []string, env map[string
 		cancel()
 	}
 	waitErr := cmd.Wait()
+	// An agent killed for memory also ends its stream early; the kill decides the failure,
+	// which Multica must not retry as a provider stream cut.
+	if readErr != nil || waitErr != nil {
+		if oom := r.outOfMemory(); oom != nil {
+			return oom
+		}
+	}
 	if readErr != nil {
 		return readErr
 	}
@@ -491,10 +586,43 @@ func (r *projectedRun) Stream(ctx context.Context, args []string, env map[string
 	return nil
 }
 
+// outOfMemory reports an OOM kill in the attempt cgroup: read on the host through the
+// pool, else inside the attempt, else Docker's record of a container that is gone.
+func (r *projectedRun) outOfMemory() *execution.OOMError {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var m pool.Memory
+	var err error
+	if r.pool != nil {
+		m, err = r.pool.AttemptMemory(r.id)
+	} else {
+		var out []byte
+		out, err = command(ctx, "exec", "--user", AttemptUser, r.name, "cat", "/sys/fs/cgroup/memory.events", "/sys/fs/cgroup/memory.peak", "/sys/fs/cgroup/memory.max")
+		if err == nil {
+			m, err = pool.ParseMemory(out)
+		}
+	}
+	if err != nil {
+		data, inspectErr := command(ctx, "inspect", "--format", "{{.State.OOMKilled}}", r.name)
+		if inspectErr != nil || strings.TrimSpace(string(data)) != "true" {
+			return nil
+		}
+		m = pool.Memory{Peak: -1, Max: -1}
+	} else if m.OOMKill == 0 {
+		return nil
+	}
+	oom := &execution.OOMError{Killed: m.OOMKill, Peak: m.Peak, Limit: m.Max}
+	// Without its own limit hit, the pool's memory.max was reached.
+	if r.pool != nil && (m.Max == pool.Unlimited || m.OOM == 0) {
+		oom.Pool, oom.Limit = true, r.poolMax
+	}
+	return oom
+}
+
 // exec builds a docker exec in the agent working directory. Env values reach the docker
 // client environment only; argv and diagnostics carry names.
 func (r *projectedRun) exec(ctx context.Context, args []string, env map[string]string) (*exec.Cmd, error) {
-	execArgs := []string{"exec"}
+	execArgs := []string{"exec", "--user", AttemptUser}
 	if r.volume != "" {
 		execArgs = append(execArgs, "--workdir", repo.WorkDir)
 	}

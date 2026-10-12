@@ -1,0 +1,19 @@
+# Shared memory pool of sandbox attempts (ADR 0020), sized for the 6 GiB Lima VM.
+# Size MemoryHigh to the memory attempts may use before the kernel throttles them and
+# swaps; MemoryMax is the last resort that OOM-kills inside the pool. Keep room outside
+# the pool for the controller, dockerd, containerd, Sysbox and the page cache.
+#   install -m 0644 multica_attempts.slice /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now multica_attempts.slice
+# The name has no dash: systemd nests dashed slices (a-b.slice under a.slice).
+[Unit]
+Description=Multica sandbox attempts (shared memory pool)
+Before=slices.target
+
+[Slice]
+MemoryAccounting=yes
+MemoryHigh=2G
+MemoryMax=3G
+MemorySwapMax=4G
+
+[Install]
+WantedBy=multi-user.target

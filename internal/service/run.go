@@ -19,6 +19,7 @@ import (
 	"github.com/gently-whitesnow/multica-sandbox/internal/instance"
 	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
 	"github.com/gently-whitesnow/multica-sandbox/internal/opencode"
+	"github.com/gently-whitesnow/multica-sandbox/internal/pool"
 	"github.com/gently-whitesnow/multica-sandbox/internal/relay"
 	"github.com/gently-whitesnow/multica-sandbox/internal/repo"
 )
@@ -83,37 +84,45 @@ func Run(ctx context.Context, c Config, stateDir, tokenPath string, out io.Write
 	}
 	if c.OpenCode != nil {
 		c.Command = command
-		launch, err := openCodeAdapter(ctx, c, stateDir, api, backend, out)
+		launch, attempts, err := openCodeAdapter(ctx, c, stateDir, api, backend, out)
 		if err != nil {
 			return err
 		}
 		p.Launch = launch.Start
 		agentAPI := &agentFleetAPI{Client: api, inference: launch.Inference, server: strings.TrimRight(c.Server, "/")}
 		p.API = agentAPI
-		return serveFleet(ctx, c, stateDir, agentAPI, &p, out)
+		return serveFleet(ctx, c, stateDir, agentAPI, &p, out, admission(attempts))
 	}
-	return serveFleet(ctx, c, stateDir, api, &p, out)
+	return serveFleet(ctx, c, stateDir, api, &p, out, nil)
 }
 
-func openCodeAdapter(ctx context.Context, c Config, stateDir string, api *multica.Client, backend *docker.Backend, out io.Writer) (*opencode.Adapter, error) {
+// openCodeAdapter also returns the attempt pool, nil without one.
+func openCodeAdapter(ctx context.Context, c Config, stateDir string, api *multica.Client, backend *docker.Backend, out io.Writer) (*opencode.Adapter, *pool.Pool, error) {
+	adapter, workloads, err := newOpenCodeAdapter(ctx, c, stateDir, api, backend, out)
+	if err != nil {
+		return nil, nil, err
+	}
+	return adapter, workloads.Pool, nil
+}
+
+func newOpenCodeAdapter(ctx context.Context, c Config, stateDir string, api *multica.Client, backend *docker.Backend, out io.Writer) (*opencode.Adapter, *docker.Projected, error) {
 	watchdog, err := optionalDuration(c.OpenCode.IdleWatchdog, 10*time.Minute)
 	if err != nil {
-		return nil, fmt.Errorf("idle_watchdog must be a positive duration")
+		return nil, nil, fmt.Errorf("idle_watchdog must be a positive duration")
 	}
 	if err = opencode.ValidEnvAllow(c.OpenCode.EnvAllow); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	resources, err := c.OpenCode.Resources.Resolve()
+	workloads, err := attemptWorkloads(c.OpenCode, backend)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	workloads := &docker.Projected{Backend: *backend, Network: c.OpenCode.Network, Peers: c.OpenCode.Peers, Helper: c.OpenCode.Helper, Resources: resources}
 	if s := c.OpenCode.Sessions; s != nil {
 		ttl, err := time.ParseDuration(s.TTL)
 		interval, intervalErr := optionalDuration(s.Interval, 2*time.Hour)
 		grace, graceErr := optionalDuration(s.Grace, 24*time.Hour)
 		if c.OpenCode.Helper == "" || err != nil || intervalErr != nil || graceErr != nil || ttl <= 0 || s.Max < 1 || s.Max > 1024 {
-			return nil, fmt.Errorf("sessions require the helper, a positive ttl, interval and grace and max in [1,1024]")
+			return nil, nil, fmt.Errorf("sessions require the helper, a positive ttl, interval and grace and max in [1,1024]")
 		}
 		workloads.Sessions = &docker.Sessions{Dir: filepath.Join(stateDir, "sessions"), TTL: ttl, Max: s.Max, Interval: interval, Grace: grace,
 			Closed: func(ctx context.Context, workspace string, issues []string) map[string]time.Time {
@@ -125,67 +134,75 @@ func openCodeAdapter(ctx context.Context, c Config, stateDir string, api *multic
 				return closed
 			}}
 		if err := os.MkdirAll(workloads.Sessions.Dir, 0700); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		// Reconciliation kept session volumes; expired ones go before any attempt starts.
 		if err := workloads.Sessions.Collect(ctx, c.Daemon); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 	if (c.OpenCode.MulticaRelay == nil) != (c.OpenCode.MulticaCLI == "") {
-		return nil, fmt.Errorf("multica_relay and the digest-pinned multica_cli artifact require each other")
+		return nil, nil, fmt.Errorf("multica_relay and the digest-pinned multica_cli artifact require each other")
 	}
 	git := c.OpenCode.GitRelay != nil
 	if c.OpenCode.ForgeRelay != nil && !git {
-		return nil, fmt.Errorf("forge_relay requires git_relay")
+		return nil, nil, fmt.Errorf("forge_relay requires git_relay")
 	}
 	if git != (c.OpenCode.GitFile != "") || (git && c.OpenCode.Helper == "") || (c.OpenCode.Helper != "" && c.OpenCode.MulticaRelay == nil) {
-		return nil, fmt.Errorf("git_relay and git_file require each other and the helper; the helper requires multica_relay")
+		return nil, nil, fmt.Errorf("git_relay and git_file require each other and the helper; the helper requires multica_relay")
 	}
 	if git && !strings.HasPrefix(c.OpenCode.GitRelay.URL, "http://") {
-		return nil, fmt.Errorf("git_relay requires an http url: Git uses it as the HTTP proxy of remote aliases")
+		return nil, nil, fmt.Errorf("git_relay requires an http url: Git uses it as the HTTP proxy of remote aliases")
 	}
 	if c.OpenCode.Helper != "" {
 		// The forwarder reaches the checkout endpoint on the Multica relay listener.
 		if workloads.Forward, err = relayAddress("Multica", *c.OpenCode.MulticaRelay); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 	if workloads.Bundles, err = bundles(c.OpenCode, c.Tools); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	// The digest-pinned image cannot change, so one startup inspection covers every attempt.
 	report, err := workloads.Output(ctx, opencode.ImageProbe)
 	if err != nil {
-		return nil, fmt.Errorf("inspect agent image: %w", err)
+		return nil, nil, fmt.Errorf("inspect agent image: %w", err)
 	}
 	revision, err := cliRevision(c.OpenCode)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err = opencode.CheckImageRevision(report, revision, git); err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+	if workloads.Runtime == docker.Sysbox {
+		if err = opencode.CheckEngine(report); err != nil {
+			return nil, nil, err
+		}
 	}
 	if err = checkTools(ctx, workloads, c.Tools); err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+	if err = workloads.Preflight(ctx); err != nil {
+		return nil, nil, err
 	}
 	config, err := agentidentity.ReadConfig(c.OpenCode.IdentityFile)
 	if err != nil {
-		return nil, agentidentity.ErrDenied
+		return nil, nil, agentidentity.ErrDenied
 	}
 	issuer, err := agentidentity.New(config, strings.TrimRight(c.Server, "/"))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	authority, err := attempt.New(c.OpenCode.Authority)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err = authority.Apply(ctx, attempt.Grant{Controller: c.Daemon, Action: "recover"}); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err = workloads.ValidateNetwork(ctx); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	adapter := &opencode.Adapter{Server: strings.TrimRight(c.Server, "/"), Controller: c.Daemon, Issuer: issuer, Authority: authority, Status: api, Reporter: api, Workloads: workloads, Command: c.Command, EnvAllow: c.OpenCode.EnvAllow, IdleWatchdog: watchdog}
 	if c.OpenCode.MulticaRelay != nil {
@@ -194,28 +211,28 @@ func openCodeAdapter(ctx context.Context, c Config, stateDir string, api *multic
 		if git {
 			hosts, err := repo.ReadConfig(c.OpenCode.GitFile)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			adapter.GitRelay = repo.NewRelay(c.OpenCode.GitRelay.URL, hosts)
 			if err = serveRelay(ctx, "Git", adapter.GitRelay, *c.OpenCode.GitRelay, relay.Policy{Allow: repo.GitPath, Limit: repo.PushLimit, HeaderTimeout: repo.PushTimeout, Proxy: true}, nil, nil); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			if err = serveForge(ctx, c.OpenCode.ForgeRelay, adapter.GitRelay, hosts, workloads); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			// The upstream CLI authenticates checkout with its Multica relay credential.
 			adapter.Checkout = &repo.Checkout{Auth: grants, Hosts: hosts, Settings: api}
 			routes = map[string]http.Handler{"/repo/checkout": adapter.Checkout}
 		}
 		if err = serveRelay(ctx, "Multica", grants, *c.OpenCode.MulticaRelay, relay.Policy{Allow: multica.RelayPath}, routes, nil); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		adapter.Relay = grants
 		adapter.RelayURL = strings.TrimRight(c.OpenCode.MulticaRelay.URL, "/")
 	}
 	source, grants, err := openCodeInference(ctx, c)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if source != nil {
 		adapter.Inference, adapter.InferenceRelay = source, grants
@@ -224,7 +241,27 @@ func openCodeAdapter(ctx context.Context, c Config, stateDir string, api *multic
 	if workloads.Sessions != nil {
 		go workloads.Sessions.Sweep(ctx, c.Daemon, func(err error) { fmt.Fprintf(out, "session sweep failed: %v\n", err) })
 	}
-	return adapter, nil
+	return adapter, workloads, nil
+}
+
+// attemptWorkloads builds the Docker backend of attempts: runtime, resources and pool.
+func attemptWorkloads(c *OpenCodeConfig, backend *docker.Backend) (*docker.Projected, error) {
+	runtime, dind, err := attemptRuntime(c)
+	if err != nil {
+		return nil, err
+	}
+	resources, err := c.Resources.Resolve(runtime)
+	if err != nil {
+		return nil, err
+	}
+	workloads := &docker.Projected{Backend: *backend, Network: c.Network, Peers: c.Peers, Helper: c.Helper, Resources: resources, DinD: dind}
+	workloads.Runtime = runtime
+	if c.Pool != nil {
+		if workloads.Pool, workloads.Resources, err = attemptPool(c, resources); err != nil {
+			return nil, err
+		}
+	}
+	return workloads, nil
 }
 
 func optionalDuration(value string, fallback time.Duration) (time.Duration, error) {

@@ -41,19 +41,31 @@ type fleet struct {
 	// workspaceLimit caps attempts per workspace; 0 leaves only the global capacity.
 	workspaceLimit int
 	done           chan completion
+	// admit, when set, defers claims while the attempt pool is under memory pressure;
+	// paused records the state so changes are logged once, refused the last refusal.
+	admit   func() (bool, string)
+	paused  bool
+	refused time.Time
+	clock   func() time.Time
 }
+
+// admissionCooldown keeps claims paused until the pool has been calm this long: under
+// load the working set hovers at memory.high and single readings flap.
+const admissionCooldown = 15 * time.Second
 
 func newFleetState(api fleetAPI, daemon, dir string, out io.Writer, known map[string]string, capacity, workspaceLimit int) *fleet {
 	return &fleet{api: api, daemon: daemon, dir: dir, out: out, known: known, ready: map[string]string{}, served: map[string]bool{},
-		active: map[string]running{}, perRuntime: map[string]int{}, workspaceLimit: workspaceLimit, done: make(chan completion, capacity)}
+		active: map[string]running{}, perRuntime: map[string]int{}, workspaceLimit: workspaceLimit, done: make(chan completion, capacity), clock: time.Now}
 }
 
-func serveFleet(ctx context.Context, c Config, dir string, api fleetAPI, p *controller.Probe, out io.Writer) error {
+func serveFleet(ctx context.Context, c Config, dir string, api fleetAPI, p *controller.Probe, out io.Writer, admit func() (bool, string)) error {
 	known, err := readRegistry(dir)
 	if err != nil {
 		return err
 	}
-	return newFleetState(api, c.Daemon, dir, out, known, c.Concurrency, c.WorkspaceConcurrency).serve(ctx, c.Concurrency, p.Execute)
+	f := newFleetState(api, c.Daemon, dir, out, known, c.Concurrency, c.WorkspaceConcurrency)
+	f.admit = admit
+	return f.serve(ctx, c.Concurrency, p.Execute)
 }
 
 func (f *fleet) serve(ctx context.Context, capacity int, execute func(context.Context, multica.Task) error) (result error) {
@@ -117,7 +129,7 @@ func (f *fleet) serve(ctx context.Context, capacity int, execute func(context.Co
 // starve its peers; unused capacity is never pre-claimed and Multica keeps the queue.
 func (f *fleet) claim(ctx context.Context, capacity int, execute func(context.Context, multica.Task) error) error {
 	claimed := false
-	for len(f.active) < capacity {
+	for len(f.active) < capacity && f.admitted() {
 		scopes := map[string]string{}
 		for ws, rt := range f.ready {
 			if !f.served[rt] && (f.workspaceLimit == 0 || f.perRuntime[rt] < f.workspaceLimit) {
@@ -151,6 +163,27 @@ func (f *fleet) claim(ctx context.Context, capacity int, execute func(context.Co
 		go func() { f.done <- completion{key, task.RuntimeID, execute(runCtx, task)} }()
 	}
 	return nil
+}
+
+// admitted asks the pool before each claim; tasks wait in the Multica queue meanwhile.
+func (f *fleet) admitted() bool {
+	if f.admit == nil {
+		return true
+	}
+	ok, status := f.admit()
+	now := f.clock()
+	if !ok {
+		f.refused = now
+	}
+	calm := ok && now.Sub(f.refused) >= admissionCooldown
+	switch {
+	case calm && f.paused:
+		fmt.Fprintf(f.out, "claims resumed: %s\n", status)
+	case !ok && !f.paused:
+		fmt.Fprintf(f.out, "claims paused: %s\n", status)
+	}
+	f.paused = !calm
+	return calm
 }
 
 // finish releases a completed attempt's slot.

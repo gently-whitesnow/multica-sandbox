@@ -59,7 +59,7 @@ func TestAcceptOnlyBundleMounts(t *testing.T) {
 			change(c, config, host)
 		}
 		data, _ := json.Marshal(fixture)
-		return checkExpectedPolicy(data, "none", probeResources, bundles, path, strings.Join(volume, ""), nil)
+		return checkExpectedPolicy(data, expected{network: "none", limits: probeResources, bundles: bundles, path: path, volume: strings.Join(volume, "")})
 	}
 	if err := check([]Bundle{cli}, nil); err != nil {
 		t.Fatal(err)
@@ -115,7 +115,7 @@ func TestAcceptOnlyWorkdirVolume(t *testing.T) {
 			change(c, host)
 		}
 		data, _ := json.Marshal(fixture)
-		return checkExpectedPolicy(data, "none", probeResources, []Bundle{cli}, path, volume, nil)
+		return checkExpectedPolicy(data, expected{network: "none", limits: probeResources, bundles: []Bundle{cli}, path: path, volume: volume})
 	}
 	if err := check(nil); err != nil {
 		t.Fatal(err)
@@ -149,7 +149,7 @@ func TestAcceptOnlyLoopbackForgeHosts(t *testing.T) {
 		}
 		fixture[0]["HostConfig"].(map[string]any)["ExtraHosts"] = extra
 		data, _ := json.Marshal(fixture)
-		return checkExpectedPolicy(data, "none", probeResources, nil, "", "", hosts)
+		return checkExpectedPolicy(data, expected{network: "none", limits: probeResources, hosts: hosts})
 	}
 	if err := check([]string{"api.github.com:127.0.0.1"}, []string{"api.github.com"}); err != nil {
 		t.Fatal(err)

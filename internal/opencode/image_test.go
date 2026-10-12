@@ -89,3 +89,21 @@ func TestCheckImageRevision(t *testing.T) {
 		t.Fatal("CLI from another revision accepted against the default pin")
 	}
 }
+
+func TestCheckEngineForSysbox(t *testing.T) {
+	engine := "engine dockerd /usr/local/bin/dockerd\nengine containerd /usr/local/bin/containerd\nengine runc /usr/local/bin/runc\nengine iptables /usr/sbin/iptables\nengine-version Docker version 29.7.1, build 1234567\n"
+	if err := CheckEngine([]byte("version 1.18.35\n" + engine)); err != nil {
+		t.Fatal(err)
+	}
+	for name, output := range map[string]string{
+		"no dockerd":   strings.Replace(engine, "dockerd /usr/local/bin/dockerd", "dockerd ", 1),
+		"no iptables":  strings.Replace(engine, "engine iptables /usr/sbin/iptables\n", "", 1),
+		"no version":   strings.Replace(engine, "Docker version", "", 1),
+		"relative bin": strings.Replace(engine, "runc /usr/local/bin/runc", "runc runc", 1),
+		"empty":        "",
+	} {
+		if err := CheckEngine([]byte(output)); err == nil || !strings.Contains(err.Error(), "sysbox-runc attempts need") {
+			t.Errorf("%s accepted: %v", name, err)
+		}
+	}
+}
