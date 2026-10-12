@@ -15,7 +15,7 @@ from verified behavior.
   identity resolution contract (0013), Multica API relay (0014),
   repository workdirs, mediated Git and session resume (0015),
   `gh pr create` through Git remote aliases (0016),
-  web chat tasks (0017), agent skills (0018).
+  web chat tasks (0017), agent skills (0018), nested Docker under sysbox-runc (0019, proposed).
 - `examples/end-to-end/`: opt-in real Multica/OpenCode/inference lab.
 - `examples/identity-mcp/`: disposable identity and MCP contract fixture.
 - `internal/inference/`: workspace gateway bindings, relay policy and advisory model catalogs.
@@ -28,6 +28,7 @@ from verified behavior.
 - `examples/agent-image/`: example user-owned OpenCode image on a Debian base; the
   controller mounts the `multica` CLI artifact (`deploy/multica-cli.Dockerfile`).
 - `examples/tool-bundle/`: example user-owned tool bundle (static `jq`).
+- `examples/sysbox-host/`: Lima/Linux Sysbox host recipe and nested-Docker policy smoke (ADR 0019).
 - `internal/opencode/`: OpenCode adapter, native reporting, conformance
   (verified behavior, deployment-owned boundaries, limitations) and the verified
   official base images (`images.txt`).
