@@ -7,7 +7,7 @@ import (
 	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
 )
 
-// Text below mirrors Multica b4ca5b4 server/internal/daemon/prompt.go (buildChatPrompt,
+// Text below mirrors Multica v0.5.2 server/internal/daemon/prompt.go (buildChatPrompt,
 // sessionContinuityNoticeFor) and execenv/{channel_type,runtime_config_sections}.go chat
 // sections for web chat, with the explicit skill selection of slash links (ADR 0017).
 
@@ -99,6 +99,5 @@ func chatOutput(b *strings.Builder) {
 	b.WriteString("## Output\n\n")
 	b.WriteString("This is a chat session. Your reply is delivered directly to the chat window the user is reading.\n\n")
 	b.WriteString("**Delivering files here:** run `multica attachment upload <local-path>` — it binds the file to your reply and it renders as an attachment card. That command is the ONLY way a file reaches the user; a path written into your reply text is not.\n")
-	b.WriteString("\n**Charts and diagrams:** put them in the text as a fenced `html` or `mermaid` code block — it renders in place (name it with `title=\"...\"` after the language). An attached file, HTML included, shows as a card instead. Theming and sizing: the multica-platform issues reference.\n")
 	b.WriteString("\n**Runtime-local paths are never deliverables.** Your working directory exists only on the machine running you — NEVER write an absolute path or a `file://` URL as a clickable link or an embedded image. Reference code locations as inline code, never a link: `path/to/file.ts:42`. Deliver files through this surface's mechanism (above); if it has none, say so in words — never link the path and imply the file was delivered.\n")
 }

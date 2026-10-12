@@ -1,14 +1,15 @@
-# Upstream isolated checkout (Multica b4ca5b4 repocache: ensureIsolatedCheckout,
+# Upstream isolated checkout (Multica v0.5.2 repocache: ensureIsolatedCheckout,
 # inspectExistingCheckout, resolveRef, excludeFromGit), cloned from origin through the
 # Git relay instead of a bare cache; coauthor.sh precedes it. Runs as the attempt user;
-# it prints result lines, or "error <kind> <message>". Arguments: url ref branch fresh
+# it prints result lines, or "error <kind> <message>" ("forbidden" carries no reason,
+# as upstream's refusal). Arguments: url ref branch fresh
 # workdir name root commit-name commit-email co-author hook.
 set -u
 fail() { printf 'error %s %s\n' "$1" "$(printf '%s' "$2" | tr '\r\n' '  ' | cut -c1-600)"; exit 1; }
 run() { out=$("$@" 2>&1) || fail failed "$(printf '%s\n' "$out" | tail -n 3)"; }
 url=$1 ref=$2 branch=$3 fresh=$4 name=$6 root=$7 author=$8 email=$9 coauthor=${10} hooktext=${11}
-dir=$(cd -P -- "$5" 2>/dev/null && pwd -P) || fail forbidden "resolve requested workdir: $5"
-case "$dir" in "$root" | "$root"/*) ;; *) fail forbidden "$dir is outside the active task workdir $root" ;; esac
+dir=$(cd -P -- "$5" 2>/dev/null && pwd -P) || fail forbidden workdir
+case "$dir" in "$root" | "$root"/*) ;; *) fail forbidden workdir ;; esac
 path=$dir/$name
 commit() { git -C "$path" rev-parse --verify --quiet --end-of-options "$1^{commit}" 2>/dev/null; }
 resolve() {

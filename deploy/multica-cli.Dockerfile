@@ -2,12 +2,12 @@
 # mounts it into attempts; agent images do not contain it. The `multica` context is
 # Multica at multica.UpstreamRevision, e.g.
 #   docker build -f deploy/multica-cli.Dockerfile \
-#     --build-context multica=https://github.com/multica-ai/multica.git#b4ca5b4a23e68b26292a680dca7689a952bb1cd5 .
+#     --build-context multica=https://github.com/multica-ai/multica.git#d45aba1cd7582bef9210b921bbb7dc198b48e1ee .
 # Reference the resulting digest as `multica_cli`. It holds no credentials.
 # For a server at another compatible revision, use its source as the context, pass
 # --build-arg REVISION=<its commit> and set the same commit as `multica_cli_revision`.
 FROM golang:1.26.6-alpine@sha256:3889b425f035be855a72fb4755265311293b6d414521f0a519d819df32222d83 AS build
-ARG REVISION=b4ca5b4a23e68b26292a680dca7689a952bb1cd5
+ARG REVISION=d45aba1cd7582bef9210b921bbb7dc198b48e1ee
 WORKDIR /src
 COPY --from=multica /server/go.mod /server/go.sum ./
 RUN go mod download

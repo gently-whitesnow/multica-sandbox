@@ -1,4 +1,4 @@
-# Upstream Co-authored-by state and hooks (Multica b4ca5b4 repocache: WriteCoAuthoredByState,
+# Upstream Co-authored-by state and hooks (Multica v0.5.2 repocache: WriteCoAuthoredByState,
 # reconcileHookAt, installCoAuthoredByHook, removeCoAuthoredByHook); $hooktext is the hook.
 ours() { grep -qF -e '# multica:prepare-commit-msg:co-authored-by' -e '# Installed by the Multica daemon.' "$1" 2>/dev/null; }
 # hook <hooks-dir> <enabled> <replace-foreign>: installs or removes the trailer hook.

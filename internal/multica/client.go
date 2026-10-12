@@ -16,7 +16,8 @@ import (
 	"github.com/gently-whitesnow/multica-sandbox/internal/baseurl"
 )
 
-const UpstreamRevision = "b4ca5b4a23e68b26292a680dca7689a952bb1cd5"
+// UpstreamRevision is Multica v0.5.2, the release self-hosted deployments run (ADR 0005).
+const UpstreamRevision = "d45aba1cd7582bef9210b921bbb7dc198b48e1ee"
 const ProbeProvider = "sandbox-probe"
 
 type Client struct {

@@ -46,8 +46,8 @@ executes through MCP. MCP is not required as an inference transport.
 Requires Docker Compose; allow several GB for images and at least 1 GB per agent.
 Ports 3001 and 8081 bind only to loopback. No subscription or API credential files
 from your workstation are copied into the lab. Dependencies are pinned by digest.
-The backend builds unmodified Multica main `b4ca5b4` (verified 2026-10-04); the UI
-uses the latest published image, v0.6.1. Upgrade pins together with contract tests.
+The backend builds unmodified Multica v0.5.2 (`d45aba1`); the UI uses the published
+v0.5.2 image. Upgrade pins together with contract tests.
 
 ```sh
 ./scripts/e2e.sh prepare

@@ -238,8 +238,8 @@ func TestCheckoutHandler(t *testing.T) {
 			t.Errorf("%s: %d, want %d", name, got, c.code)
 		}
 	}
-	target.out = "error forbidden /etc is outside the active task workdir /workspace/work\n"
-	if w := call("opaque", valid()); w.Code != 403 || !strings.Contains(w.Body.String(), "not owned by the active task") {
+	target.out = "error forbidden workdir\n"
+	if w := call("opaque", valid()); w.Code != 403 || w.Body.String() != "repo checkout workdir is not owned by the active task\n" {
 		t.Fatalf("script refusal: %d %s", w.Code, w.Body)
 	}
 	busyWait = 200 * time.Millisecond

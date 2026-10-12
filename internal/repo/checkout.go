@@ -29,6 +29,9 @@ var (
 	hookText string
 )
 
+// notOwned is upstream v0.5.2's refusal of a workdir outside the active task's, without a reason.
+const notOwned = "repo checkout workdir is not owned by the active task"
+
 // busyWait is upstream's lock wait before a retryable 503.
 var busyWait = 10 * time.Second
 
@@ -196,7 +199,7 @@ func (c *Checkout) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "repo checkout task context does not match the active task", http.StatusForbidden)
 		return
 	case !path.IsAbs(req.WorkDir) || path.Clean(req.WorkDir) != req.WorkDir || (req.WorkDir != WorkDir && !strings.HasPrefix(req.WorkDir, WorkDir+"/")) || len(req.WorkDir) > 1024:
-		http.Error(w, "repo checkout workdir is not owned by the active task: "+strconv.Quote(req.WorkDir)+" is outside the active task workdir "+WorkDir, http.StatusForbidden)
+		http.Error(w, notOwned, http.StatusForbidden)
 		return
 	}
 	claimRef, allowed := task.Repos[req.URL]
@@ -245,7 +248,7 @@ func (c *Checkout) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	result, kind, message := parse(out)
 	switch {
 	case kind == "forbidden":
-		http.Error(w, "repo checkout workdir is not owned by the active task: "+message, http.StatusForbidden)
+		http.Error(w, notOwned, http.StatusForbidden)
 	case kind != "":
 		http.Error(w, message, http.StatusInternalServerError)
 	case result.Path == "":

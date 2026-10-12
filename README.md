@@ -109,10 +109,10 @@ Reuse the same identity, backend and lock. See [ADR 0005](adrs/0005-upstream-lif
 
 ## Upstream verification
 
-`./scripts/test-upstream.sh` builds the pinned, unmodified Multica revision and
-runs disposable PostgreSQL/server containers. Tests seed generic tasks directly
-in the database; UI task creation is not covered. Requires Go 1.26.4+, Docker,
-Git, curl and OpenSSL; upstream may download its required Go toolchain.
+`./scripts/test-upstream.sh` builds unmodified Multica v0.5.2, which self-hosted
+deployments run (ADR 0005), in disposable PostgreSQL/server containers. Tests seed
+generic tasks directly in the database; UI task creation is not covered. Requires Go
+1.26.4+, Docker, Git, curl and OpenSSL; upstream may download its Go toolchain.
 Set `VERIFY_SERVICE=1` to build and test the actual controller image through Compose.
 The service fixture shares only the disposable server's network namespace to use
 loopback HTTP; deployment configuration requires HTTPS for non-loopback origins.

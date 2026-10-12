@@ -106,7 +106,7 @@ unverified.
 
 It then runs the embedded `checkout.sh` with `docker exec` as uid 65532, with the
 attempt's Git environment. The script follows upstream isolated mode (`repocache` at
-b4ca5b4) with a fresh clone instead of the bare cache:
+v0.5.2) with a fresh clone instead of the bare cache:
 - **Path and branch:** the checkout goes to `<workdir>/<repo>`, on branch
   `agent/<agent>/<task12>` from the requested or claim ref, or else the default branch.
   The branch name gets a `-<unix>` suffix on collision.

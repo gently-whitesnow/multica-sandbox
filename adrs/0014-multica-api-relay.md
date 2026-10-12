@@ -11,8 +11,8 @@ use the `multica` CLI. The CLI authenticates with the claim's task-scoped
 A `mat_` token acts as the originator user and agent in the workspace. Multica
 deletes it on completion/failure and expires it after 24 hours. ADR 0003 forbids
 Multica tokens inside workloads, so a sandboxed agent cannot read its task or
-reply. Contract inspection at `b4ca5b4a23e68b26292a680dca7689a952bb1cd5` also
-found that a `mat_` token can call `POST /api/tokens` to mint a personal access
+reply. Contract inspection at `b4ca5b4a23e68b26292a680dca7689a952bb1cd5` (unchanged at
+v0.5.2) also found that a `mat_` token can call `POST /api/tokens` to mint a personal access
 token that outlives the task.
 
 ## Decision
@@ -87,7 +87,7 @@ denial. Containers tests cover read-only mounts, shadowing and artifact rejectio
 
 ## References
 
-- [Daemon environment and token handling](https://github.com/multica-ai/multica/blob/b4ca5b4a23e68b26292a680dca7689a952bb1cd5/server/internal/daemon/daemon.go)
-- [Per-turn prompt](https://github.com/multica-ai/multica/blob/b4ca5b4a23e68b26292a680dca7689a952bb1cd5/server/internal/daemon/prompt.go)
-- [Task-token authentication](https://github.com/multica-ai/multica/blob/b4ca5b4a23e68b26292a680dca7689a952bb1cd5/server/internal/middleware/auth.go)
-- [Personal access token handler](https://github.com/multica-ai/multica/blob/b4ca5b4a23e68b26292a680dca7689a952bb1cd5/server/internal/handler/personal_access_token.go)
+- [Daemon environment and token handling](https://github.com/multica-ai/multica/blob/d45aba1cd7582bef9210b921bbb7dc198b48e1ee/server/internal/daemon/daemon.go)
+- [Per-turn prompt](https://github.com/multica-ai/multica/blob/d45aba1cd7582bef9210b921bbb7dc198b48e1ee/server/internal/daemon/prompt.go)
+- [Task-token authentication](https://github.com/multica-ai/multica/blob/d45aba1cd7582bef9210b921bbb7dc198b48e1ee/server/internal/middleware/auth.go)
+- [Personal access token handler](https://github.com/multica-ai/multica/blob/d45aba1cd7582bef9210b921bbb7dc198b48e1ee/server/internal/handler/personal_access_token.go)

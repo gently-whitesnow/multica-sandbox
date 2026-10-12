@@ -11,7 +11,7 @@ import (
 	"github.com/gently-whitesnow/multica-sandbox/internal/repo"
 )
 
-// Text below mirrors Multica b4ca5b4a23e68b26292a680dca7689a952bb1cd5
+// Text below mirrors Multica v0.5.2 (multica.UpstreamRevision)
 // server/internal/daemon/prompt.go (buildPromptBody, buildCommentPrompt) and
 // execenv/{runtime_config_sections,reply_instructions,issue_state_instructions}.go,
 // reduced to the issue workflow this adapter supports. Re-check on upgrades.

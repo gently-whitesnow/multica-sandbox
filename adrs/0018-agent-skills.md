@@ -7,7 +7,7 @@ Date: 2026-10-11
 
 Multica binds skills to agents and adds built-in platform skills, such as
 `multica-platform` with the issue, mention and project contracts. The upstream
-daemon (`b4ca5b4`, unchanged in the v0.5.2 line) handles them as follows:
+daemon (v0.5.2) handles them as follows:
 - Without `skill-bundles-v1`, a claim carries `agent.skills` inline: `id`, `name`,
   `description`, `content` and supporting `files` (`path`, `content`). Without
   `platform-skill-v1`, the server also sends a redirect stub under the
@@ -18,7 +18,8 @@ daemon (`b4ca5b4`, unchanged in the v0.5.2 line) handles them as follows:
   frontmatter whose `name` is the slug; every other key stays as written.
   A supporting `SKILL.md` duplicate is skipped.
 - The brief lists the model-visible skills (`disable-model-invocation` hides
-  one) and points the sub-issue section at `multica-platform`. Web chat
+  one) and points the sub-issue section at `multica-platform`, or at the
+  pre-merge `multica-working-on-issues` when only that is installed. Web chat
   renders the skills a message selects with `slash://skill/<id>` links.
 
 Before this decision the adapter dropped skills. The brief and chat prompt

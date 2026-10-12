@@ -9,7 +9,7 @@ A deployment may serve 100 workspaces without 100 machines or controller process
 One controller discovers accessible memberships and keeps attempt authority
 scoped to each workspace.
 
-Research inspected upstream main at b4ca5b4a23e68b26292a680dca7689a952bb1cd5.
+Research inspected upstream `b4ca5b4`; the findings hold at v0.5.2.
 The following source findings informed the implementation:
 
 - Runtime rows belong to one workspace. Public visibility shares them with that
@@ -117,9 +117,9 @@ host/tenant isolation remains a deployment and backend concern.
 
 ## References
 
-- [Runtime scope and visibility](https://github.com/multica-ai/multica/blob/b4ca5b4a23e68b26292a680dca7689a952bb1cd5/server/pkg/db/queries/runtime.sql)
-- [Membership discovery](https://github.com/multica-ai/multica/blob/b4ca5b4a23e68b26292a680dca7689a952bb1cd5/server/internal/handler/daemon_workspace.go)
-- [Authorization, batch claims and task delivery](https://github.com/multica-ai/multica/blob/b4ca5b4a23e68b26292a680dca7689a952bb1cd5/server/internal/handler/daemon.go)
-- [Native daemon and custom environment](https://github.com/multica-ai/multica/blob/b4ca5b4a23e68b26292a680dca7689a952bb1cd5/server/internal/daemon/daemon.go)
+- [Runtime scope and visibility](https://github.com/multica-ai/multica/blob/d45aba1cd7582bef9210b921bbb7dc198b48e1ee/server/pkg/db/queries/runtime.sql)
+- [Membership discovery](https://github.com/multica-ai/multica/blob/d45aba1cd7582bef9210b921bbb7dc198b48e1ee/server/internal/handler/daemon_workspace.go)
+- [Authorization, batch claims and task delivery](https://github.com/multica-ai/multica/blob/d45aba1cd7582bef9210b921bbb7dc198b48e1ee/server/internal/handler/daemon.go)
+- [Native daemon and custom environment](https://github.com/multica-ai/multica/blob/d45aba1cd7582bef9210b921bbb7dc198b48e1ee/server/internal/daemon/daemon.go)
 - [SPIRE identity attestation](https://spiffe.io/docs/latest/spire-about/spire-concepts/)
 - [LiteLLM credential boundary](https://docs.litellm.ai/docs/proxy/client_setup/overview)
