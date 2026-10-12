@@ -97,6 +97,7 @@ type OpenCodeConfig struct {
 	Resources    *docker.ResourceSpec `json:"resources,omitempty"`
 	Runtime      string               `json:"runtime,omitempty"`
 	DinD         *DinDConfig          `json:"dind,omitempty"`
+	Pool         *PoolConfig          `json:"pool,omitempty"`
 }
 
 // SessionsConfig bounds retained workdirs: TTL after last use and a session count.

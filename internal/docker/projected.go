@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/gently-whitesnow/multica-sandbox/internal/execution"
+	"github.com/gently-whitesnow/multica-sandbox/internal/pool"
 	"github.com/gently-whitesnow/multica-sandbox/internal/repo"
 )
 
@@ -45,6 +46,9 @@ type Projected struct {
 	Resources Resources
 	// DinD configures the nested engine under sysbox, which requires the helper.
 	DinD DinD
+	// Pool reads the slice of Resources.Pool (ADR 0020); Preflight records its memory.max.
+	Pool    *pool.Pool
+	poolMax int64
 }
 
 // DinD configures the nested engine of sysbox attempts (ADR 0019).
@@ -150,7 +154,7 @@ func (b *Projected) Start(ctx context.Context, attempt string, w execution.Workd
 	if err != nil {
 		return nil, err
 	}
-	projection := &projectedRun{run: r, network: isolated, peers: b.Peers, owner: b.Owner}
+	projection := &projectedRun{run: r, network: isolated, peers: b.Peers, owner: b.Owner, pool: b.Pool, poolMax: b.poolMax}
 	cleanup := func() error {
 		cleanCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
@@ -220,6 +224,9 @@ func (b *Projected) launch(ctx context.Context, r *run, want expected, extra []s
 	}
 	if err == nil {
 		err = checkRuntime(ctx, r.name, b.Runtime == Sysbox)
+	}
+	if err == nil && b.Pool != nil {
+		err = b.Pool.CheckAttempt(id, want.limits.Memory)
 	}
 	return id, err
 }
@@ -327,6 +334,9 @@ type projectedRun struct {
 	*run
 	id, network, volume, owner string
 	peers                      []string
+	// pool, when set, holds the attempt cgroup; poolMax is its memory.max.
+	pool    *pool.Pool
+	poolMax int64
 	// sessions holds the retained volume's writer slot; reused means it already existed.
 	sessions *Sessions
 	reused   bool
@@ -414,6 +424,8 @@ func (r *projectedRun) Execute(ctx context.Context, args []string) error {
 }
 
 func (r *projectedRun) Remove(ctx context.Context) error {
+	ctx, cancel := removal(ctx)
+	defer cancel()
 	err := r.run.Remove(ctx)
 	switch {
 	case r.sessions != nil:
@@ -558,6 +570,13 @@ func (r *projectedRun) Stream(ctx context.Context, args []string, env map[string
 		cancel()
 	}
 	waitErr := cmd.Wait()
+	// An agent killed for memory also ends its stream early; the kill decides the failure,
+	// which Multica must not retry as a provider stream cut.
+	if readErr != nil || waitErr != nil {
+		if oom := r.outOfMemory(); oom != nil {
+			return oom
+		}
+	}
 	if readErr != nil {
 		return readErr
 	}
@@ -565,6 +584,39 @@ func (r *projectedRun) Stream(ctx context.Context, args []string, env map[string
 		return fmt.Errorf("agent execution failed; output withheld")
 	}
 	return nil
+}
+
+// outOfMemory reports an OOM kill in the attempt cgroup: read on the host through the
+// pool, else inside the attempt, else Docker's record of a container that is gone.
+func (r *projectedRun) outOfMemory() *execution.OOMError {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var m pool.Memory
+	var err error
+	if r.pool != nil {
+		m, err = r.pool.AttemptMemory(r.id)
+	} else {
+		var out []byte
+		out, err = command(ctx, "exec", "--user", AttemptUser, r.name, "cat", "/sys/fs/cgroup/memory.events", "/sys/fs/cgroup/memory.peak", "/sys/fs/cgroup/memory.max")
+		if err == nil {
+			m, err = pool.ParseMemory(out)
+		}
+	}
+	if err != nil {
+		data, inspectErr := command(ctx, "inspect", "--format", "{{.State.OOMKilled}}", r.name)
+		if inspectErr != nil || strings.TrimSpace(string(data)) != "true" {
+			return nil
+		}
+		m = pool.Memory{Peak: -1, Max: -1}
+	} else if m.OOMKill == 0 {
+		return nil
+	}
+	oom := &execution.OOMError{Killed: m.OOMKill, Peak: m.Peak, Limit: m.Max}
+	// Without its own limit hit, the pool's memory.max was reached.
+	if r.pool != nil && (m.Max == pool.Unlimited || m.OOM == 0) {
+		oom.Pool, oom.Limit = true, r.poolMax
+	}
+	return oom
 }
 
 // exec builds a docker exec in the agent working directory. Env values reach the docker

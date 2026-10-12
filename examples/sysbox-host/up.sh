@@ -4,6 +4,7 @@
 #   examples/sysbox-host/up.sh          create or start the VM, check Sysbox, add the context
 #   examples/sysbox-host/up.sh stop     stop the VM (the disk stays)
 #   examples/sysbox-host/up.sh delete   delete the VM and the context
+#   examples/sysbox-host/up.sh pool     add swap and the attempt pool slice (pool.sh)
 set -eu
 here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)
 name=${LIMA_SYSBOX_NAME:-sysbox}
@@ -12,8 +13,11 @@ ctx=lima-$name
 case "${1:-up}" in
   stop) exec limactl stop "$name" ;;
   delete) limactl delete --force "$name"; docker context rm -f "$ctx" 2>/dev/null || true; exit 0 ;;
+  pool)
+    limactl copy "$here/pool.sh" "$here/multica_attempts.slice" "$name:/tmp/"
+    exec limactl shell "$name" sudo sh /tmp/pool.sh /tmp/multica_attempts.slice 4G ;;
   up) ;;
-  *) echo "usage: $0 [up|stop|delete]" >&2; exit 2 ;;
+  *) echo "usage: $0 [up|stop|delete|pool]" >&2; exit 2 ;;
 esac
 
 command -v limactl >/dev/null || { echo "Lima is required: https://lima-vm.io" >&2; exit 1; }

@@ -59,6 +59,7 @@ func checkExpectedPolicy(data []byte, want expected) error {
 		}
 		HostConfig struct {
 			NetworkMode, Runtime, PidMode, IpcMode, CgroupnsMode string
+			CgroupParent                                         string
 			ReadonlyRootfs, Privileged, PublishAllPorts          bool
 			CapAdd, CapDrop, SecurityOpt, Binds, VolumesFrom     []string
 			ExtraHosts                                           []string
@@ -91,7 +92,7 @@ func checkExpectedPolicy(data []byte, want expected) error {
 		h.NetworkMode != want.network || h.Runtime != runtime || h.PidMode != "" || h.IpcMode != "private" || h.CgroupnsMode != "private" ||
 		!h.ReadonlyRootfs || h.Privileged || h.PublishAllPorts || len(h.CapAdd) != 0 || !reflect.DeepEqual(h.CapDrop, []string{"ALL"}) ||
 		!reflect.DeepEqual(h.SecurityOpt, []string{"no-new-privileges=true"}) || len(h.Binds) != 0 || len(h.VolumesFrom) != 0 || len(h.Devices) != 0 || len(h.DeviceRequests) != 0 ||
-		!want.limits.matches(h.Memory, h.MemorySwap, h.NanoCpus, h.ShmSize, h.PidsLimit, h.Tmpfs, h.Ulimits, runtime == Sysbox) ||
+		!want.limits.matches(h.Memory, h.MemorySwap, h.NanoCpus, h.ShmSize, h.PidsLimit, h.CgroupParent, h.Tmpfs, h.Ulimits, runtime == Sysbox) ||
 		h.RestartPolicy.Name != "no" || h.LogConfig.Type != "none" || !slices.Equal(h.ExtraHosts, loopbackHosts(want.hosts)) {
 		return fmt.Errorf("created container does not satisfy offline policy")
 	}

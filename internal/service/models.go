@@ -73,6 +73,7 @@ func failure(cause error) (string, string) {
 	var idle *execution.IdleError
 	var rejected *execution.RejectedError
 	var agent *execution.AgentFailure
+	var oom *execution.OOMError
 	switch {
 	case errors.As(cause, &timeout):
 		return "opencode " + timeout.Error(), "timeout"
@@ -80,6 +81,10 @@ func failure(cause error) (string, string) {
 		return idle.Error(), "idle_watchdog"
 	case errors.As(cause, &rejected):
 		return "Sandbox rejected the task before OpenCode started", "environment_prepare_failed"
+	case errors.As(cause, &oom):
+		// A canonical agent-side reason outside Multica's automatic retries: the same
+		// task would exhaust memory again.
+		return oom.Error(), "agent_error.process_failure"
 	case errors.As(cause, &agent):
 		return agent.Error(), ""
 	default:

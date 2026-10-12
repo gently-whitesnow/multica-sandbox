@@ -8,10 +8,13 @@ import (
 )
 
 // Resources bound one attempt container; policy compares the created container with them.
+// With a Pool cgroup parent (ADR 0020) Memory is an optional ceiling (0: none) and the
+// attempt may swap; the slice bounds memory and swap of all attempts together.
 type Resources struct {
 	NanoCPUs                    int64
 	Memory, Workspace, Tmp, Shm int64
 	Pids, NoFile                int
+	Pool                        string
 }
 
 // DefaultResources fit real builds (compilers, test runners); the upstream daemon sets none.
@@ -69,7 +72,7 @@ func (s *ResourceSpec) Resolve(runtime string) (Resources, error) {
 		if size.value == "" {
 			continue
 		}
-		n, err := parseSize(size.value)
+		n, err := ParseSize(size.value)
 		if err != nil || n < size.min || n > size.max {
 			return r, fmt.Errorf("resources.%s must be a size such as 512m or 4g within bounds", size.name)
 		}
@@ -90,8 +93,8 @@ func (s *ResourceSpec) Resolve(runtime string) (Resources, error) {
 	return r, nil
 }
 
-// parseSize reads Docker's binary size units: a byte count with an optional b, k, m or g suffix.
-func parseSize(value string) (int64, error) {
+// ParseSize reads Docker's binary size units: a byte count with an optional b, k, m or g suffix.
+func ParseSize(value string) (int64, error) {
 	units := map[byte]int64{'b': 1, 'k': 1 << 10, 'm': 1 << 20, 'g': 1 << 30}
 	number, unit := strings.ToLower(value), int64(1)
 	if n := len(number); n > 0 && units[number[n-1]] != 0 {
@@ -111,11 +114,35 @@ func (r Resources) tmpTmpfs() string {
 	return "rw,noexec,nosuid,nodev,size=" + strconv.FormatInt(r.Tmp, 10) + ",mode=1777"
 }
 
+// InPool places attempts in the pool slice with an optional memory ceiling.
+func (r Resources) InPool(parent string, ceiling int64) Resources {
+	r.Pool, r.Memory = parent, ceiling
+	return r
+}
+
+// swap is the expected HostConfig.MemorySwap: no swap without a pool, unlimited with a
+// pool ceiling, unset in a pool without one.
+func (r Resources) swap() int64 {
+	switch {
+	case r.Pool == "":
+		return r.Memory
+	case r.Memory > 0:
+		return -1
+	}
+	return 0
+}
+
 func (r Resources) args() []string {
-	memory := strconv.FormatInt(r.Memory, 10)
-	return []string{"--memory=" + memory, "--memory-swap=" + memory, "--cpus=" + strconv.FormatFloat(float64(r.NanoCPUs)/1e9, 'f', -1, 64),
-		"--pids-limit=" + strconv.Itoa(r.Pids), fmt.Sprintf("--ulimit=nofile=%d:%d", r.NoFile, r.NoFile),
-		"--tmpfs=/workspace:" + r.workspaceTmpfs(), "--tmpfs=/tmp:" + r.tmpTmpfs(), "--shm-size=" + strconv.FormatInt(r.Shm, 10)}
+	var args []string
+	if r.Pool != "" {
+		args = append(args, "--cgroup-parent="+r.Pool)
+	}
+	if r.Memory > 0 {
+		args = append(args, "--memory="+strconv.FormatInt(r.Memory, 10), "--memory-swap="+strconv.FormatInt(r.swap(), 10))
+	}
+	return append(args, "--cpus="+strconv.FormatFloat(float64(r.NanoCPUs)/1e9, 'f', -1, 64),
+		"--pids-limit="+strconv.Itoa(r.Pids), fmt.Sprintf("--ulimit=nofile=%d:%d", r.NoFile, r.NoFile),
+		"--tmpfs=/workspace:"+r.workspaceTmpfs(), "--tmpfs=/tmp:"+r.tmpTmpfs(), "--shm-size="+strconv.FormatInt(r.Shm, 10))
 }
 
 type ulimit struct {
@@ -125,7 +152,7 @@ type ulimit struct {
 
 // matches reports whether inspected host limits are exactly these resources; a sysbox
 // attempt also has the /run tmpfs.
-func (r Resources) matches(memory, swap, cpus, shm int64, pids int, tmpfs map[string]string, ulimits []ulimit, sysbox bool) bool {
+func (r Resources) matches(memory, swap, cpus, shm int64, pids int, parent string, tmpfs map[string]string, ulimits []ulimit, sysbox bool) bool {
 	mounts := 2
 	if sysbox {
 		mounts++
@@ -133,7 +160,7 @@ func (r Resources) matches(memory, swap, cpus, shm int64, pids int, tmpfs map[st
 			return false
 		}
 	}
-	return memory == r.Memory && swap == r.Memory && cpus == r.NanoCPUs && shm == r.Shm && pids == r.Pids &&
+	return memory == r.Memory && swap == r.swap() && parent == r.Pool && cpus == r.NanoCPUs && shm == r.Shm && pids == r.Pids &&
 		len(tmpfs) == mounts && tmpfs["/workspace"] == r.workspaceTmpfs() && tmpfs["/tmp"] == r.tmpTmpfs() &&
 		len(ulimits) == 1 && ulimits[0] == ulimit{"nofile", int64(r.NoFile), int64(r.NoFile)}
 }

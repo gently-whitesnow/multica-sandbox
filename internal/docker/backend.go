@@ -173,7 +173,9 @@ func (r *run) cleanup() error {
 	return r.Remove(ctx)
 }
 func (r *run) Remove(ctx context.Context) error {
-	_, err := command(ctx, "rm", "-fv", r.name)
+	ctx, cancel := removal(ctx)
+	defer cancel()
+	_, err := commandWithin(ctx, RemoveTimeout, "rm", "-fv", r.name)
 	return err
 }
 func (r *run) Result() execution.Result { return execution.Result{} }

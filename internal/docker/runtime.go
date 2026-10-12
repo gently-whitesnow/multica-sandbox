@@ -2,10 +2,13 @@ package docker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/gently-whitesnow/multica-sandbox/internal/pool"
 )
 
 // checkRuntime verifies a started attempt through an AttemptUser process instead of
@@ -58,9 +61,27 @@ func runtimeFacts(out []byte, sysbox bool) error {
 	return nil
 }
 
-// Preflight fails closed before serving: under sysbox a canary attempt with the real
-// policy and nested engine.
+// Preflight fails closed before serving: a bounded pool slice matching the cgroup driver
+// and, under sysbox, a canary attempt with the real policy and nested engine.
 func (b *Projected) Preflight(ctx context.Context) error {
+	if b.Pool != nil {
+		data, err := command(ctx, "info", "--format", "{{json .CgroupDriver}}")
+		var driver string
+		if err == nil {
+			err = json.Unmarshal(data, &driver)
+		}
+		if err == nil {
+			err = pool.ValidParent(b.limits().Pool, driver)
+		}
+		if err != nil {
+			return err
+		}
+		limits, err := b.Pool.Limits()
+		if err != nil {
+			return err
+		}
+		b.poolMax = limits.Max
+	}
 	if b.Runtime != Sysbox {
 		return nil
 	}

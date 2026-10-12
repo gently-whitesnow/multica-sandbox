@@ -59,7 +59,7 @@ Add `sysbox-runc` as an explicit, opt-in runtime of the Docker backend.
   for sysbox only, `opencode.dind: {registry_mirrors, insecure_registries,
   ready_timeout, testcontainers_ryuk_disabled}`. Sysbox requires the helper image.
   Resource defaults under sysbox fit a nested engine: `pids` 2048, `nofile` 65536,
-  `/tmp` 512 MiB; memory stays under `opencode.resources`.
+  `/tmp` 512 MiB; memory follows ADR 0020 or `opencode.resources`.
 - **Preflight.** `docker info` lists `sysbox-runc`; the image probe finds `dockerd`,
   `containerd`, `runc` and `iptables`. A canary attempt with the real policy must
   reach a ready engine and pass the runtime check below; `/sys/fs/cgroup` and

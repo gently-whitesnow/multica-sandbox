@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -80,7 +81,11 @@ func TestSysboxAttempt(t *testing.T) {
 	owner := testOwner("93000000")
 	network, peer := template(t, owner, true)
 	b := &Projected{Backend: Backend{Image: engineImage(t), Owner: owner, Command: []string{"/bin/sh"}, Runtime: Sysbox}, Network: network, Peers: []string{peer},
-		Helper: helperImage(t), Forward: "mirror:5000", DinD: DinD{RegistryMirrors: []string{"http://mirror:5000"}, InsecureRegistries: []string{"mirror:5000"}, RyukDisabled: true}}
+		Helper: helperImage(t), Forward: "mirror:5000", Resources: SysboxResources.InPool(os.Getenv("VERIFY_SYSBOX_POOL"), 0),
+		DinD: DinD{RegistryMirrors: []string{"http://mirror:5000"}, InsecureRegistries: []string{"mirror:5000"}, RyukDisabled: true}}
+	if b.Resources.Pool == "" {
+		b.Resources = SysboxResources
+	}
 	t.Cleanup(func() { _ = b.Reconcile(context.Background()) })
 	if err := b.Preflight(ctx); err != nil {
 		t.Fatal(err)
@@ -128,5 +133,35 @@ echo done`}, nil)
 	}
 	if left, _ := command(ctx, "ps", "-aq", "--filter", "label="+ownerLabel+"="+owner); strings.TrimSpace(string(left)) != "" {
 		t.Fatal("rejected attempt left a container")
+	}
+}
+
+// TestOutOfMemoryIsReported classifies a kernel OOM kill of the agent command.
+func TestOutOfMemoryIsReported(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	owner := testOwner("94000000")
+	network, peer := template(t, owner, false)
+	limits := probeResources
+	limits.Memory = 64 << 20
+	b := &Projected{Backend: Backend{Image: testImage, Owner: owner, Command: []string{"/bin/sh"}}, Network: network, Peers: []string{peer}, Resources: limits}
+	t.Cleanup(func() { _ = b.Reconcile(context.Background()) })
+	a, err := b.Start(ctx, "workspace-a:attempt", execution.Workdir{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	discard := func(r io.Reader) error { _, err := io.Copy(io.Discard, r); return err }
+	if err := a.Stream(ctx, []string{"/bin/sh", "-c", "exit 3"}, nil, discard); err == nil || errors.As(err, new(*execution.OOMError)) {
+		t.Fatalf("plain failure reported as out of memory: %v", err)
+	}
+	// The adapter reads a stream that ends without its terminal event; the kill wins.
+	streamEnded := func(r io.Reader) error { _, _ = io.Copy(io.Discard, r); return errors.New("stream ended early") }
+	for _, consume := range []func(io.Reader) error{discard, streamEnded} {
+		err = a.Stream(ctx, []string{"/bin/sh", "-c", "tail /dev/zero"}, nil, consume)
+		var oom *execution.OOMError
+		if !errors.As(err, &oom) || oom.Killed < 1 || oom.Limit != 64<<20 || oom.Pool {
+			t.Fatalf("OOM kill not reported: %v", err)
+		}
+		t.Log(oom.Error())
 	}
 }
