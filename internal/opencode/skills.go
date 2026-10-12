@@ -12,9 +12,9 @@ import (
 	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
 )
 
-// Skill handling mirrors Multica b4ca5b4 server/internal/daemon/execenv/{context,
+// Skill handling mirrors Multica v0.5.2 server/internal/daemon/execenv/{context,
 // skill_visibility,sidecar_manifest}.go and runtime_config_sections.go (writeSkills,
-// writeSubIssueCreation), identical in the v0.5.2 line. Re-check on upgrades.
+// writeSubIssueCreation, issueContractsSkill). Re-check on upgrades.
 
 // SkillsDir is OpenCode's global skill root under XDG_CONFIG_HOME; attempts start with it empty.
 const SkillsDir = "/workspace/config/opencode/skills"
@@ -29,6 +29,9 @@ const (
 )
 
 const platformSkillName = "multica-platform"
+
+// legacyIssueSkillName is the platform skill's pre-merge name; v0.5.2 still points at it.
+const legacyIssueSkillName = "multica-working-on-issues"
 
 var nonAlphaNum = regexp.MustCompile(`[^a-z0-9]+`)
 
@@ -448,14 +451,26 @@ func builtinSlug(skills []multica.Skill, name string) (string, bool) {
 	return "", false
 }
 
-// writeSubIssueCreation is upstream writeSubIssueCreation with the platform skill pointer.
+// writeSubIssueCreation is upstream writeSubIssueCreation.
 func writeSubIssueCreation(b *strings.Builder, skills []multica.Skill) {
 	b.WriteString("## Sub-issue Creation\n\n")
 	b.WriteString("`--status todo` starts an agent-assigned child immediately; `--status backlog` parks it for later promotion; `--stage <N>` groups children into ordered stages.")
-	if slug, ok := builtinSlug(modelVisibleSkills(skills), platformSkillName); ok {
-		b.WriteString(" Before creating sub-issues, read `references/issues.md` in the `" + slug + "` skill — it covers serial chains, promotion, and stage wake semantics.")
+	if where, ok := issueContractsSkill(modelVisibleSkills(skills)); ok {
+		b.WriteString(" Before creating sub-issues, read " + where + " — it covers serial chains, promotion, and stage wake semantics.")
 	}
 	b.WriteString("\n\n")
+}
+
+// issueContractsSkill is upstream v0.5.2 issueContractsSkill: the platform skill, else
+// the pre-merge skill, else no pointer.
+func issueContractsSkill(skills []multica.Skill) (string, bool) {
+	if slug, ok := builtinSlug(skills, platformSkillName); ok {
+		return "`references/issues.md` in the `" + slug + "` skill", true
+	}
+	if slug, ok := builtinSlug(skills, legacyIssueSkillName); ok {
+		return "the `" + slug + "` skill", true
+	}
+	return "", false
 }
 
 // writeSkills is upstream writeSkills: an index of invocable skill names.

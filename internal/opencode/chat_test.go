@@ -18,7 +18,13 @@ func chatClaim() multica.Task {
 	return task
 }
 
-// The texts below are upstream b4ca5b4 buildChatPrompt and SessionContinuityNotice*;
+// chatOutputV052 is upstream v0.5.2 writeOutput for web chat with its delivery invariant.
+// Later revisions add a "Charts and diagrams" line (MUL-7649) that v0.5.2 does not render.
+const chatOutputV052 = "## Output\n\nThis is a chat session. Your reply is delivered directly to the chat window the user is reading.\n\n" +
+	"**Delivering files here:** run `multica attachment upload <local-path>` — it binds the file to your reply and it renders as an attachment card. That command is the ONLY way a file reaches the user; a path written into your reply text is not.\n\n" +
+	"**Runtime-local paths are never deliverables.** Your working directory exists only on the machine running you — NEVER write an absolute path or a `file://` URL as a clickable link or an embedded image. Reference code locations as inline code, never a link: `path/to/file.ts:42`. Deliver files through this surface's mechanism (above); if it has none, say so in words — never link the path and imply the file was delivered.\n"
+
+// The texts below are upstream v0.5.2 buildChatPrompt and SessionContinuityNotice*;
 // every branch was compared byte for byte with upstream BuildPrompt.
 func TestChatPromptsMirrorUpstream(t *testing.T) {
 	transcript := "The conversation itself is unaffected — Multica stored it, and you can read it back with `multica chat history` before acting"
@@ -53,7 +59,7 @@ func TestChatPromptsMirrorUpstream(t *testing.T) {
 					t.Errorf("unexpected %q in %s", deny, prompt)
 				}
 			}
-			if !strings.Contains(string(brief), "### Workflow\n\n**You are in chat mode.**") || !strings.Contains(string(brief), "This is a chat session. Your reply is delivered directly to the chat window") || strings.Contains(string(brief), "## Comment Formatting\n\n") {
+			if !strings.Contains(string(brief), "### Workflow\n\n**You are in chat mode.**") || !strings.HasSuffix(string(brief), chatOutputV052) || strings.Contains(string(brief), "## Comment Formatting\n\n") {
 				t.Errorf("chat brief: %s", brief)
 			}
 		})

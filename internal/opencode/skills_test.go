@@ -88,6 +88,11 @@ func TestBriefListsVisibleSkills(t *testing.T) {
 		!strings.Contains(text, "read `references/issues.md` in the `multica-platform` skill") || strings.Index(text, "## Skills") > strings.Index(text, "## Important: Always Use") {
 		t.Fatalf("brief skills differ from upstream: %s", text)
 	}
+	// v0.5.2 still points at the pre-merge skill when only it is installed.
+	task.Agent.Skills = []multica.Skill{{Name: "multica-working-on-issues"}}
+	if _, brief, _ = Prompt(task, true, false, Fresh); !strings.Contains(string(brief), "stages. Before creating sub-issues, read the `multica-working-on-issues` skill — it covers") || strings.Contains(string(brief), "For a Multica platform action") {
+		t.Fatalf("pre-merge skill pointer: %s", brief)
+	}
 	task.Agent.Skills = nil
 	if _, brief, _ = Prompt(task, true, false, Fresh); strings.Contains(string(brief), "## Skills") || strings.Contains(string(brief), "Before creating sub-issues") {
 		t.Fatal("skill sections without skills")
