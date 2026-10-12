@@ -56,7 +56,7 @@ func (p *Probe) Run(ctx context.Context, runtime string) error {
 	ticker := time.NewTicker(p.Interval)
 	defer ticker.Stop()
 	for {
-		if err := p.API.Heartbeat(ctx, runtime); err != nil {
+		if err := p.heartbeat(ctx, runtime); err != nil {
 			return err
 		}
 		task, err := p.API.Claim(ctx, runtime)
@@ -64,7 +64,7 @@ func (p *Probe) Run(ctx context.Context, runtime string) error {
 			return err
 		}
 		if task != nil {
-			return p.execute(ctx, *task, ticker.C)
+			return p.execute(ctx, *task, ticker.C, true)
 		}
 		select {
 		case <-ctx.Done():
@@ -74,7 +74,9 @@ func (p *Probe) Run(ctx context.Context, runtime string) error {
 	}
 }
 
-func (p *Probe) execute(ctx context.Context, t multica.Task, ticks <-chan time.Time) (result error) {
+// execute runs a claimed task; beat heartbeats its runtime on every tick, for a runtime
+// nothing else heartbeats.
+func (p *Probe) execute(ctx context.Context, t multica.Task, ticks <-chan time.Time, beat bool) (result error) {
 	p.observe("claimed", t.ID)
 	if err := p.API.RenewPreparation(ctx, t); err != nil {
 		return err
@@ -95,6 +97,7 @@ func (p *Probe) execute(ctx context.Context, t multica.Task, ticks <-chan time.T
 	if err != nil {
 		var rejected *execution.RejectedError
 		if errors.As(err, &rejected) {
+			p.observe("rejected ("+rejected.Error()+")", t.ID)
 			return p.finish(ctx, t.ID, err, func() error { return nil }, func() execution.Result { return execution.Result{Disposable: p.Launch != nil} })
 		}
 		return err
@@ -112,8 +115,10 @@ func (p *Probe) execute(ctx context.Context, t multica.Task, ticks <-chan time.T
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticks:
-			if err := p.API.Heartbeat(ctx, t.RuntimeID); err != nil && !multica.Transient(err) {
-				return err
+			if beat {
+				if err := p.heartbeat(ctx, t.RuntimeID); err != nil && !multica.Transient(err) {
+					return err
+				}
 			}
 			active, err := p.reconcile(ctx, t.ID, stop)
 			if err != nil || !active {
@@ -188,6 +193,18 @@ func (p *Probe) reconcile(ctx context.Context, id string, stop func() error) (bo
 		return false, fmt.Errorf("unexpected task state; execution stopped")
 	}
 }
+
+// heartbeat keeps the runtime live; requests it could not answer only time out in the UI.
+func (p *Probe) heartbeat(ctx context.Context, runtime string) error {
+	err := p.API.Heartbeat(ctx, runtime)
+	var unanswered *multica.UnansweredError
+	if errors.As(err, &unanswered) {
+		p.observe("runtime-request-unanswered", runtime)
+		return nil
+	}
+	return err
+}
+
 func (p *Probe) observe(event, id string) {
 	if p.Observe != nil {
 		p.Observe(event, id)

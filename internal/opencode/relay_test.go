@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -190,4 +191,50 @@ func values(m map[string]string) []string {
 		out = append(out, v)
 	}
 	return out
+}
+
+func TestAllowedCustomEnvReachesAttempt(t *testing.T) {
+	task := relayTask(t)
+	if err := json.Unmarshal([]byte(`{"FEED_URL":"https://feed.example.invalid","API_KEY":"withheld","BAD_VALUE":"a\nb","MULTICA_TOKEN":"forged"}`), &task.Agent.CustomEnv); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(fmt.Sprintf("%v %+v %#v", task, task, task.Agent), "withheld") {
+		t.Fatal("custom_env value formatted")
+	}
+	workload := &stubWorkload{files: map[string][]byte{}, envs: make(chan map[string]string, 1)}
+	a := Adapter{Server: "https://multica.example.invalid", Issuer: &stubIssuer{}, Authority: &stubAuthority{}, Workloads: workload, Status: stubStatus{}, Relay: relay.NewGrants(multica.RelayPrefix), RelayURL: "http://multica-relay:8091",
+		EnvAllow: []string{"FEED_URL", "BAD_VALUE", "UNSET"}}
+	run, err := a.Start(context.Background(), task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer run.Remove(context.Background())
+	env := <-workload.envs
+	if env["FEED_URL"] != "https://feed.example.invalid" || env["API_KEY"] != "" || env["MULTICA_TOKEN"] == "forged" {
+		t.Fatalf("custom_env not filtered by the allowlist: %v", env)
+	}
+	if _, ok := env["BAD_VALUE"]; ok {
+		t.Fatal("unsafe value passed")
+	}
+	if _, ok := env["UNSET"]; ok {
+		t.Fatal("unset name passed")
+	}
+}
+
+func TestEnvAllowRejectsControllerNames(t *testing.T) {
+	if err := ValidEnvAllow([]string{"FEED_URL", "NUGET_SOURCE"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, names := range [][]string{{"MULTICA_TOKEN"}, {"HOME"}, {"GH_TOKEN"}, {"XDG_CONFIG_HOME"}, {"lower"}, {"A", "A"}, {"OPENCODE_CONFIG_CONTENT"}, {"GITLAB_TOKEN"}} {
+		if ValidEnvAllow(names) == nil {
+			t.Errorf("accepted %v", names)
+		}
+	}
+	many := make([]string, 33)
+	for i := range many {
+		many[i] = fmt.Sprintf("NAME_%d", i)
+	}
+	if ValidEnvAllow(many) == nil {
+		t.Error("accepted more than 32 names")
+	}
 }

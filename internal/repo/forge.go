@@ -97,15 +97,22 @@ func (f *Forge) TLSConfig() *tls.Config {
 	}}
 }
 
-// Authorize admits a granted attempt's gh call to its workspace's forge API by the
-// TLS server name; Enterprise Server names serve only /api/.
+// Authorize admits a granted attempt's forge CLI call to its workspace's forge API by the
+// TLS server name; Enterprise Server and GitLab names serve only /api/. GitLab token
+// rotation is refused with 403 before the upstream (rotatesToken).
 func (f *Forge) Authorize(r *http.Request) (relay.Lease, bool) {
 	if r.TLS == nil {
 		return relay.Lease{}, false
 	}
 	name := strings.ToLower(r.TLS.ServerName)
-	// gh sends "token <GH_TOKEN>"; the grant store reads bearer credentials.
-	if opaque, ok := strings.CutPrefix(r.Header.Get("Authorization"), "token "); ok {
+	// gh sends "token <GH_TOKEN>" and glab PRIVATE-TOKEN; the grant store reads bearers.
+	if opaque := r.Header.Values("Private-Token"); len(opaque) > 0 {
+		if len(opaque) > 1 || r.Header.Get("Authorization") != "" {
+			return relay.Lease{}, false
+		}
+		r.Header.Del("Private-Token")
+		r.Header.Set("Authorization", "Bearer "+opaque[0])
+	} else if opaque, ok := strings.CutPrefix(r.Header.Get("Authorization"), "token "); ok {
 		r.Header.Set("Authorization", "Bearer "+opaque)
 	}
 	lease, ok := f.relay.grants.Authorize(r)
@@ -113,12 +120,26 @@ func (f *Forge) Authorize(r *http.Request) (relay.Lease, bool) {
 		return lease, false
 	}
 	workspace, granted := f.relay.workspace(lease.Attempt)
-	origin, authorization, resolved := f.relay.hosts.api(workspace, name)
+	api, resolved := f.relay.hosts.api(workspace, name)
 	if !granted || !resolved || strings.ToLower(r.Host) != name || (name != "api.github.com" && !strings.HasPrefix(r.URL.Path, "/api/")) {
 		lease.Release()
 		return relay.Lease{}, false
 	}
-	lease.Origin, lease.Path, lease.Authorization = origin, r.URL.Path, authorization
+	if api.forge == GitLab && rotatesToken(r.URL.Path) {
+		// Without an origin the relay answers 403.
+		lease.Origin = nil
+		return lease, true
+	}
+	lease.Origin, lease.Path, lease.RawPath = api.origin, r.URL.Path, r.URL.EscapedPath()
+	if api.header == "Authorization" {
+		lease.Authorization = api.auth
+	} else {
+		lease.Header = lease.Header.Clone()
+		if lease.Header == nil {
+			lease.Header = http.Header{}
+		}
+		lease.Header.Set(api.header, api.auth)
+	}
 	return lease, true
 }
 

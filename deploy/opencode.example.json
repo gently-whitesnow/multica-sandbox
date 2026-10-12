@@ -32,5 +32,14 @@
   "sessions": {
     "ttl": "168h",
     "max": 64
+  },
+  "resources": {
+    "cpus": 2,
+    "memory": "4g",
+    "pids": 1024,
+    "nofile": 4096,
+    "workspace_size": "1g",
+    "tmp_size": "256m",
+    "shm_size": "64m"
   }
 }

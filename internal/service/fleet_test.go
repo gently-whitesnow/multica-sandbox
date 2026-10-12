@@ -6,7 +6,11 @@ import (
 	"fmt"
 	"github.com/gently-whitesnow/multica-sandbox/internal/controller"
 	"io"
+	"maps"
+	"slices"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
 )
@@ -16,6 +20,10 @@ type fleetFake struct {
 	claims     int
 	recoverErr error
 	calls      []string
+	// queued, when set, bounds the tasks each runtime holds; otherwise every runtime has work.
+	queued map[string]int
+	// beats holds heartbeat errors by runtime.
+	beats map[string]error
 }
 
 func (a *fleetFake) Workspaces(context.Context) ([]multica.Workspace, error) {
@@ -28,20 +36,132 @@ func (a *fleetFake) Recover(context.Context, string) (multica.Recovery, error) {
 	a.calls = append(a.calls, "recover")
 	return multica.Recovery{}, a.recoverErr
 }
-func (a *fleetFake) Heartbeat(context.Context, string) error { return nil }
+func (a *fleetFake) Heartbeat(_ context.Context, rt string) error { return a.beats[rt] }
 func (a *fleetFake) Replay(context.Context) (int, error) {
 	a.calls = append(a.calls, "replay")
 	return 0, nil
 }
 func (a *fleetFake) ClaimBatch(_ context.Context, _ string, scopes map[string]string, _ int) ([]multica.Task, error) {
 	a.claims++
-	for rt, ws := range scopes {
-		return []multica.Task{{ID: rt, RuntimeID: rt, WorkspaceID: ws}}, nil
+	for _, rt := range slices.Sorted(maps.Keys(scopes)) {
+		if a.queued != nil && a.queued[rt] == 0 {
+			continue
+		}
+		if a.queued != nil {
+			a.queued[rt]--
+		}
+		return []multica.Task{{ID: fmt.Sprintf("%s-%d", rt, a.claims), RuntimeID: rt, WorkspaceID: scopes[rt]}}, nil
 	}
 	return nil, nil
 }
 func newFleet(t *testing.T, a *fleetFake) *fleet {
-	return &fleet{api: a, daemon: "test", dir: t.TempDir(), out: io.Discard, known: map[string]string{}, ready: map[string]string{}, served: map[string]bool{}, active: map[string]context.CancelFunc{}, done: make(chan completion, 4)}
+	return newFleetState(a, "test", t.TempDir(), io.Discard, map[string]string{}, 16, 0)
+}
+
+// track starts attempts that block until released and reports what is running.
+func track() (func(context.Context, multica.Task) error, func() []string, chan struct{}) {
+	var mu sync.Mutex
+	running := []string{}
+	release := make(chan struct{})
+	execute := func(ctx context.Context, task multica.Task) error {
+		mu.Lock()
+		running = append(running, task.RuntimeID)
+		mu.Unlock()
+		select {
+		case <-release:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return execute, func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(running)
+	}, release
+}
+
+func TestWorkspaceTasksRunInParallel(t *testing.T) {
+	a := &fleetFake{queued: map[string]int{"a": 5, "b": 0}}
+	f := newFleet(t, a)
+	f.ready = map[string]string{"a": "a", "b": "b"}
+	execute, _, release := track()
+	defer close(release)
+	if err := f.claim(context.Background(), 10, execute); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.active) != 5 || f.perRuntime["a"] != 5 {
+		t.Fatalf("one workspace's queue was not drained in parallel in one poll: %d active", len(f.active))
+	}
+}
+
+func TestWorkspaceConcurrencyCapsOnlyItsWorkspace(t *testing.T) {
+	a := &fleetFake{queued: map[string]int{"a": 5, "b": 5}}
+	f := newFleet(t, a)
+	f.workspaceLimit = 2
+	f.ready = map[string]string{"a": "a", "b": "b"}
+	execute, _, release := track()
+	if err := f.claim(context.Background(), 10, execute); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.active) != 4 || f.perRuntime["a"] != 2 || f.perRuntime["b"] != 2 {
+		t.Fatalf("workspace limit not applied per workspace: %v", f.perRuntime)
+	}
+	release <- struct{}{}
+	f.finish(<-f.done)
+	if err := f.claim(context.Background(), 10, execute); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.active) != 4 {
+		t.Fatalf("freed workspace slot not refilled: %v", f.perRuntime)
+	}
+	close(release)
+}
+
+func TestBusyWorkspaceSharesCapacityFairly(t *testing.T) {
+	a := &fleetFake{}
+	f := newFleet(t, a)
+	f.ready = map[string]string{"a": "a", "b": "b", "c": "c"}
+	execute, started, release := track()
+	defer close(release)
+	if err := f.claim(context.Background(), 3, execute); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.perRuntime) != 3 {
+		t.Fatalf("capacity not shared one task per workspace per round: %v", f.perRuntime)
+	}
+	eventuallyLen(t, started, 3)
+}
+
+func TestRemovedWorkspaceCancelsAllItsAttempts(t *testing.T) {
+	a := &fleetFake{queued: map[string]int{"a": 3, "b": 1}}
+	f := newFleet(t, a)
+	f.ready = map[string]string{"a": "a", "b": "b"}
+	execute, _, release := track()
+	defer close(release)
+	if err := f.claim(context.Background(), 10, execute); err != nil {
+		t.Fatal(err)
+	}
+	f.remove("a", "a")
+	for range 3 {
+		done := <-f.done
+		if done.runtime != "a" || done.err != context.Canceled {
+			t.Fatalf("unexpected completion %v", done)
+		}
+		f.finish(done)
+	}
+	if len(f.active) != 1 || f.perRuntime["a"] != 0 || f.perRuntime["b"] != 1 {
+		t.Fatalf("revocation crossed workspaces or leaked slots: %v", f.perRuntime)
+	}
+}
+
+func eventuallyLen(t *testing.T, list func() []string, n int) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); len(list()) < n; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("started %v, want %d", list(), n)
+		}
+	}
 }
 func TestFleetCapacityAndFairness(t *testing.T) {
 	a := &fleetFake{}
@@ -64,8 +184,7 @@ func TestFleetCapacityAndFairness(t *testing.T) {
 			t.Fatal("busy workspace starved a peer")
 		}
 		seen[done.runtime] = true
-		f.active[done.runtime]()
-		delete(f.active, done.runtime)
+		f.finish(done)
 	}
 	if a.claims != 3 {
 		t.Fatal("claimed without capacity")
@@ -83,8 +202,7 @@ func TestDiscoveryCancelsRemovedWorkspaceOnly(t *testing.T) {
 	defer cancelOne()
 	two, cancelTwo := context.WithCancel(context.Background())
 	defer cancelTwo()
-	f.active[ws1] = cancelOne
-	f.active[ws2] = cancelTwo
+	f.active["one"], f.active["two"] = running{ws1, cancelOne}, running{ws2, cancelTwo}
 	a.workspaces = []multica.Workspace{{ID: ws2}}
 	if err := f.sync(context.Background()); err != nil {
 		t.Fatal(err)
@@ -98,16 +216,41 @@ func TestDiscoveryCancelsRemovedWorkspaceOnly(t *testing.T) {
 	}
 }
 
-func TestRevokedAttemptCannotHideCleanupFailure(t *testing.T) {
+// attempt starts a cancellable attempt of the runtime under key.
+func (f *fleet) attempt(key, rt string) context.Context {
+	ctx, cancel := context.WithCancel(context.Background())
+	f.active[key] = running{rt, cancel}
+	f.perRuntime[rt]++
+	return ctx
+}
+
+func TestRefusedTaskEndsOnlyItsAttempt(t *testing.T) {
 	f := newFleet(t, &fleetFake{})
 	f.ready["ws"] = "rt"
-	denied := &multica.HTTPError{Status: 403}
-	if err := f.completed(completion{"rt", denied}); err != nil || len(f.ready) != 0 {
-		t.Fatal("revocation was not scoped")
+	peer := f.attempt("peer", "rt")
+	for _, status := range []int{403, 404} {
+		// For example the task was deleted between claim and start.
+		denied := &multica.HTTPError{Status: status}
+		if err := f.completed(completion{"attempt", "rt", denied}); err != nil || f.ready["ws"] != "rt" || peer.Err() != nil {
+			t.Fatalf("%d: a task refusal removed the runtime or cancelled its peers: %v", status, err)
+		}
+		err := errors.Join(denied, &controller.CleanupError{Err: fmt.Errorf("remove failed")})
+		if f.completed(completion{"attempt", "rt", err}) == nil {
+			t.Fatal("ignored failed cleanup")
+		}
 	}
-	err := errors.Join(denied, &controller.CleanupError{Err: fmt.Errorf("remove failed")})
-	if f.completed(completion{"rt", err}) == nil {
-		t.Fatal("ignored failed cleanup")
+}
+
+func TestHeartbeatRemovesOnlyARevokedRuntime(t *testing.T) {
+	a := &fleetFake{beats: map[string]error{"gone": &multica.HTTPError{Status: 404}, "busy": &multica.UnansweredError{Err: &multica.HTTPError{Status: 400}}}}
+	f := newFleet(t, a)
+	f.ready = map[string]string{"a": "gone", "b": "busy", "c": "ok"}
+	gone, busy := f.attempt("1", "gone"), f.attempt("2", "busy")
+	if err := f.beat(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if gone.Err() == nil || busy.Err() != nil || len(f.ready) != 2 || f.ready["a"] != "" {
+		t.Fatalf("heartbeat removal: ready=%v", f.ready)
 	}
 }
 
@@ -122,13 +265,13 @@ func TestTransientMulticaErrorsKeepServing(t *testing.T) {
 	if err := f.sync(context.Background()); err != nil || len(f.ready) != 1 {
 		t.Fatal("workspace not recovered on the next sync", err)
 	}
-	if err := f.completed(completion{"rt", unavailable}); err != nil {
+	if err := f.completed(completion{"attempt", "rt", unavailable}); err != nil {
 		t.Fatal("transient attempt error stopped the controller")
 	}
-	if f.completed(completion{"rt", errors.Join(unavailable, &controller.CleanupError{Err: fmt.Errorf("remove failed")})}) == nil {
+	if f.completed(completion{"attempt", "rt", errors.Join(unavailable, &controller.CleanupError{Err: fmt.Errorf("remove failed")})}) == nil {
 		t.Fatal("cleanup uncertainty hidden by a transient error")
 	}
-	if f.completed(completion{"rt", &multica.HTTPError{Status: 400}}) == nil {
+	if f.completed(completion{"attempt", "rt", &multica.HTTPError{Status: 400}}) == nil {
 		t.Fatal("protocol rejection ignored")
 	}
 }

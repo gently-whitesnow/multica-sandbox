@@ -59,49 +59,74 @@ func newClient(base, token string, allowHTTP bool) (*Client, error) {
 }
 
 func (c *Client) call(ctx context.Context, method, path string, body, out any) error {
-	var reader io.Reader
-	if body != nil {
-		data, err := json.Marshal(body)
-		if err != nil {
-			return err
-		}
-		reader = bytes.NewReader(data)
+	return c.callLimit(ctx, method, path, body, out, responseLimit)
+}
+
+// callLimit is call with a response limit for claims, which carry inline skills.
+func (c *Client) callLimit(ctx context.Context, method, path string, body, out any, limit int) error {
+	read := 0
+	if out != nil {
+		read = limit
 	}
-	req, err := http.NewRequestWithContext(ctx, method, c.base+path, reader)
-	if err != nil {
-		return fmt.Errorf("invalid request")
-	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Client-Platform", "multica-sandbox-probe")
-	// Claims then carry structured coalesced comments instead of a folded trigger body.
-	req.Header.Set("X-Client-Capabilities", "coalesced-comments-v1")
-	resp, err := c.http.Do(req)
-	if err != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		return errTransport
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return &HTTPError{resp.StatusCode}
-	}
-	if out == nil {
-		return nil
-	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20+1))
-	if err != nil {
-		return fmt.Errorf("read Multica response")
-	}
-	if len(data) > 2<<20 {
-		return fmt.Errorf("Multica response exceeds limit")
+	data, err := c.send(ctx, method, path, body, read)
+	if err != nil || out == nil {
+		return err
 	}
 	if err = json.Unmarshal(data, out); err != nil {
 		return fmt.Errorf("invalid Multica response")
 	}
 	return nil
 }
+
+// send returns a response body of at most read bytes; 0 discards it.
+func (c *Client) send(ctx context.Context, method, path string, body any, read int) ([]byte, error) {
+	var reader io.Reader
+	if body != nil {
+		data, err := json.Marshal(body)
+		if err != nil {
+			return nil, err
+		}
+		reader = bytes.NewReader(data)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.base+path, reader)
+	if err != nil {
+		return nil, fmt.Errorf("invalid request")
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Client-Platform", "multica-sandbox-probe")
+	// Claims then carry structured coalesced comments instead of a folded trigger body, and
+	// inline skills without the redirect stubs for briefs older than multica-platform.
+	req.Header.Set("X-Client-Capabilities", "coalesced-comments-v1,platform-skill-v1")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, errTransport
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, &HTTPError{resp.StatusCode}
+	}
+	if read == 0 {
+		return nil, nil
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, int64(read)+1))
+	if err != nil {
+		return nil, fmt.Errorf("read Multica response")
+	}
+	if len(data) > read {
+		return nil, fmt.Errorf("Multica response exceeds limit")
+	}
+	return data, nil
+}
+
+// Response limits: claims carry inline skills of up to 8 MiB (ADR 0018).
+const (
+	responseLimit = 2 << 20
+	claimLimit    = 16 << 20
+)
 
 func validID(id string) bool {
 	if len(id) != 36 {

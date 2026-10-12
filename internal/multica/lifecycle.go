@@ -98,14 +98,14 @@ func (c *Client) Recover(ctx context.Context, runtime string) (Recovery, error) 
 	err := c.runtimePost(ctx, runtime, "/recover-orphans", &out)
 	return out, err
 }
-func (c *Client) Heartbeat(ctx context.Context, runtime string) error {
-	return c.call(ctx, http.MethodPost, "/api/daemon/heartbeat", map[string]string{"runtime_id": runtime}, nil)
-}
 func (c *Client) Claim(ctx context.Context, runtime string) (*Task, error) {
 	var out struct {
 		Task *Task `json:"task"`
 	}
-	if err := c.runtimePost(ctx, runtime, "/tasks/claim", &out); err != nil {
+	if !validID(runtime) {
+		return nil, fmt.Errorf("invalid runtime ID")
+	}
+	if err := c.callLimit(ctx, http.MethodPost, "/api/daemon/runtimes/"+runtime+"/tasks/claim", map[string]any{}, &out, claimLimit); err != nil {
 		return nil, err
 	}
 	if out.Task != nil {

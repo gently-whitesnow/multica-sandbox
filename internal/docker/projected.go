@@ -1,16 +1,20 @@
 package docker
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"os"
 	"os/exec"
+	"path"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -37,6 +41,15 @@ type Projected struct {
 	ForgeForward string
 	// Sessions, with the helper, retains issue workdirs across attempts.
 	Sessions *Sessions
+	// Resources bound attempts and image inspection; zero means DefaultResources.
+	Resources Resources
+}
+
+func (b *Projected) limits() Resources {
+	if b.Resources == (Resources{}) {
+		return DefaultResources
+	}
+	return b.Resources
 }
 
 // HelperDir holds the helper image mount; the workdir volume is mounted at repo.WorkDir.
@@ -136,21 +149,25 @@ func (b *Projected) Start(ctx context.Context, attempt string, w execution.Workd
 	for _, host := range loopbackHosts(b.ForgeHosts) {
 		bundles = append(bundles, "--add-host="+host)
 	}
-	args := attemptLimits(b.createArgs(r.name, bundles...), isolated)
+	args := attemptNetwork(b.createArgs(r.name, b.limits(), bundles...), isolated)
 	// The holding process never handles tokens or executes task-supplied shell text.
 	args = args[:len(args)-len(b.Command)-2]
-	args = append(args, "--env=XDG_DATA_HOME=/workspace/data", "--env=XDG_CONFIG_HOME=/workspace/config", "--env=XDG_CACHE_HOME=/workspace/cache", "--env=XDG_STATE_HOME=/workspace/state", "--env=OPENCODE_DISABLE_AUTOUPDATE=true", "--env=OPENCODE_DISABLE_MODELS_FETCH=true", "--env=OPENCODE_DISABLE_DEFAULT_PLUGINS=true", "--env=OPENCODE_DISABLE_LSP_DOWNLOAD=true", "--entrypoint", "/bin/sh", b.Image, "-c", "exec sleep 86400")
+	args = append(args, "--env=TMPDIR="+TmpDir, "--env=XDG_DATA_HOME=/workspace/data", "--env=XDG_CONFIG_HOME=/workspace/config", "--env=XDG_CACHE_HOME=/workspace/cache", "--env=XDG_STATE_HOME=/workspace/state", "--env=OPENCODE_DISABLE_AUTOUPDATE=true", "--env=OPENCODE_DISABLE_MODELS_FETCH=true", "--env=OPENCODE_DISABLE_DEFAULT_PLUGINS=true", "--env=OPENCODE_DISABLE_LSP_DOWNLOAD=true", "--entrypoint", "/bin/sh", b.Image, "-c", "exec sleep 86400")
 	if _, err := command(ctx, args...); err != nil {
 		return nil, errors.Join(err, errors.Join(b.cleanupUncertainCreate(r), cleanup()))
 	}
 	data, err := command(ctx, "inspect", r.name)
 	if err == nil {
-		err = checkProjectedPolicy(data, isolated, b.mounts(), path, projection.volume, b.ForgeHosts)
+		err = checkProjectedPolicy(data, isolated, b.limits(), b.mounts(), path, projection.volume, b.ForgeHosts)
 	}
 	if err != nil {
 		return nil, errors.Join(err, cleanup())
 	}
 	if _, err := command(ctx, "start", r.name); err != nil {
+		return nil, errors.Join(err, cleanup())
+	}
+	// Like the upstream task directory, TMPDIR allows executables (go test, build caches).
+	if _, err := command(ctx, "exec", r.name, "mkdir", "-p", "-m", "700", TmpDir); err != nil {
 		return nil, errors.Join(err, cleanup())
 	}
 	if b.Helper != "" {
@@ -201,18 +218,18 @@ func (b *Projected) workdir(ctx context.Context, volume string, labels ...string
 
 // Output inspects the agent image offline within attempt resource limits and returns its bounded stdout.
 func (b *Projected) Output(ctx context.Context, args []string) ([]byte, error) {
-	probe := Projected{Backend: Backend{Image: b.Image, Owner: b.Owner, Command: args}, Bundles: b.Bundles}
+	probe := Projected{Backend: Backend{Image: b.Image, Owner: b.Owner, Command: args}, Bundles: b.Bundles, Resources: b.Resources}
 	bundles, path, err := probe.prepare(ctx)
 	if err != nil {
 		return nil, err
 	}
 	r := &run{name: probe.name("image-inspection")}
-	if _, err := command(ctx, attemptLimits(probe.createArgs(r.name, bundles...), "none")...); err != nil {
+	if _, err := command(ctx, probe.createArgs(r.name, probe.limits(), bundles...)...); err != nil {
 		return nil, errors.Join(err, probe.cleanupUncertainCreate(r))
 	}
 	data, err := command(ctx, "inspect", r.name)
 	if err == nil {
-		err = checkProjectedPolicy(data, "none", b.Bundles, path, "", nil)
+		err = checkProjectedPolicy(data, "none", probe.limits(), b.Bundles, path, "", nil)
 	}
 	if err != nil {
 		return nil, errors.Join(err, r.cleanup())
@@ -221,19 +238,10 @@ func (b *Projected) Output(ctx context.Context, args []string) ([]byte, error) {
 	return data, errors.Join(err, r.cleanup())
 }
 
-func attemptLimits(args []string, network string) []string {
+func attemptNetwork(args []string, network string) []string {
 	for i, arg := range args {
-		switch arg {
-		case "--network=none":
+		if arg == "--network=none" {
 			args[i] = "--network=" + network
-		case "--memory=128m":
-			args[i] = "--memory=1g"
-		case "--memory-swap=128m":
-			args[i] = "--memory-swap=1g"
-		case "--pids-limit=64":
-			args[i] = "--pids-limit=256"
-		case "--tmpfs=/workspace:rw,exec,nosuid,nodev,size=67108864,mode=1777":
-			args[i] = "--tmpfs=/workspace:rw,exec,nosuid,nodev,size=268435456,mode=1777"
 		}
 	}
 	return args
@@ -265,6 +273,57 @@ func (r *projectedRun) Write(ctx context.Context, path string, data []byte) erro
 		return fmt.Errorf("atomic projection failed")
 	}
 	return nil
+}
+
+// treeRoots are the directories WriteTree may fill; the attempt user creates them.
+var treeRoots = map[string]bool{"/workspace/config/opencode/skills": true}
+
+// WriteTree streams a controller-built tar of regular files to the attempt. Paths are
+// clean and relative, so extraction stays under root; the agent has not run yet.
+func (r *projectedRun) WriteTree(ctx context.Context, root string, files map[string][]byte) error {
+	if !treeRoots[root] {
+		return fmt.Errorf("invalid projection tree")
+	}
+	var archive bytes.Buffer
+	if err := writeTar(&archive, files, 16<<20); err != nil {
+		return err
+	}
+	cmd := exec.CommandContext(ctx, "docker", "exec", "-i", r.name, "/bin/sh", "-c", `set -eu; umask 022; mkdir -p "$1"; tar -x -f - -C "$1"`, "projection", root)
+	cmd.Stdin = &archive
+	if cmd.Run() != nil {
+		return fmt.Errorf("tree projection failed")
+	}
+	return nil
+}
+
+func writeTar(w io.Writer, files map[string][]byte, limit int) error {
+	names := slices.Sorted(maps.Keys(files))
+	tw, dirs, total, now := tar.NewWriter(w), map[string]bool{}, 0, time.Now()
+	for _, name := range names {
+		if name == "" || name == "." || path.Clean(name) != name || path.IsAbs(name) || name == ".." || strings.HasPrefix(name, "../") || strings.ContainsAny(name, "\\\x00") {
+			return fmt.Errorf("invalid projection tree path")
+		}
+		if total += len(files[name]); total > limit {
+			return fmt.Errorf("projection tree exceeds limit")
+		}
+		var parents []string
+		for dir := path.Dir(name); dir != "." && !dirs[dir]; dir = path.Dir(dir) {
+			parents = append(parents, dir)
+		}
+		for i := len(parents) - 1; i >= 0; i-- {
+			dirs[parents[i]] = true
+			if err := tw.WriteHeader(&tar.Header{Typeflag: tar.TypeDir, Name: parents[i] + "/", Mode: 0755, ModTime: now}); err != nil {
+				return err
+			}
+		}
+		if err := tw.WriteHeader(&tar.Header{Typeflag: tar.TypeReg, Name: name, Mode: 0644, Size: int64(len(files[name])), ModTime: now}); err != nil {
+			return err
+		}
+		if _, err := tw.Write(files[name]); err != nil {
+			return err
+		}
+	}
+	return tw.Close()
 }
 
 func (r *projectedRun) Execute(ctx context.Context, args []string) error {
@@ -303,7 +362,7 @@ func removeNetwork(ctx context.Context, name string, peers []string) error {
 }
 
 func (b *Projected) isolate(ctx context.Context, name string) (string, error) {
-	if _, err := command(ctx, "network", "create", "--internal", "--label", ownerLabel+"="+b.Owner, name); err != nil {
+	if err := createNetwork(ctx, b.Owner, name); err != nil {
 		return "", err
 	}
 	connected := []string{}
@@ -331,6 +390,32 @@ func (b *Projected) isolate(ctx context.Context, name string) (string, error) {
 		connected = append(connected, peer)
 	}
 	return name, nil
+}
+
+// createNetwork creates an attempt network. When the daemon refuses it, the task is
+// rejected instead of stopping the controller, after a best-effort removal in case a
+// partial network exists (Reconcile removes what remains); exhausted address pools are
+// named for the operator. Timeouts stay uncertain and fatal.
+func createNetwork(ctx context.Context, owner, name string) error {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "docker", "network", "create", "--internal", "--label", ownerLabel+"="+owner, name)
+	var stderr cappedOutput
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	var exit *exec.ExitError
+	switch {
+	case err == nil:
+		return nil
+	case ctx.Err() != nil || !errors.As(err, &exit):
+		return fmt.Errorf("docker network failed: %w", err)
+	}
+	_ = removeNetwork(ctx, name, nil)
+	switch {
+	case strings.Contains(stderr.String(), "address pools have been fully subnetted"):
+		return &execution.RejectedError{Err: errors.New("Docker address pools are exhausted: raise default-address-pools or lower concurrency")}
+	}
+	return &execution.RejectedError{Err: errors.New("Docker refused the attempt network")}
 }
 
 // reconcileVolumes removes owned per-attempt workdir volumes, which all belong to

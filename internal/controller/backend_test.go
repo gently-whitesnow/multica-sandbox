@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -146,7 +147,7 @@ func TestCleanupPrecedesTerminalCallback(t *testing.T) {
 			if scenario == "shutdown" {
 				cancel()
 			}
-			err := p.execute(ctx, multica.Task{ID: id}, ticks)
+			err := p.execute(ctx, multica.Task{ID: id}, ticks, true)
 			if (err != nil) != (terminal == "") {
 				t.Fatalf("error=%v events=%v", err, events)
 			}
@@ -204,7 +205,7 @@ func TestUpstreamLifecycleSignals(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			events := []string{}
 			p := Probe{API: lifecycleAPI{events: &events, status: "running", errs: tc.errs}, Backend: &testBackend{events: &events}, Duration: time.Second}
-			if err := p.execute(context.Background(), multica.Task{ID: id}, nil); err != nil {
+			if err := p.execute(context.Background(), multica.Task{ID: id}, nil, true); err != nil {
 				t.Fatal(err)
 			}
 			if !reflect.DeepEqual(events, tc.want) {
@@ -218,11 +219,26 @@ func TestControllerTimeoutIsTyped(t *testing.T) {
 	events := []string{}
 	var reported error
 	p := Probe{API: lifecycleAPI{events: &events, status: "running", reported: &reported}, Backend: &testBackend{events: &events, running: true}, Duration: time.Millisecond}
-	if err := p.execute(context.Background(), multica.Task{ID: id}, nil); err != nil {
+	if err := p.execute(context.Background(), multica.Task{ID: id}, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	var timeout *execution.TimeoutError
 	if !errors.As(reported, &timeout) {
 		t.Fatalf("timeout cause lost: %v", reported)
+	}
+}
+
+// Fleet attempts never heartbeat: the fleet heartbeats each runtime once and answers its
+// requests. A standalone runtime's heartbeat ignores requests it could not answer.
+func TestOnlyStandaloneAttemptsHeartbeat(t *testing.T) {
+	for _, beat := range []bool{false, true} {
+		events := []string{}
+		a := lifecycleAPI{events: &events, status: "running", errs: map[string]error{"heartbeat": &multica.UnansweredError{Err: errors.New("invalid update request ID")}}}
+		p := Probe{API: a, Backend: &testBackend{events: &events, running: true}, Duration: 20 * time.Millisecond}
+		ticks := make(chan time.Time, 1)
+		ticks <- time.Now()
+		if err := p.execute(context.Background(), multica.Task{ID: id}, ticks, beat); err != nil || slices.Contains(events, "heartbeat") != beat {
+			t.Fatalf("beat=%v error=%v events=%v", beat, err, events)
+		}
 	}
 }

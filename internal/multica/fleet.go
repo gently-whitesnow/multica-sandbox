@@ -59,7 +59,7 @@ func (c *Client) ClaimBatch(ctx context.Context, daemon string, scopes map[strin
 	var out struct {
 		Tasks []Task `json:"tasks"`
 	}
-	if err := c.call(ctx, http.MethodPost, "/api/daemon/tasks/claim", map[string]any{"daemon_id": daemon, "runtime_ids": ids, "max_tasks": limit}, &out); err != nil {
+	if err := c.callLimit(ctx, http.MethodPost, "/api/daemon/tasks/claim", map[string]any{"daemon_id": daemon, "runtime_ids": ids, "max_tasks": limit}, &out, claimLimit); err != nil {
 		return nil, err
 	}
 	if len(out.Tasks) > limit {

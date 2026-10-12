@@ -3,10 +3,12 @@ package multica
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/gently-whitesnow/multica-sandbox/internal/execution"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -72,6 +74,73 @@ func TestRuntimeScopedDiscoveryReportsUpstreamShape(t *testing.T) {
 		})
 	}
 }
+func TestUnsupportedRuntimeRequestsAreAnswered(t *testing.T) {
+	reports := map[string]map[string]any{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/daemon/heartbeat" {
+			_, _ = w.Write([]byte(`{"pending_update":{"id":"u1","target_version":"v9"},"pending_model_list":{"id":"m1"},"pending_local_skills":{"id":"s1"},"pending_local_skill_import":{"id":"i1","skill_key":"k"},"pending_local_skill_imports":[{"id":"i1","skill_key":"k"},{"id":"i/2","skill_key":"k"}]}`))
+			return
+		}
+		var body map[string]any
+		if json.NewDecoder(r.Body).Decode(&body) != nil {
+			t.Error("bad report")
+		}
+		reports[r.URL.EscapedPath()] = body
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+	c, err := New(server.URL, "fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Without an inference catalog the model list fails instead of hanging the picker.
+	if err = c.Heartbeat(context.Background(), testID); err != nil {
+		t.Fatal(err)
+	}
+	base := "/api/daemon/runtimes/" + testID
+	failed := func(path, text string) {
+		if body := reports[base+path]; body["status"] != "failed" || !strings.Contains(fmt.Sprint(body["error"]), text) {
+			t.Errorf("%s: %v", path, body)
+		}
+	}
+	failed("/models/m1/result", "unavailable")
+	failed("/update/u1/result", "not supported by sandbox runtime")
+	failed("/local-skills/import/i1/result", "not supported by sandbox runtime")
+	failed("/local-skills/import/i%2F2/result", "not supported by sandbox runtime")
+	if body := reports[base+"/local-skills/s1/result"]; body["status"] != "completed" || body["supported"] != false || body["mcp_supported"] != false {
+		t.Errorf("local skills: %v", body)
+	}
+	if len(reports) != 5 {
+		t.Fatalf("duplicate or missing reports: %v", reports)
+	}
+}
+
+// A failed answer never fails the heartbeat itself: the runtime stays live and the other
+// requests are still answered.
+func TestUnansweredRequestsKeepTheHeartbeat(t *testing.T) {
+	answered := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/daemon/heartbeat":
+			_, _ = w.Write([]byte(`{"pending_update":{"id":""},"pending_model_list":{"id":"m1"},"pending_local_skills":{"id":"s1"}}`))
+		case strings.Contains(r.URL.Path, "/models/"):
+			w.WriteHeader(http.StatusNotFound)
+		default:
+			answered++
+		}
+	}))
+	defer server.Close()
+	c, err := New(server.URL, "fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = c.Heartbeat(context.Background(), testID)
+	var unanswered *UnansweredError
+	if !errors.As(err, &unanswered) || !strings.Contains(err.Error(), "invalid update request ID") || !Missing(err) || answered != 1 {
+		t.Fatalf("error=%v answered=%d", err, answered)
+	}
+}
+
 func TestFailurePayloadLeavesClassificationToMultica(t *testing.T) {
 	for _, reason := range []string{"", "timeout"} {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

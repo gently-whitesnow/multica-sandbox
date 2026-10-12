@@ -57,6 +57,10 @@ type Adapter struct {
 	// the Multica relay and a workload with a workdir volume.
 	GitRelay *repo.Relay
 	Checkout *repo.Checkout
+	// EnvAllow names the agent custom_env variables attempts receive (ValidEnvAllow).
+	EnvAllow []string
+	// IdleWatchdog fails a run without native events for this long (default 10m, upstream's).
+	IdleWatchdog time.Duration
 }
 
 type running struct {
@@ -81,6 +85,8 @@ type running struct {
 	// workDir names the retained workdir; resume is the session OpenCode continues and
 	// retired the prior session a failed resume abandoned (ADR 0015).
 	workDir, resume, retired string
+	// skills are the claim's skill files under SkillsDir, upstream tasks only (ADR 0017).
+	skills map[string][]byte
 }
 
 // SessionDB keeps OpenCode's session store in the retained workdir, apart from the
@@ -101,7 +107,13 @@ func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, 
 	if _, _, err = Prompt(task, a.Relay != nil, a.Checkout != nil, continuity); err != nil {
 		return nil, &execution.RejectedError{Err: err}
 	}
-	r := &running{adapter: a, task: task, connections: connections, tokens: map[string]identity.AccessToken{}, done: make(chan error, 1), exited: make(chan struct{})}
+	var skills map[string][]byte
+	if a.Relay != nil {
+		if skills, err = skillTree(task.Agent.Skills); err != nil {
+			return nil, &execution.RejectedError{Err: err}
+		}
+	}
+	r := &running{adapter: a, task: task, connections: connections, tokens: map[string]identity.AccessToken{}, done: make(chan error, 1), exited: make(chan struct{}), skills: skills}
 	runCtx, cancel := context.WithCancel(ctx)
 	r.cancel = cancel
 	if a.Relay != nil {
@@ -142,6 +154,10 @@ func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, 
 	r.workload, err = a.Workloads.Start(runCtx, task.AttemptKey(), workdir)
 	if err != nil {
 		cancel()
+		// A backend refusal left no resources: the task fails, the controller keeps serving.
+		if rejected := (*execution.RejectedError)(nil); errors.As(err, &rejected) {
+			return nil, r.reject(rejected.Err)
+		}
 		return nil, errors.Join(err, r.Remove(context.Background()))
 	}
 	// Like upstream, the prior session resumes only in the workdir it was recorded with.
@@ -174,12 +190,24 @@ func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, 
 }
 
 func (r *running) initialize(ctx context.Context, prompt, brief []byte) error {
-	script := `set -eu; mkdir -p /workspace/config/opencode; printf "{}" > /workspace/config/opencode/opencode.json; printf "*\n" > /workspace/config/opencode/.gitignore; chmod 555 /workspace/config/opencode`
+	// The global config directory is sealed after skills are laid down in it.
+	script, seal := `set -eu; mkdir -p /workspace/config/opencode; printf "{}" > /workspace/config/opencode/opencode.json; printf "*\n" > /workspace/config/opencode/.gitignore`, "chmod 555 /workspace/config/opencode"
+	if len(r.skills) == 0 {
+		script += "; " + seal
+	}
 	if r.workDir != "" {
 		script += `; mkdir -p -m 700 "${0%/*}"`
 	}
 	if err := r.workload.Execute(ctx, []string{"/bin/sh", "-c", script, SessionDB}); err != nil {
 		return fmt.Errorf("OpenCode config directory: %w", ErrDenied)
+	}
+	if len(r.skills) > 0 {
+		if err := r.workload.WriteTree(ctx, SkillsDir, r.skills); err != nil {
+			return fmt.Errorf("OpenCode skills: %w", ErrDenied)
+		}
+		if err := r.workload.Execute(ctx, []string{"/bin/sh", "-c", seal}); err != nil {
+			return fmt.Errorf("OpenCode config directory: %w", ErrDenied)
+		}
 	}
 	config, err := Config(r.connections, r.relayToken != "")
 	if err != nil {
@@ -299,8 +327,8 @@ loop:
 			agentDone = true
 			break loop
 		case <-ticker.C:
-			if r.events.idle(idleWatchdog) {
-				err = &execution.IdleError{After: idleWatchdog}
+			if watchdog := r.adapter.idleWatchdog(); r.events.idle(watchdog) {
+				err = &execution.IdleError{After: watchdog}
 				break loop
 			}
 			if err = r.refresh(ctx); err != nil {
@@ -316,6 +344,13 @@ loop:
 		<-agent
 	}
 	r.done <- err
+}
+
+func (a *Adapter) idleWatchdog() time.Duration {
+	if a.IdleWatchdog > 0 {
+		return a.IdleWatchdog
+	}
+	return idleWatchdog
 }
 
 // retryFresh follows upstream shouldRetryWithFreshSession for OpenCode: a resume that

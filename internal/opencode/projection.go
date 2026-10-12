@@ -69,8 +69,9 @@ func Select(t multica.Task) (map[string]Remote, error) {
 	return out, nil
 }
 
-// localTools run inside the disposable container; with the Multica relay the agent needs bash for the CLI.
-var localTools = []string{"bash", "read", "edit", "write", "glob", "grep", "list", "todoread", "todowrite"}
+// localTools run inside the disposable container; with the Multica relay the agent needs bash
+// for the CLI, and skill loads the claim's skills from the attempt's config directory.
+var localTools = []string{"bash", "read", "edit", "write", "glob", "grep", "list", "todoread", "todowrite", "skill"}
 
 func Config(connections map[string]Remote, local bool) ([]byte, error) {
 	permissions := map[string]string{"*": "deny"}

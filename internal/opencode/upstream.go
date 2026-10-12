@@ -2,6 +2,7 @@ package opencode
 
 import (
 	"fmt"
+	"maps"
 	"regexp"
 	"strings"
 	"time"
@@ -17,19 +18,27 @@ import (
 
 const BriefPath = "/workspace/AGENTS.md"
 
-// Environment mirrors upstream taskMulticaEnvironment without daemon ports or host paths.
+// Environment mirrors upstream taskMulticaEnvironment without daemon ports or host paths,
+// on top of the agent's custom_env for the names the deployment allows.
 func (r *running) environment() map[string]string {
-	if r.relayToken == "" {
-		return nil
+	env := map[string]string{}
+	for name, value := range r.task.Agent.CustomEnv.Allowed(r.adapter.EnvAllow) {
+		// Values the attempt exec would refuse are dropped instead of failing the task.
+		if len(value) <= 4096 && !strings.ContainsAny(value, "\x00\r\n") {
+			env[name] = value
+		}
 	}
-	env := map[string]string{
+	if r.relayToken == "" {
+		return env
+	}
+	maps.Copy(env, map[string]string{
 		"MULTICA_SERVER_URL":       r.adapter.RelayURL,
 		"MULTICA_TOKEN":            r.relayToken,
 		"MULTICA_WORKSPACE_ID":     r.task.WorkspaceID,
 		"MULTICA_AGENT_ID":         r.task.AgentID,
 		"MULTICA_TASK_ID":          r.task.ID,
 		"MULTICA_TASK_CONFIG_ROOT": "/workspace/data/multica",
-	}
+	})
 	if name := r.task.Agent.Name; name != "" && len(name) <= 256 && !strings.ContainsAny(name, "\x00\r\n") {
 		env["MULTICA_AGENT_NAME"] = name
 	}
@@ -48,6 +57,33 @@ func (r *running) environment() map[string]string {
 	}
 	return env
 }
+
+// reservedEnv are names and prefixes the controller or the attempt image owns.
+var reservedEnv = []string{"HOME", "PATH", "USER", "SHELL", "TERM", "TMPDIR", "TMP", "TEMP", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY",
+	"MULTICA_", "OPENCODE_", "XDG_", "GIT_", "GH_", "GITLAB_", "SSL_CERT_", "LD_"}
+
+// ValidEnvAllow checks a custom_env allowlist: at most 32 distinct names the controller
+// does not own (upstream also blocks MULTICA_* and the process basics).
+func ValidEnvAllow(names []string) error {
+	seen := map[string]bool{}
+	for _, name := range names {
+		if !envName.MatchString(name) || seen[name] {
+			return fmt.Errorf("env_allow names must be distinct upper-case environment names")
+		}
+		for _, reserved := range reservedEnv {
+			if name == reserved || strings.HasSuffix(reserved, "_") && strings.HasPrefix(name, reserved) {
+				return fmt.Errorf("env_allow name %s is reserved", name)
+			}
+		}
+		seen[name] = true
+	}
+	if len(names) > 32 {
+		return fmt.Errorf("env_allow holds at most 32 names")
+	}
+	return nil
+}
+
+var envName = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,63}$`)
 
 // upstreamTask reports whether the claim is an issue task the upstream CLI workflow covers.
 func upstreamTask(t multica.Task) bool {
@@ -262,7 +298,9 @@ func upstreamBrief(t multica.Task, repositories string, checkout bool) string {
 		chatWorkflow(&b)
 	} else {
 		issueWorkflow(&b)
+		writeSubIssueCreation(&b, t.Agent.Skills)
 	}
+	writeSkills(&b, t.Agent.Skills)
 	b.WriteString("## Important: Always Use the `multica` CLI\n\n")
 	b.WriteString("Access Multica platform resources only through the `multica` CLI — never `curl` / `wget`. For anything the CLI doesn't cover, post a comment mentioning the workspace owner rather than working around it.\n\n")
 	if chat {

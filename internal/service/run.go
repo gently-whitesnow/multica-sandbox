@@ -25,10 +25,10 @@ import (
 
 func Run(ctx context.Context, c Config, stateDir, tokenPath string, out io.Writer) error {
 	if c.Concurrency == 0 {
-		c.Concurrency = 1
+		c.Concurrency = DefaultConcurrency
 	}
-	if c.Concurrency < 1 || c.Concurrency > 32 {
-		return fmt.Errorf("concurrency must be in [1,32]")
+	if c.Concurrency < 1 || c.Concurrency > MaxConcurrency || c.WorkspaceConcurrency < 0 || c.WorkspaceConcurrency > MaxConcurrency {
+		return fmt.Errorf("concurrency must be in [1,64] and workspace_concurrency in [0,64]")
 	}
 	if !filepath.IsAbs(stateDir) {
 		return fmt.Errorf("absolute state directory required")
@@ -96,7 +96,18 @@ func Run(ctx context.Context, c Config, stateDir, tokenPath string, out io.Write
 }
 
 func openCodeAdapter(ctx context.Context, c Config, stateDir string, api *multica.Client, backend *docker.Backend, out io.Writer) (*opencode.Adapter, error) {
-	workloads := &docker.Projected{Backend: *backend, Network: c.OpenCode.Network, Peers: c.OpenCode.Peers, Helper: c.OpenCode.Helper}
+	watchdog, err := optionalDuration(c.OpenCode.IdleWatchdog, 10*time.Minute)
+	if err != nil {
+		return nil, fmt.Errorf("idle_watchdog must be a positive duration")
+	}
+	if err = opencode.ValidEnvAllow(c.OpenCode.EnvAllow); err != nil {
+		return nil, err
+	}
+	resources, err := c.OpenCode.Resources.Resolve()
+	if err != nil {
+		return nil, err
+	}
+	workloads := &docker.Projected{Backend: *backend, Network: c.OpenCode.Network, Peers: c.OpenCode.Peers, Helper: c.OpenCode.Helper, Resources: resources}
 	if s := c.OpenCode.Sessions; s != nil {
 		ttl, err := time.ParseDuration(s.TTL)
 		interval, intervalErr := optionalDuration(s.Interval, 2*time.Hour)
@@ -134,7 +145,6 @@ func openCodeAdapter(ctx context.Context, c Config, stateDir string, api *multic
 	if git && !strings.HasPrefix(c.OpenCode.GitRelay.URL, "http://") {
 		return nil, fmt.Errorf("git_relay requires an http url: Git uses it as the HTTP proxy of remote aliases")
 	}
-	var err error
 	if c.OpenCode.Helper != "" {
 		// The forwarder reaches the checkout endpoint on the Multica relay listener.
 		if workloads.Forward, err = relayAddress("Multica", *c.OpenCode.MulticaRelay); err != nil {
@@ -177,7 +187,7 @@ func openCodeAdapter(ctx context.Context, c Config, stateDir string, api *multic
 	if err = workloads.ValidateNetwork(ctx); err != nil {
 		return nil, err
 	}
-	adapter := &opencode.Adapter{Server: strings.TrimRight(c.Server, "/"), Controller: c.Daemon, Issuer: issuer, Authority: authority, Status: api, Reporter: api, Workloads: workloads, Command: c.Command}
+	adapter := &opencode.Adapter{Server: strings.TrimRight(c.Server, "/"), Controller: c.Daemon, Issuer: issuer, Authority: authority, Status: api, Reporter: api, Workloads: workloads, Command: c.Command, EnvAllow: c.OpenCode.EnvAllow, IdleWatchdog: watchdog}
 	if c.OpenCode.MulticaRelay != nil {
 		grants := relay.NewGrants(multica.RelayPrefix)
 		var routes map[string]http.Handler
@@ -228,7 +238,7 @@ func optionalDuration(value string, fallback time.Duration) (time.Duration, erro
 	return d, err
 }
 
-// serveForge serves gh calls for the API names of Git hosts on TLS (ADR 0015); attempts
+// serveForge serves gh and glab calls for the API names of Git hosts on TLS (ADR 0015); attempts
 // resolve those names to loopback, where the helper forwards to the forge relay.
 func serveForge(ctx context.Context, c *RelayConfig, git *repo.Relay, hosts *repo.Hosts, workloads *docker.Projected) error {
 	if c == nil {
@@ -245,7 +255,7 @@ func serveForge(ctx context.Context, c *RelayConfig, git *repo.Relay, hosts *rep
 		return err
 	}
 	workloads.ForgeHosts = hosts.APINames()
-	return serveRelay(ctx, "forge", forge, *c, relay.Policy{Allow: repo.ForgePath}, nil, forge.TLSConfig())
+	return serveRelay(ctx, "forge", forge, *c, relay.Policy{Allow: repo.ForgePath, EncodedSlash: true}, nil, forge.TLSConfig())
 }
 
 func (a *agentFleetAPI) Message(ctx context.Context, id string) error { return a.AgentMessage(ctx, id) }

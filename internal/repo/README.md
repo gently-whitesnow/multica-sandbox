@@ -29,8 +29,10 @@ Add these to `opencode` (`deploy/opencode.example.json`). They require `multica_
     file is reread per request, so an external issuer can rotate it, for example a
     GitHub App installation token with `x-access-token`.
   - Without a password file, the host is fetched anonymously.
-  - `api` (with a password file) is the forge API origin for `gh`, for example
-    `https://api.github.com` or an Enterprise Server origin.
+  - `api` (with a password file) is the forge API origin, for example
+    `https://api.github.com`, an Enterprise Server or a GitLab origin. `forge` names its
+    CLI: `github` (`gh`, default) or `gitlab` (`glab`); GitLab passwords go upstream as
+    `PRIVATE-TOKEN` or, with `api_auth: "bearer"`, as a bearer token.
   - `commit_name` and `commit_email` set the commit identity of the host's checkouts,
     for example a GitHub App bot. They default to the agent name and
     `agent@multica-sandbox.invalid`.
@@ -42,7 +44,7 @@ The agent image must contain `git`; startup checks it. Official-base users add i
 
 Attempts receive `GIT_CONFIG_*` entries per claim host, around the alias
 `http://<host>/` (ADR 0016):
-- `url.http://<host>/.insteadOf` maps `https://<host>/` and `git@<host>:`;
+- `url.http://<host>/.insteadOf` maps `https://<host>/`, `git@<host>:` and `ssh://git@<host>/`;
 - `http.http://<host>/.proxy` sends the alias to the relay `url` as an HTTP proxy;
 - `http.http://<host>/.extraHeader` carries a per-attempt `msg_` credential.
 
@@ -62,22 +64,34 @@ end at cleanup and on restart.
   (`/workspace/certs`). It checks that the Host header matches the TLS name.
 - `GH_TOKEN` and `GH_ENTERPRISE_TOKEN` carry the attempt's `msg_` credential, and
   `GH_HOST` names a single bound host. The relay sends `token <password>` upstream.
+- For GitLab hosts `GITLAB_TOKEN` carries it and `GITLAB_HOST` names a single bound host;
+  prompts, update checks and telemetry of `glab` are off. glab 1.99 sends `PRIVATE-TOKEN`
+  to `/api/v4/` and `/api/graphql`, with project paths encoded as `group%2Fproject`. The
+  forge relay admits encoded slashes inside segments, requires a clean decoded path and
+  forwards the path unchanged; `glab mr create` reads the project and posts the request.
+- GitLab token rotation (`.../personal_access_tokens/<id|self>/rotate`,
+  `.../access_tokens/<id|self>/rotate`) is refused with 403 for any method, case,
+  trailing slash or format suffix: GitLab returns the rotated token's successor and
+  revokes the password file's token. Creating tokens is left to the token's scope.
 - `gh pr create` (gh 2.46) posts three GraphQL operations: `RepositoryInfo`,
   `PullRequestForBranch` and `PullRequestCreate`, to `https://api.github.com/graphql`
   or `https://<host>/api/graphql`. REST calls use `/api/v3/` on Enterprise Server.
   The relay forwards both paths unchanged to the configured `api` origin.
-- Images add `gh` themselves, as the Debian example does.
+- Images add `gh` or `glab` themselves; the Debian example has `gh`.
 
 Deployment-owned bounds, as under the native runtime:
 - **Credential scope.** Pushes and `gh` may do anything the host's deployment
   credential may do, on any repository it reaches; the relay limits only Git
   transport to the claim's repositories. Use a GitHub App installation token or a
   fine-grained token restricted to the intended repositories, with
-  `contents: write` and `pull_requests: write`, and no administration rights.
+  `contents: write` and `pull_requests: write`, and no administration rights. On
+  GitLab, use a group or project access token with the Developer role and `api` scope.
 - **Branch protection.** Pushes may update any ref the credential allows. Protect
   default and release branches with rulesets or branch protection on the forge.
 
-Limits: the relay neither inspects GraphQL operations nor applies a REST path policy.
+Limits: apart from token rotation the relay inspects neither REST paths nor GraphQL
+operations; merges and other API actions are bounded only by the credential's role and
+protected branches (#62).
 `GH_HOST` is unset when a workspace binds several API hosts; `gh` then resolves only
 `github.com` remotes, so pass `--repo <host>/<owner>/<repo>` or `GH_HOST` for
 Enterprise Server. github.com and Enterprise Server behavior beyond the fixture is

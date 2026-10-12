@@ -113,7 +113,7 @@ func (b *Backend) Start(ctx context.Context, attempt string) (execution.Run, err
 		return nil, err
 	}
 	r := &run{name: b.name(attempt)}
-	if _, err := command(ctx, b.createArgs(r.name)...); err != nil {
+	if _, err := command(ctx, b.createArgs(r.name, probeResources)...); err != nil {
 		return nil, errors.Join(err, b.cleanupUncertainCreate(r))
 	}
 	if err := r.check(ctx); err != nil {
@@ -138,16 +138,12 @@ func (b *Backend) cleanupUncertainCreate(r *run) error {
 }
 
 // createArgs places extra controller-owned options before the entrypoint.
-func (b *Backend) createArgs(name string, extra ...string) []string {
+func (b *Backend) createArgs(name string, limits Resources, extra ...string) []string {
 	args := []string{"create", "--name", name, "--label", ownerLabel + "=" + b.Owner,
 		"--pull=never", "--runtime=runc", "--network=none", "--read-only", "--user=65532:65532",
 		"--cap-drop=ALL", "--security-opt=no-new-privileges=true", "--cgroupns=private", "--ipc=private",
-		"--memory=128m", "--memory-swap=128m", "--cpus=0.5", "--pids-limit=64", "--ulimit=nofile=256:256",
-		"--restart=no", "--no-healthcheck", "--log-driver=none", "--workdir=/workspace",
-		"--tmpfs=/workspace:rw,exec,nosuid,nodev,size=67108864,mode=1777",
-		"--tmpfs=/tmp:rw,noexec,nosuid,nodev,size=16777216,mode=1777", "--shm-size=8m",
-		"--env=HOME=/workspace"}
-	args = append(append(args, extra...), "--entrypoint", b.Command[0], b.Image)
+		"--restart=no", "--no-healthcheck", "--log-driver=none", "--workdir=/workspace", "--env=HOME=/workspace"}
+	args = append(append(append(args, limits.args()...), extra...), "--entrypoint", b.Command[0], b.Image)
 	return append(args, b.Command[1:]...)
 }
 

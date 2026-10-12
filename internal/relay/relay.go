@@ -25,9 +25,10 @@ type Lease struct {
 	Attempt    string
 	Origin     *url.URL
 	Credential string
-	// Authorization, when set, replaces the bearer built from Credential; Path replaces the request path.
-	Authorization, Path string
-	Header              http.Header
+	// Authorization, when set, replaces the bearer built from Credential; Path replaces the
+	// request path, and RawPath, when set, is its escaped form (encoded slashes).
+	Authorization, Path, RawPath string
+	Header                       http.Header
 	// Context ends when the grant is revoked, cancelling in-flight requests.
 	Context context.Context
 	Release func()
@@ -53,6 +54,8 @@ type Policy struct {
 	// Proxy admits only absolute-form http targets, as an HTTP proxy receives them;
 	// the authorizer resolves the upstream from the target host.
 	Proxy bool
+	// EncodedSlash admits %2F in segments (GitLab project paths) if the decoded path is clean.
+	EncodedSlash bool
 }
 
 type Relay struct {
@@ -66,7 +69,7 @@ type leaseKey struct{}
 var errRedirect = errors.New("upstream redirect refused")
 
 // dropped never leave the relay: caller credentials, sessions and forwarding hints.
-var dropped = []string{"Authorization", "X-Api-Key", "Api-Key", "Cookie", "Proxy-Authorization", "Forwarded", "X-Real-Ip", "X-Actor-Source", "X-User-Id", "X-User-Email"}
+var dropped = []string{"Authorization", "X-Api-Key", "Api-Key", "Private-Token", "Job-Token", "Cookie", "Proxy-Authorization", "Forwarded", "X-Real-Ip", "X-Actor-Source", "X-User-Id", "X-User-Email"}
 
 func New(auth Authorizer, p Policy) (*Relay, error) {
 	if auth == nil || p.Allow == nil || p.Limit <= 0 || p.HeaderTimeout < 0 {
@@ -93,6 +96,9 @@ func New(auth Authorizer, p Policy) (*Relay, error) {
 			pr.SetURL(lease.Origin)
 			if lease.Path != "" {
 				pr.Out.URL.Path, pr.Out.URL.RawPath = lease.Origin.Path+lease.Path, ""
+				if lease.RawPath != "" {
+					pr.Out.URL.RawPath = lease.Origin.EscapedPath() + lease.RawPath
+				}
 			}
 			for _, name := range dropped {
 				pr.Out.Header.Del(name)
@@ -141,7 +147,7 @@ func New(auth Authorizer, p Policy) (*Relay, error) {
 
 func (r *Relay) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	absolute := req.URL.Scheme != "" || req.URL.Host != ""
-	if absolute != r.policy.Proxy || (absolute && (req.URL.Scheme != "http" || req.URL.User != nil)) || req.Method == http.MethodConnect || req.Header.Get("Upgrade") != "" || !cleanPath(req.URL) || !r.policy.Allow(req.URL.Path) {
+	if absolute != r.policy.Proxy || (absolute && (req.URL.Scheme != "http" || req.URL.User != nil)) || req.Method == http.MethodConnect || req.Header.Get("Upgrade") != "" || !cleanPath(req.URL, r.policy.EncodedSlash) || !r.policy.Allow(req.URL.Path) {
 		deny(w, http.StatusForbidden, "request not permitted")
 		return
 	}
@@ -163,10 +169,10 @@ func (r *Relay) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 }
 
 // cleanPath rejects traversal, empty segments and encoded separators the upstream router could decode.
-func cleanPath(u *url.URL) bool {
+func cleanPath(u *url.URL, encodedSlash bool) bool {
 	p := u.Path
 	escaped := strings.ToLower(u.EscapedPath())
-	if !strings.HasPrefix(p, "/") || strings.Contains(escaped, "%2f") || strings.Contains(escaped, "%2e") || strings.Contains(escaped, "%5c") || strings.Contains(p, "\\") {
+	if !strings.HasPrefix(p, "/") || (!encodedSlash && strings.Contains(escaped, "%2f")) || strings.Contains(escaped, "%2e") || strings.Contains(escaped, "%5c") || strings.Contains(p, "\\") {
 		return false
 	}
 	trimmed := strings.TrimSuffix(p, "/")

@@ -20,8 +20,14 @@ type fleetAPI interface {
 	Replay(context.Context) (int, error)
 }
 type completion struct {
+	attempt, runtime string
+	err              error
+}
+
+// running is an active attempt and the runtime it was claimed for.
+type running struct {
 	runtime string
-	err     error
+	cancel  context.CancelFunc
 }
 type fleet struct {
 	api          fleetAPI
@@ -29,8 +35,17 @@ type fleet struct {
 	out          io.Writer
 	known, ready map[string]string
 	served       map[string]bool
-	active       map[string]context.CancelFunc
-	done         chan completion
+	// active holds attempts by key; perRuntime counts them per workspace runtime.
+	active     map[string]running
+	perRuntime map[string]int
+	// workspaceLimit caps attempts per workspace; 0 leaves only the global capacity.
+	workspaceLimit int
+	done           chan completion
+}
+
+func newFleetState(api fleetAPI, daemon, dir string, out io.Writer, known map[string]string, capacity, workspaceLimit int) *fleet {
+	return &fleet{api: api, daemon: daemon, dir: dir, out: out, known: known, ready: map[string]string{}, served: map[string]bool{},
+		active: map[string]running{}, perRuntime: map[string]int{}, workspaceLimit: workspaceLimit, done: make(chan completion, capacity)}
 }
 
 func serveFleet(ctx context.Context, c Config, dir string, api fleetAPI, p *controller.Probe, out io.Writer) error {
@@ -38,8 +53,7 @@ func serveFleet(ctx context.Context, c Config, dir string, api fleetAPI, p *cont
 	if err != nil {
 		return err
 	}
-	f := &fleet{api: api, daemon: c.Daemon, dir: dir, out: out, known: known, ready: map[string]string{}, served: map[string]bool{}, active: map[string]context.CancelFunc{}, done: make(chan completion, c.Concurrency)}
-	return f.serve(ctx, c.Concurrency, p.Execute)
+	return newFleetState(api, c.Daemon, dir, out, known, c.Concurrency, c.WorkspaceConcurrency).serve(ctx, c.Concurrency, p.Execute)
 }
 
 func (f *fleet) serve(ctx context.Context, capacity int, execute func(context.Context, multica.Task) error) (result error) {
@@ -47,12 +61,12 @@ func (f *fleet) serve(ctx context.Context, capacity int, execute func(context.Co
 		if ctx.Err() != nil && result == ctx.Err() {
 			result = nil
 		}
-		for _, cancel := range f.active {
-			cancel()
+		for _, attempt := range f.active {
+			attempt.cancel()
 		}
 		for len(f.active) > 0 {
 			completed := <-f.done
-			delete(f.active, completed.runtime)
+			f.finish(completed)
 			if completed.err != context.Canceled {
 				result = errors.Join(result, completed.err)
 			}
@@ -63,7 +77,7 @@ func (f *fleet) serve(ctx context.Context, capacity int, execute func(context.Co
 	if err := f.tolerate("sync", f.sync(ctx)); err != nil {
 		return err
 	}
-	fmt.Fprintf(f.out, "ready workspaces=%d capacity=%d\n", len(f.ready), capacity)
+	fmt.Fprintf(f.out, "ready workspaces=%d capacity=%d workspace_capacity=%d\n", len(f.ready), capacity, f.workspaceLimit)
 	poll := time.NewTicker(time.Second)
 	discovery := time.NewTicker(10 * time.Second)
 	heartbeat := time.NewTicker(15 * time.Second)
@@ -77,8 +91,7 @@ func (f *fleet) serve(ctx context.Context, capacity int, execute func(context.Co
 		case <-ctx.Done():
 			return nil
 		case completed := <-f.done:
-			f.active[completed.runtime]()
-			delete(f.active, completed.runtime)
+			f.finish(completed)
 			if err := f.completed(completed); err != nil {
 				return err
 			}
@@ -100,34 +113,55 @@ func (f *fleet) serve(ctx context.Context, capacity int, execute func(context.Co
 	}
 }
 
+// claim fills free capacity one task per workspace per round, so a busy workspace cannot
+// starve its peers; unused capacity is never pre-claimed and Multica keeps the queue.
 func (f *fleet) claim(ctx context.Context, capacity int, execute func(context.Context, multica.Task) error) error {
+	claimed := false
 	for len(f.active) < capacity {
 		scopes := map[string]string{}
 		for ws, rt := range f.ready {
-			if f.active[rt] == nil && !f.served[rt] {
+			if !f.served[rt] && (f.workspaceLimit == 0 || f.perRuntime[rt] < f.workspaceLimit) {
 				scopes[rt] = ws
 			}
 		}
-		if len(scopes) == 0 {
-			clear(f.served)
-			return nil
-		}
-		// One claim per workspace per round; unused capacity is never pre-claimed.
-		tasks, err := f.api.ClaimBatch(ctx, f.daemon, scopes, 1)
-		if err != nil {
-			return err
+		var tasks []multica.Task
+		if len(scopes) > 0 {
+			var err error
+			if tasks, err = f.api.ClaimBatch(ctx, f.daemon, scopes, 1); err != nil {
+				return err
+			}
 		}
 		if len(tasks) == 0 {
 			clear(f.served)
-			return nil
+			if !claimed {
+				return nil
+			}
+			// Served workspaces may hold more work: start the next round.
+			claimed = false
+			continue
 		}
-		task := tasks[0]
+		task, key := tasks[0], tasks[0].AttemptKey()
+		if _, duplicate := f.active[key]; duplicate {
+			return fmt.Errorf("claimed an attempt that is already active")
+		}
 		runCtx, cancel := context.WithCancel(ctx)
-		f.active[task.RuntimeID] = cancel
-		f.served[task.RuntimeID] = true
-		go func() { f.done <- completion{task.RuntimeID, execute(runCtx, task)} }()
+		f.active[key] = running{task.RuntimeID, cancel}
+		f.perRuntime[task.RuntimeID]++
+		f.served[task.RuntimeID], claimed = true, true
+		go func() { f.done <- completion{key, task.RuntimeID, execute(runCtx, task)} }()
 	}
 	return nil
+}
+
+// finish releases a completed attempt's slot.
+func (f *fleet) finish(done completion) {
+	if attempt, ok := f.active[done.attempt]; ok {
+		attempt.cancel()
+		delete(f.active, done.attempt)
+		if f.perRuntime[attempt.runtime]--; f.perRuntime[attempt.runtime] <= 0 {
+			delete(f.perRuntime, attempt.runtime)
+		}
+	}
 }
 
 const replayInterval = 5 * time.Second
@@ -156,15 +190,16 @@ func (f *fleet) completed(done completion) error {
 		return nil
 	}
 	var cleanup *controller.CleanupError
-	if !errors.As(done.err, &cleanup) && f.tolerate("attempt runtime="+done.runtime, done.err) == nil {
+	if errors.As(done.err, &cleanup) {
+		return done.err
+	}
+	if f.tolerate("attempt runtime="+done.runtime, done.err) == nil {
 		return nil
 	}
-	if inaccessible(done.err) && !errors.As(done.err, &cleanup) {
-		for ws, rt := range f.ready {
-			if rt == done.runtime {
-				f.remove(ws, rt)
-			}
-		}
+	// A refused task, for example one deleted between claim and start, ends only its
+	// attempt; a revoked runtime is removed by its heartbeat (beat).
+	if inaccessible(done.err) {
+		fmt.Fprintf(f.out, "attempt ended runtime=%s: %v\n", done.runtime, done.err)
 		return nil
 	}
 	return done.err

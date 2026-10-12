@@ -38,7 +38,17 @@ type Host struct {
 	CommitName   string `json:"commit_name,omitempty"`
 	CommitEmail  string `json:"commit_email,omitempty"`
 	API          string `json:"api,omitempty"`
+	// Forge is the API kind behind API: github (gh, default) or gitlab (glab).
+	Forge string `json:"forge,omitempty"`
+	// APIAuth sends a gitlab password as private-token (default) or bearer.
+	APIAuth string `json:"api_auth,omitempty"`
 }
+
+// Forge kinds.
+const (
+	GitHub = "github"
+	GitLab = "gitlab"
+)
 
 // DefaultEmail is the commit email of hosts without a configured identity.
 const DefaultEmail = "agent@multica-sandbox.invalid"
@@ -53,6 +63,7 @@ type binding struct {
 	username, password string
 	name, email        string
 	api                *url.URL
+	forge, auth        string
 }
 
 // Hosts resolves (workspace, host) to an upstream origin and authorization.
@@ -92,13 +103,17 @@ func NewHosts(c Config) (*Hosts, error) {
 			api, ok = httpOrigin(host.API, c.AllowHTTP)
 			valid = valid && ok && host.PasswordFile != "" && !strings.Contains(host.Host, ":")
 		}
+		forge, auth, err := apiPolicy(host)
+		if err != nil {
+			return nil, fmt.Errorf("Git host %.64q: %w", host.Host, err)
+		}
 		if !uuid.MatchString(host.WorkspaceID) || !hostName.MatchString(host.Host) || !valid || h.bindings[key].origin != nil ||
 			(host.PasswordFile != "" && (!filepath.IsAbs(host.PasswordFile) || host.Username == "" || strings.ContainsAny(host.Username, ":\r\n\x00"))) ||
 			(host.PasswordFile == "" && host.Username != "") || (host.CommitName == "") != (host.CommitEmail == "") ||
 			!plain(host.CommitName) || !plain(host.CommitEmail) || strings.ContainsAny(host.CommitEmail, " <>") {
 			return nil, fmt.Errorf("Git host %.64q: unique workspace and host, HTTPS upstream and API origins, a username with an absolute password file and a plain commit name with email required", host.Host)
 		}
-		h.bindings[key] = binding{origin: upstreamOrigin, username: host.Username, password: host.PasswordFile, name: host.CommitName, email: host.CommitEmail, api: api}
+		h.bindings[key] = binding{origin: upstreamOrigin, username: host.Username, password: host.PasswordFile, name: host.CommitName, email: host.CommitEmail, api: api, forge: forge, auth: auth}
 	}
 	return h, nil
 }
@@ -134,11 +149,11 @@ func (h *Hosts) APINames() []string {
 	return slices.Compact(names)
 }
 
-// apiHosts lists the workspace's forge hosts with an API.
-func (h *Hosts) apiHosts(workspace string) []string {
+// apiHosts lists the workspace's forge hosts with an API of the forge kind ("" for any).
+func (h *Hosts) apiHosts(workspace, forge string) []string {
 	hosts := []string{}
 	for key, b := range h.bindings {
-		if key[0] == workspace && b.api != nil {
+		if key[0] == workspace && b.api != nil && (forge == "" || b.forge == forge) {
 			hosts = append(hosts, key[1])
 		}
 	}
@@ -146,16 +161,30 @@ func (h *Hosts) apiHosts(workspace string) []string {
 	return hosts
 }
 
-// api resolves the workspace's forge API by the name gh called, with a token header.
-func (h *Hosts) api(workspace, name string) (*url.URL, string, bool) {
-	for _, host := range h.apiHosts(workspace) {
+// upstreamAPI is a resolved forge API: its origin, kind and credential header.
+type upstreamAPI struct {
+	origin              *url.URL
+	forge, header, auth string
+}
+
+// api resolves the workspace's forge API by the name the CLI called, with its credential:
+// "token" for GitHub as gh sends it, PRIVATE-TOKEN or a bearer for GitLab.
+func (h *Hosts) api(workspace, name string) (upstreamAPI, bool) {
+	for _, host := range h.apiHosts(workspace, "") {
 		if APIName(host) == name {
 			b := h.bindings[[2]string{workspace, host}]
 			password, ok := secret(b.password)
-			return b.api, "token " + password, ok
+			out := upstreamAPI{origin: b.api, forge: b.forge, header: "Authorization", auth: "token " + password}
+			switch {
+			case b.forge == GitLab && b.auth == "bearer":
+				out.auth = "Bearer " + password
+			case b.forge == GitLab:
+				out.header, out.auth = "Private-Token", password
+			}
+			return out, ok
 		}
 	}
-	return nil, "", false
+	return upstreamAPI{}, false
 }
 
 // Has reports whether the workspace has a binding for host.
@@ -181,6 +210,20 @@ func (h *Hosts) Identity(workspace, repository, agent string) (string, string) {
 		name = "Multica agent"
 	}
 	return name, DefaultEmail
+}
+
+// apiPolicy validates the forge kind and the GitLab credential header.
+func apiPolicy(host Host) (string, string, error) {
+	forge := host.Forge
+	if forge == "" {
+		forge = GitHub
+	}
+	if (forge != GitHub && forge != GitLab) || (forge == GitLab && host.Host == "github.com") ||
+		(host.APIAuth != "" && (forge != GitLab || host.APIAuth != "private-token" && host.APIAuth != "bearer")) ||
+		(host.API == "" && (host.Forge != "" || host.APIAuth != "")) {
+		return "", "", errors.New("forge github or gitlab and api_auth private-token or bearer (gitlab), both with an api")
+	}
+	return forge, host.APIAuth, nil
 }
 
 func plain(s string) bool {

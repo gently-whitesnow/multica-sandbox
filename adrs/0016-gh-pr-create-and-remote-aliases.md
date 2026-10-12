@@ -46,7 +46,7 @@ forge serves the three operations, and the fixture agent runs the unchanged
 **API scope.** Scope stays the deployment credential's, as for native `gh`
 (user decision 2026-10-08, #55). The relay inspects neither GraphQL operations nor
 REST paths. Forge branch protection and credential scope are deployment-owned bounds
-for pushes and `gh`. Narrowing options await a user decision in #62.
+for pushes and `gh`. Narrowing was later declined, except token rotation (below).
 
 Rejected alternatives:
 - `GH_REPO`: it is single-valued and overrides the working directory's repository.
@@ -57,6 +57,30 @@ Rejected alternatives:
 - A projected gh `hosts.yml` for workspaces with several API hosts: deferred until
   such deployments exist. Until then, Enterprise Server needs `GH_HOST` or `--repo`
   there.
+
+Refinement (2026-10-11). GitLab hosts take `forge: gitlab` and the unchanged `glab`
+the same way. A glab 1.99 probe showed `PRIVATE-TOKEN` on `/api/v4/` and
+`/api/graphql`, project paths encoded as `group%2Fproject`, and the repository
+resolved from the alias remote. The forge relay accepts the opaque credential in
+`PRIVATE-TOKEN` as well, drops it upstream and sends the workspace password as
+`PRIVATE-TOKEN` or a bearer per host. It admits encoded slashes inside segments
+when the decoded path is clean and forwards the escaped path. Aliases also rewrite
+`ssh://git@<host>/`.
+
+API scope stays the credential's (user decision 2026-10-12, #62): merges, branch
+deletion or new project tokens are what the operator grants the bot's token. The
+relay keeps one built-in refusal, since it is the boundary itself: GitLab token
+rotation, `.../personal_access_tokens/<id|self>/rotate` and
+`.../access_tokens/<id|self>/rotate` (groups, projects, service accounts), answers
+403 before the upstream. GitLab revokes the rotated token and returns its successor,
+so rotating the relay's token would give the attempt a working host credential and
+revoke the password file. A non-administrator may rotate its own token by id, which
+the relay cannot tell from another id, so every rotation is refused; rotation stays
+with the operator. The decoded path is compared for any method, ignoring case, a
+trailing slash and `.json`/`.xml`. GitHub has no call that rotates an installation
+or personal token with that token alone, so nothing is refused there. Configurable
+REST deny rules were dropped: GraphQL mutations bypass them, and the token's role
+is the real bound.
 
 ## Consequences
 

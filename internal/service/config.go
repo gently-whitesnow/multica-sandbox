@@ -9,18 +9,20 @@ import (
 	"time"
 
 	"github.com/gently-whitesnow/multica-sandbox/internal/attempt"
+	"github.com/gently-whitesnow/multica-sandbox/internal/docker"
 )
 
 type Config struct {
-	OpenCode    *OpenCodeConfig `json:"opencode,omitempty"`
-	Server      string          `json:"server"`
-	AllowHTTP   bool            `json:"allow_http,omitempty"`
-	Concurrency int             `json:"concurrency,omitempty"`
-	Daemon      string          `json:"daemon"`
-	Image       string          `json:"image"`
-	Tools       []Tool          `json:"tools,omitempty"`
-	Command     []string        `json:"command"`
-	Timeout     string          `json:"timeout"`
+	OpenCode             *OpenCodeConfig `json:"opencode,omitempty"`
+	Server               string          `json:"server"`
+	AllowHTTP            bool            `json:"allow_http,omitempty"`
+	Concurrency          int             `json:"concurrency,omitempty"`
+	WorkspaceConcurrency int             `json:"workspace_concurrency,omitempty"`
+	Daemon               string          `json:"daemon"`
+	Image                string          `json:"image"`
+	Tools                []Tool          `json:"tools,omitempty"`
+	Command              []string        `json:"command"`
+	Timeout              string          `json:"timeout"`
 }
 
 var uuid = regexp.MustCompile(`^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`)
@@ -49,17 +51,22 @@ func ReadConfig(path string) (Config, error) {
 		return c, fmt.Errorf("unexpected trailing configuration")
 	}
 	duration, err := time.ParseDuration(c.Timeout)
-	if err != nil || duration <= 0 || !uuid.MatchString(c.Daemon) || c.Concurrency < 0 || c.Concurrency > 32 || c.Image == "" || (len(c.Command) == 0 && c.OpenCode == nil) {
-		return c, fmt.Errorf("daemon UUID, capacity 0-32, image, command and positive timeout required")
+	if err != nil || duration <= 0 || !uuid.MatchString(c.Daemon) || c.Concurrency < 0 || c.Concurrency > MaxConcurrency || c.WorkspaceConcurrency < 0 || c.WorkspaceConcurrency > MaxConcurrency || c.Image == "" || (len(c.Command) == 0 && c.OpenCode == nil) {
+		return c, fmt.Errorf("daemon UUID, concurrency and workspace_concurrency 0-64, image, command and positive timeout required")
 	}
 	if len(c.Tools) > 0 && c.OpenCode == nil {
 		return c, fmt.Errorf("tools require the opencode adapter")
 	}
 	if c.Concurrency == 0 {
-		c.Concurrency = 1
+		c.Concurrency = DefaultConcurrency
 	}
 	return c, nil
 }
+
+const (
+	DefaultConcurrency = 10
+	MaxConcurrency     = 64
+)
 
 type OpenCodeConfig struct {
 	IdentityFile string         `json:"identity_file"`
@@ -84,7 +91,10 @@ type OpenCodeConfig struct {
 	// the attempt helper forwards loopback 443 to.
 	ForgeRelay *RelayConfig `json:"forge_relay,omitempty"`
 	// Sessions, with the helper, retains issue workdirs and resumes sessions (ADR 0015).
-	Sessions *SessionsConfig `json:"sessions,omitempty"`
+	Sessions     *SessionsConfig      `json:"sessions,omitempty"`
+	EnvAllow     []string             `json:"env_allow,omitempty"`
+	IdleWatchdog string               `json:"idle_watchdog,omitempty"`
+	Resources    *docker.ResourceSpec `json:"resources,omitempty"`
 }
 
 // SessionsConfig bounds retained workdirs: TTL after last use and a session count.

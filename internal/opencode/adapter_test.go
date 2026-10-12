@@ -50,6 +50,7 @@ func (stubStatus) Status(context.Context, string) (string, error) { return "runn
 
 type stubWorkload struct {
 	writes  int
+	trees   int
 	removed bool
 	runs    int
 	files   map[string][]byte
@@ -60,9 +61,14 @@ type stubWorkload struct {
 	reused   bool
 	// failFirst ends the first agent run at once, without events.
 	failFirst bool
+	// refuse fails Start like a backend that created nothing.
+	refuse error
 }
 
 func (s *stubWorkload) Start(_ context.Context, _ string, w execution.Workdir) (execution.ProjectedRun, error) {
+	if s.refuse != nil {
+		return nil, s.refuse
+	}
 	s.workdir = w
 	return s, nil
 }
@@ -72,6 +78,15 @@ func (s *stubWorkload) Write(_ context.Context, path string, data []byte) error 
 	if s.files != nil {
 		s.files[path] = data
 	}
+	return nil
+}
+func (s *stubWorkload) WriteTree(_ context.Context, root string, files map[string][]byte) error {
+	for name, data := range files {
+		if s.files != nil {
+			s.files[root+"/"+name] = data
+		}
+	}
+	s.trees++
 	return nil
 }
 func (s *stubWorkload) Execute(ctx context.Context, args []string) error {
@@ -143,6 +158,21 @@ func TestCancellationJoinsRenewalBeforeCleanup(t *testing.T) {
 	}
 	if !workload.removed || authority.actions[len(authority.actions)-1] != "revoke" {
 		t.Fatal("cancellation failed cleanup")
+	}
+}
+
+func TestBackendRefusalRejectsOnlyTheTask(t *testing.T) {
+	refused := &execution.RejectedError{Err: errors.New("Docker address pools are exhausted")}
+	authority := &stubAuthority{}
+	a := Adapter{Issuer: &stubIssuer{}, Authority: authority, Workloads: &stubWorkload{refuse: refused}, Status: stubStatus{}}
+	_, err := a.Start(context.Background(), safeTask())
+	var rejected *execution.RejectedError
+	if !errors.As(err, &rejected) || !strings.Contains(err.Error(), "address pools") || authority.actions[len(authority.actions)-1] != "revoke" {
+		t.Fatalf("backend refusal not a clean rejection: %v", err)
+	}
+	authority.denyRevoke = true
+	if _, err = a.Start(context.Background(), safeTask()); errors.As(err, &rejected) {
+		t.Fatal("refusal with uncertain revocation reported as safe")
 	}
 }
 

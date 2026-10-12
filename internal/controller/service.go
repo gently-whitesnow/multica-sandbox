@@ -21,8 +21,9 @@ func (p *Probe) Serve(ctx context.Context, runtime string) error {
 	}
 }
 
+// Execute runs one task of a fleet runtime; the fleet heartbeats its runtimes.
 func (p *Probe) Execute(ctx context.Context, task multica.Task) error {
 	ticker := time.NewTicker(p.Interval)
 	defer ticker.Stop()
-	return p.execute(ctx, task, ticker.C)
+	return p.execute(ctx, task, ticker.C, false)
 }
