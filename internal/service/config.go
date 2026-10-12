@@ -95,6 +95,8 @@ type OpenCodeConfig struct {
 	EnvAllow     []string             `json:"env_allow,omitempty"`
 	IdleWatchdog string               `json:"idle_watchdog,omitempty"`
 	Resources    *docker.ResourceSpec `json:"resources,omitempty"`
+	Runtime      string               `json:"runtime,omitempty"`
+	DinD         *DinDConfig          `json:"dind,omitempty"`
 }
 
 // SessionsConfig bounds retained workdirs: TTL after last use and a session count.

@@ -1,6 +1,6 @@
 # ADR 0019: Nested Docker under sysbox-runc
 
-Status: Proposed
+Status: Accepted
 Date: 2026-10-12
 
 ## Context
@@ -57,34 +57,36 @@ Add `sysbox-runc` as an explicit, opt-in runtime of the Docker backend.
 
 - **Configuration.** `opencode.runtime: runc | sysbox-runc` (default `runc`) and,
   for sysbox only, `opencode.dind: {registry_mirrors, insecure_registries,
-  ready_timeout}`. Resources stay under `opencode.resources`; nested Docker needs
-  more processes and files than the defaults (`pids` 2048, `nofile` 65536) and
-  4–6 GiB of memory for .NET with databases.
-- **Preflight.** `docker info` lists `sysbox-runc`. A canary attempt with the real
-  policy must show a non-identity `uid_map`, writable `/sys/fs/cgroup` and
-  `/var/lib/docker` (detects a host without `--relaxed-read-only`) and an exec
-  process with `CapEff=0` and `NoNewPrivs=1`. Any failure refuses startup.
+  ready_timeout, testcontainers_ryuk_disabled}`. Sysbox requires the helper image.
+  Resource defaults under sysbox fit a nested engine: `pids` 2048, `nofile` 65536,
+  `/tmp` 512 MiB; memory stays under `opencode.resources`.
+- **Preflight.** `docker info` lists `sysbox-runc`; the image probe finds `dockerd`,
+  `containerd`, `runc` and `iptables`. A canary attempt with the real policy must
+  reach a ready engine and pass the runtime check below; `/sys/fs/cgroup` and
+  `/var/lib/docker` must be writable (detects a host without `--relaxed-read-only`).
+  Any failure refuses startup. Image inspection itself stays on runc: it reads files.
 - **Attempt.** `--runtime` from configuration; for sysbox the container runs as
-  `0:0` with an extra `/run` tmpfs (64 MiB) for the socket and engine state. The
-  entrypoint becomes `sandbox-helper dind` instead of `sleep`. `--read-only`,
-  `--cap-drop=ALL`, no-new-privileges and private namespaces stay.
+  `0:0` with an extra `/run` tmpfs (64 MiB, `noexec`) for the socket and engine state.
+  The entrypoint becomes `sandbox-helper dind` instead of `sleep`; mirrors reach it as
+  arguments. `--read-only`, `--cap-drop=ALL`, no-new-privileges and private namespaces stay.
 - **Every `docker exec` sets `--user 65532:65532`.** Under runc this is a no-op;
   under sysbox it is what keeps the agent unprivileged.
 - **Policy.** The inspected runtime, user and tmpfs set must match the
-  configuration. After start, the controller reads `/proc/self/status` and
-  `/proc/self/uid_map` of an exec process; this replaces trust in `CapDrop`,
-  which Sysbox CE does not apply to PID 1.
+  configuration. After start, an exec process prints `/proc/self/status`, `uid_map` and
+  `mountinfo`: `CapEff`, `CapPrm`, `CapAmb` zero, `NoNewPrivs` 1, a read-only root and,
+  under sysbox, a non-identity map. This replaces trust in `CapDrop`, which Sysbox CE
+  does not apply to PID 1.
 - **`sandbox-helper dind`.** PID 1: reaps children and forwards signals, restores
   the `/workspace` mode, starts `dockerd` on `/run/docker.sock` with the agent
-  group, the configured mirrors and `/run` exec root and pid file, waits for the
-  API and writes a readiness marker. The controller waits for it before the agent
-  starts; a timeout is `environment_prepare_failed`.
+  group and `/run` exec root, writes a readiness marker once `/_ping` answers and exits
+  with `dockerd`. The controller waits with `sandbox-helper dind-wait`; a timeout
+  removes the attempt and fails the task as `environment_prepare_failed`.
 - **Agent environment.** `DOCKER_HOST` stays unset (`/var/run` resolves to `/run`).
-  `TESTCONTAINERS_RYUK_DISABLED=true` is configuration, not a constant: the
-  attempt's removal cleans up anyway.
+  Ryuk is disabled only by configuration: the attempt's removal cleans up anyway.
 - **Image contract (sysbox).** The image provides `dockerd`, `containerd`, `runc`
-  and `iptables` and declares no volumes; the image probe checks `dockerd --version`.
-- **Cleanup and reconciliation** stay unchanged.
+  and `iptables` and declares no volumes.
+- **Cleanup and reconciliation** stay unchanged; the workdir volume is still
+  initialised by a runc container.
 
 ## Consequences
 
@@ -98,13 +100,14 @@ Agents get a private Docker engine per attempt that disappears with the attempt.
 The trust boundary becomes the user namespace: root inside the attempt, including
 inner `--privileged`, is unprivileged on the host, but kernel exposure is larger
 than under runc. Disk use per attempt is unbounded by Sysbox and must be bounded
-by the host. Tests: unit tests of `createArgs` and the policy for both runtimes;
-`VERIFY_SYSBOX=1` integration on a Sysbox host covering readiness, exec
-capabilities, mirror pulls, inner runs, read-only root, cleanup and adversarial
-cases (inner `--privileged`, rootfs writes, the host socket).
+by the host. Tests: unit tests of `createArgs`, the policy and the runtime check for
+both runtimes; `VERIFY_SYSBOX=1` integration on a Sysbox host covering the canary,
+readiness (about 1 s per attempt), mirror pulls, inner runs, read-only root, cleanup,
+a refused engine and adversarial cases (inner `--privileged`, rootfs writes through
+an inner bind mount, the engine being the attempt's own).
 
 ## References
 
 - [Sysbox v0.7.1](https://github.com/nestybox/sysbox/releases/tag/v0.7.1)
 - [Sysbox security: capabilities and read-only containers](https://github.com/nestybox/sysbox/blob/master/docs/user-guide/security.md)
-- `examples/sysbox-host`: VM recipe and smoke of the attempt policy.
+- `examples/sysbox-host`: host recipe, pool slice and the engine test image.

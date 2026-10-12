@@ -45,7 +45,7 @@ with the released glibc OpenCode build. A compatible image:
 - runs as uid 65532 on a read-only rootfs without network: `HOME`, `XDG_*` and `TMPDIR` (`/workspace/tmp`) are in the executable `/workspace` tmpfs, `/tmp` is `noexec`; install tools at build time;
 - carries no secrets: everything in the image is visible to the agent.
 
-`resources` (`cpus`, `memory`, `pids`, `nofile`, `workspace_size`, `tmp_size`, `shm_size`; defaults 2, `4g`, 1024, 4096, `1g`, `256m`, `64m`) bound every attempt and the image inspection; swap equals memory and the created container must match them exactly. The upstream daemon sets no limits; size them for the builds agents run.
+`resources` (`cpus`, `memory`, `pids`, `nofile`, `workspace_size`, `tmp_size`, `shm_size`; defaults 2, `4g`, 1024, 4096, `1g`, `256m`, `64m`; under sysbox `pids` 2048, `nofile` 65536, `tmp_size` `512m`) bound every attempt and the image inspection; swap equals memory and the created container must match them exactly. The upstream daemon sets no limits; size them for the builds agents run. `runtime: sysbox-runc` gives each attempt its own Docker engine (ADR 0019): the image also provides `dockerd`, `containerd`, `runc` and `iptables`, the helper is required, and `dind` (`registry_mirrors`, `insecure_registries`, `ready_timeout`, `testcontainers_ryuk_disabled`) configures the engine. Without network, inner pulls reach Docker Hub only through a pull-through mirror peer; the agent uses `/var/run/docker.sock` as uid 65532.
 Entrypoint, command, `USER` and `HEALTHCHECK` are ignored. The version check is a
 compatibility contract, not a security boundary: host policy holds for any image.
 

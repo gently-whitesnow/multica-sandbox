@@ -17,6 +17,13 @@ type Resources struct {
 // DefaultResources fit real builds (compilers, test runners); the upstream daemon sets none.
 var DefaultResources = Resources{NanoCPUs: 2e9, Memory: 4 << 30, Pids: 1024, NoFile: 4096, Workspace: 1 << 30, Tmp: 256 << 20, Shm: 64 << 20}
 
+// SysboxResources add room for a nested engine: dockerd, containerd and database
+// containers (ADR 0019).
+var SysboxResources = Resources{NanoCPUs: 2e9, Memory: 4 << 30, Pids: 2048, NoFile: 65536, Workspace: 1 << 30, Tmp: 512 << 20, Shm: 64 << 20}
+
+// runTmpfs holds the nested engine's socket and state under sysbox-runc.
+const runTmpfs = "rw,noexec,nosuid,nodev,size=67108864,mode=0755"
+
 // probeResources bound the lifecycle probe's test executions.
 var probeResources = Resources{NanoCPUs: 5e8, Memory: 128 << 20, Pids: 64, NoFile: 256, Workspace: 64 << 20, Tmp: 16 << 20, Shm: 8 << 20}
 
@@ -34,9 +41,12 @@ type ResourceSpec struct {
 	ShmSize       string  `json:"shm_size,omitempty"`
 }
 
-// Resolve applies a spec over DefaultResources within sane bounds.
-func (s *ResourceSpec) Resolve() (Resources, error) {
+// Resolve applies a spec over the runtime's defaults within sane bounds.
+func (s *ResourceSpec) Resolve(runtime string) (Resources, error) {
 	r := DefaultResources
+	if runtime == Sysbox {
+		r = SysboxResources
+	}
 	if s == nil {
 		return r, nil
 	}
@@ -113,9 +123,17 @@ type ulimit struct {
 	Soft, Hard int64
 }
 
-// matches reports whether inspected host limits are exactly these resources.
-func (r Resources) matches(memory, swap, cpus, shm int64, pids int, tmpfs map[string]string, ulimits []ulimit) bool {
+// matches reports whether inspected host limits are exactly these resources; a sysbox
+// attempt also has the /run tmpfs.
+func (r Resources) matches(memory, swap, cpus, shm int64, pids int, tmpfs map[string]string, ulimits []ulimit, sysbox bool) bool {
+	mounts := 2
+	if sysbox {
+		mounts++
+		if tmpfs["/run"] != runTmpfs {
+			return false
+		}
+	}
 	return memory == r.Memory && swap == r.Memory && cpus == r.NanoCPUs && shm == r.Shm && pids == r.Pids &&
-		len(tmpfs) == 2 && tmpfs["/workspace"] == r.workspaceTmpfs() && tmpfs["/tmp"] == r.tmpTmpfs() &&
+		len(tmpfs) == mounts && tmpfs["/workspace"] == r.workspaceTmpfs() && tmpfs["/tmp"] == r.tmpTmpfs() &&
 		len(ulimits) == 1 && ulimits[0] == ulimit{"nofile", int64(r.NoFile), int64(r.NoFile)}
 }

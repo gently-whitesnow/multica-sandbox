@@ -41,15 +41,28 @@ type Projected struct {
 	ForgeForward string
 	// Sessions, with the helper, retains issue workdirs across attempts.
 	Sessions *Sessions
-	// Resources bound attempts and image inspection; zero means DefaultResources.
+	// Resources bound attempts and image inspection; zero means the runtime's defaults.
 	Resources Resources
+	// DinD configures the nested engine under sysbox, which requires the helper.
+	DinD DinD
+}
+
+// DinD configures the nested engine of sysbox attempts (ADR 0019).
+type DinD struct {
+	RegistryMirrors, InsecureRegistries []string
+	ReadyTimeout                        time.Duration
+	// RyukDisabled sets TESTCONTAINERS_RYUK_DISABLED: removing the attempt removes its containers.
+	RyukDisabled bool
 }
 
 func (b *Projected) limits() Resources {
-	if b.Resources == (Resources{}) {
-		return DefaultResources
+	switch {
+	case b.Resources != (Resources{}):
+		return b.Resources
+	case b.Runtime == Sysbox:
+		return SysboxResources
 	}
-	return b.Resources
+	return DefaultResources
 }
 
 // HelperDir holds the helper image mount; the workdir volume is mounted at repo.WorkDir.
@@ -129,6 +142,9 @@ func (b *Projected) Start(ctx context.Context, attempt string, w execution.Workd
 			return nil, fmt.Errorf("invalid forge host name")
 		}
 	}
+	if b.Runtime == Sysbox && b.Helper == "" {
+		return nil, fmt.Errorf("sysbox attempts require the helper")
+	}
 	r := &run{name: b.name(attempt)}
 	isolated, err := b.isolate(ctx, r.name+"-net")
 	if err != nil {
@@ -149,30 +165,26 @@ func (b *Projected) Start(ctx context.Context, attempt string, w execution.Workd
 	for _, host := range loopbackHosts(b.ForgeHosts) {
 		bundles = append(bundles, "--add-host="+host)
 	}
-	args := attemptNetwork(b.createArgs(r.name, b.limits(), bundles...), isolated)
-	// The holding process never handles tokens or executes task-supplied shell text.
-	args = args[:len(args)-len(b.Command)-2]
-	args = append(args, "--env=TMPDIR="+TmpDir, "--env=XDG_DATA_HOME=/workspace/data", "--env=XDG_CONFIG_HOME=/workspace/config", "--env=XDG_CACHE_HOME=/workspace/cache", "--env=XDG_STATE_HOME=/workspace/state", "--env=OPENCODE_DISABLE_AUTOUPDATE=true", "--env=OPENCODE_DISABLE_MODELS_FETCH=true", "--env=OPENCODE_DISABLE_DEFAULT_PLUGINS=true", "--env=OPENCODE_DISABLE_LSP_DOWNLOAD=true", "--entrypoint", "/bin/sh", b.Image, "-c", "exec sleep 86400")
-	if _, err := command(ctx, args...); err != nil {
-		return nil, errors.Join(err, errors.Join(b.cleanupUncertainCreate(r), cleanup()))
+	bundles = append(bundles, "--env=TMPDIR="+TmpDir, "--env=XDG_DATA_HOME=/workspace/data", "--env=XDG_CONFIG_HOME=/workspace/config", "--env=XDG_CACHE_HOME=/workspace/cache", "--env=XDG_STATE_HOME=/workspace/state", "--env=OPENCODE_DISABLE_AUTOUPDATE=true", "--env=OPENCODE_DISABLE_MODELS_FETCH=true", "--env=OPENCODE_DISABLE_DEFAULT_PLUGINS=true", "--env=OPENCODE_DISABLE_LSP_DOWNLOAD=true")
+	if b.Runtime == Sysbox && b.DinD.RyukDisabled {
+		bundles = append(bundles, "--env=TESTCONTAINERS_RYUK_DISABLED=true")
 	}
-	data, err := command(ctx, "inspect", r.name)
-	if err == nil {
-		err = checkProjectedPolicy(data, isolated, b.limits(), b.mounts(), path, projection.volume, b.ForgeHosts)
-	}
+	want := expected{network: isolated, limits: b.limits(), bundles: b.mounts(), path: path, volume: projection.volume, hosts: b.ForgeHosts, runtime: b.Runtime}
+	projection.id, err = b.launch(ctx, r, want, bundles)
 	if err != nil {
-		return nil, errors.Join(err, cleanup())
-	}
-	if _, err := command(ctx, "start", r.name); err != nil {
-		return nil, errors.Join(err, cleanup())
+		cleanErr := cleanup()
+		if errors.Is(err, errEngine) && cleanErr == nil {
+			return nil, &execution.RejectedError{Err: err}
+		}
+		return nil, errors.Join(err, cleanErr)
 	}
 	// Like the upstream task directory, TMPDIR allows executables (go test, build caches).
-	if _, err := command(ctx, "exec", r.name, "mkdir", "-p", "-m", "700", TmpDir); err != nil {
+	if _, err := command(ctx, "exec", "--user", AttemptUser, r.name, "mkdir", "-p", "-m", "700", TmpDir); err != nil {
 		return nil, errors.Join(err, cleanup())
 	}
 	if b.Helper != "" {
 		// The forwarder runs as the attempt user and reaches only the attempt network.
-		forward := []string{"exec", "-d", r.name, HelperDir + "/sandbox-helper", "forward", "127.0.0.1:" + repo.DaemonPort, b.Forward}
+		forward := []string{"exec", "-d", "--user", AttemptUser, r.name, HelperDir + "/sandbox-helper", "forward", "127.0.0.1:" + repo.DaemonPort, b.Forward}
 		if b.ForgeForward != "" {
 			forward = append(forward, "127.0.0.1:"+repo.ForgePort, b.ForgeForward)
 		}
@@ -181,6 +193,69 @@ func (b *Projected) Start(ctx context.Context, attempt string, w execution.Workd
 		}
 	}
 	return projection, nil
+}
+
+// errEngine marks a nested engine that did not become ready: the task is rejected.
+var errEngine = errors.New("nested Docker engine did not become ready")
+
+// launch creates the attempt with the controller-owned entrypoint, compares it with the
+// policy, starts it and waits until it may run commands. It returns the container ID.
+func (b *Projected) launch(ctx context.Context, r *run, want expected, extra []string) (string, error) {
+	args := attemptNetwork(b.createArgs(r.name, want.limits, extra...), want.network)
+	args = append(args[:len(args)-len(b.Command)-2], b.entrypoint()...)
+	out, err := command(ctx, args...)
+	if err != nil {
+		return "", errors.Join(err, b.cleanupUncertainCreate(r))
+	}
+	id := strings.TrimSpace(string(out))
+	data, err := command(ctx, "inspect", r.name)
+	if err == nil {
+		err = checkExpectedPolicy(data, want)
+	}
+	if err == nil {
+		_, err = command(ctx, "start", r.name)
+	}
+	if err == nil && b.Runtime == Sysbox {
+		err = b.waitEngine(ctx, r.name)
+	}
+	if err == nil {
+		err = checkRuntime(ctx, r.name, b.Runtime == Sysbox)
+	}
+	return id, err
+}
+
+// entrypoint is the holding process, which never handles tokens or executes task-supplied
+// shell text: sleep under runc, the helper's nested engine supervisor under sysbox.
+func (b *Projected) entrypoint() []string {
+	if b.Runtime != Sysbox {
+		return []string{"--entrypoint", "/bin/sh", b.Image, "-c", "exec sleep 86400"}
+	}
+	args := []string{"--entrypoint", HelperDir + "/sandbox-helper", b.Image, "dind"}
+	for _, mirror := range b.DinD.RegistryMirrors {
+		args = append(args, "--registry-mirror="+mirror)
+	}
+	for _, registry := range b.DinD.InsecureRegistries {
+		args = append(args, "--insecure-registry="+registry)
+	}
+	return args
+}
+
+// waitEngine waits for the supervisor's readiness marker (sandbox-helper dind-wait).
+func (b *Projected) waitEngine(ctx context.Context, name string) error {
+	timeout := b.DinD.ReadyTimeout
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout+10*time.Second)
+	defer cancel()
+	err := exec.CommandContext(ctx, "docker", "exec", "--user", AttemptUser, name, HelperDir+"/sandbox-helper", "dind-wait", timeout.String()).Run()
+	if err != nil && ctx.Err() == nil {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
+			return fmt.Errorf("%w within %s", errEngine, timeout)
+		}
+	}
+	return err
 }
 
 // attachWorkdir gives the attempt its conversation's session volume when it is free within
@@ -218,7 +293,8 @@ func (b *Projected) workdir(ctx context.Context, volume string, labels ...string
 
 // Output inspects the agent image offline within attempt resource limits and returns its bounded stdout.
 func (b *Projected) Output(ctx context.Context, args []string) ([]byte, error) {
-	probe := Projected{Backend: Backend{Image: b.Image, Owner: b.Owner, Command: args}, Bundles: b.Bundles, Resources: b.Resources}
+	// Inspection reads files only: it runs under runc within the attempt resources.
+	probe := Projected{Backend: Backend{Image: b.Image, Owner: b.Owner, Command: args}, Bundles: b.Bundles, Resources: b.limits()}
 	bundles, path, err := probe.prepare(ctx)
 	if err != nil {
 		return nil, err
@@ -229,7 +305,7 @@ func (b *Projected) Output(ctx context.Context, args []string) ([]byte, error) {
 	}
 	data, err := command(ctx, "inspect", r.name)
 	if err == nil {
-		err = checkProjectedPolicy(data, "none", probe.limits(), b.Bundles, path, "", nil)
+		err = checkExpectedPolicy(data, expected{network: "none", limits: probe.limits(), bundles: b.Bundles, path: path})
 	}
 	if err != nil {
 		return nil, errors.Join(err, r.cleanup())
@@ -249,8 +325,8 @@ func attemptNetwork(args []string, network string) []string {
 
 type projectedRun struct {
 	*run
-	network, volume, owner string
-	peers                  []string
+	id, network, volume, owner string
+	peers                      []string
 	// sessions holds the retained volume's writer slot; reused means it already existed.
 	sessions *Sessions
 	reused   bool
@@ -267,7 +343,7 @@ func (r *projectedRun) Write(ctx context.Context, path string, data []byte) erro
 	if !projectionPaths[path] || len(data) > 65536 {
 		return fmt.Errorf("invalid projection")
 	}
-	cmd := exec.CommandContext(ctx, "docker", "exec", "-i", r.name, "/bin/sh", "-c", `set -eu; umask 077; mkdir -p "${1%/*}"; cat > "$1.next"; chmod 600 "$1.next"; mv -f "$1.next" "$1"`, "projection", path)
+	cmd := exec.CommandContext(ctx, "docker", "exec", "-i", "--user", AttemptUser, r.name, "/bin/sh", "-c", `set -eu; umask 077; mkdir -p "${1%/*}"; cat > "$1.next"; chmod 600 "$1.next"; mv -f "$1.next" "$1"`, "projection", path)
 	cmd.Stdin = bytes.NewReader(data)
 	if cmd.Run() != nil {
 		return fmt.Errorf("atomic projection failed")
@@ -288,7 +364,7 @@ func (r *projectedRun) WriteTree(ctx context.Context, root string, files map[str
 	if err := writeTar(&archive, files, 16<<20); err != nil {
 		return err
 	}
-	cmd := exec.CommandContext(ctx, "docker", "exec", "-i", r.name, "/bin/sh", "-c", `set -eu; umask 022; mkdir -p "$1"; tar -x -f - -C "$1"`, "projection", root)
+	cmd := exec.CommandContext(ctx, "docker", "exec", "-i", "--user", AttemptUser, r.name, "/bin/sh", "-c", `set -eu; umask 022; mkdir -p "$1"; tar -x -f - -C "$1"`, "projection", root)
 	cmd.Stdin = &archive
 	if cmd.Run() != nil {
 		return fmt.Errorf("tree projection failed")
@@ -327,7 +403,7 @@ func writeTar(w io.Writer, files map[string][]byte, limit int) error {
 }
 
 func (r *projectedRun) Execute(ctx context.Context, args []string) error {
-	cmd := exec.CommandContext(ctx, "docker", append([]string{"exec", r.name}, args...)...)
+	cmd := exec.CommandContext(ctx, "docker", append([]string{"exec", "--user", AttemptUser, r.name}, args...)...)
 	var out limitedOutput
 	cmd.Stdout = &out
 	err := cmd.Run()
@@ -494,7 +570,7 @@ func (r *projectedRun) Stream(ctx context.Context, args []string, env map[string
 // exec builds a docker exec in the agent working directory. Env values reach the docker
 // client environment only; argv and diagnostics carry names.
 func (r *projectedRun) exec(ctx context.Context, args []string, env map[string]string) (*exec.Cmd, error) {
-	execArgs := []string{"exec"}
+	execArgs := []string{"exec", "--user", AttemptUser}
 	if r.volume != "" {
 		execArgs = append(execArgs, "--workdir", repo.WorkDir)
 	}

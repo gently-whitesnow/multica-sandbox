@@ -41,7 +41,34 @@ echo "version $(opencode --version 2>/dev/null | head -n 1)"
 echo "cli $(command -v multica)"
 echo "cli-version $(multica version 2>/dev/null | head -n 1)"
 echo "git $(command -v git)"
-echo "tar $(command -v tar)"`}
+echo "tar $(command -v tar)"
+for b in dockerd containerd runc iptables; do echo "engine $b $(command -v $b)"; done
+echo "engine-version $(dockerd --version 2>/dev/null | head -n 1)"`}
+
+// CheckEngine requires the nested engine of sysbox attempts in the image (ADR 0019).
+func CheckEngine(output []byte) error {
+	found, version := map[string]bool{}, ""
+	for _, line := range strings.Split(string(output), "\n") {
+		kind, value, _ := strings.Cut(line, " ")
+		switch kind {
+		case "engine":
+			name, path, _ := strings.Cut(value, " ")
+			found[name] = strings.HasPrefix(path, "/")
+		case "engine-version":
+			version = value
+		}
+	}
+	var missing []string
+	for _, name := range []string{"dockerd", "containerd", "runc", "iptables"} {
+		if !found[name] {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) > 0 || !strings.HasPrefix(version, "Docker version ") {
+		return fmt.Errorf("incompatible agent image: sysbox-runc attempts need dockerd, containerd, runc and iptables (missing: %s)", strings.Join(missing, ", "))
+	}
+	return nil
+}
 
 // CheckImage fails closed with every incompatibility an operator must fix in the image.
 // With cli, multica must resolve to the controller artifact built from the pinned revision;

@@ -11,22 +11,22 @@ import (
 )
 
 func TestResourceSpecDefaultsAndBounds(t *testing.T) {
-	if r, err := (*ResourceSpec)(nil).Resolve(); err != nil || r != DefaultResources {
+	if r, err := (*ResourceSpec)(nil).Resolve(""); err != nil || r != DefaultResources {
 		t.Fatal("unset resources differ from the defaults", r, err)
 	}
-	r, err := (&ResourceSpec{CPUs: 4, Memory: "6g", Pids: 4096, NoFile: 65536, WorkspaceSize: "2g", TmpSize: "512m", ShmSize: "1g"}).Resolve()
+	r, err := (&ResourceSpec{CPUs: 4, Memory: "6g", Pids: 4096, NoFile: 65536, WorkspaceSize: "2g", TmpSize: "512m", ShmSize: "1g"}).Resolve("")
 	want := Resources{NanoCPUs: 4e9, Memory: 6 << 30, Pids: 4096, NoFile: 65536, Workspace: 2 << 30, Tmp: 512 << 20, Shm: 1 << 30}
 	if err != nil || r != want {
 		t.Fatal("configured resources not applied", r, err)
 	}
-	if r, _ := (&ResourceSpec{Memory: "8G"}).Resolve(); r.Memory != 8<<30 || r.Pids != DefaultResources.Pids {
+	if r, _ := (&ResourceSpec{Memory: "8G"}).Resolve(""); r.Memory != 8<<30 || r.Pids != DefaultResources.Pids {
 		t.Fatal("partial spec did not keep defaults", r)
 	}
 	for name, spec := range map[string]ResourceSpec{
 		"cpus": {CPUs: 0.01}, "negative cpus": {CPUs: -1}, "memory unit": {Memory: "4gb"}, "tiny memory": {Memory: "1m"},
 		"zero": {Memory: "0"}, "overflow": {Memory: "99999999999999g"}, "pids": {Pids: 8}, "nofile": {NoFile: 1 << 21}, "tmp": {TmpSize: "-1m"},
 	} {
-		if _, err := spec.Resolve(); err == nil {
+		if _, err := spec.Resolve(""); err == nil {
 			t.Errorf("%s accepted", name)
 		}
 	}
@@ -47,16 +47,16 @@ func TestPolicyMatchesConfiguredResources(t *testing.T) {
 	host["Ulimits"] = []any{map[string]any{"Name": "nofile", "Soft": 2048, "Hard": 2048}}
 	host["Tmpfs"] = map[string]string{"/workspace": limits.workspaceTmpfs(), "/tmp": limits.tmpTmpfs()}
 	data, _ := json.Marshal(fixture)
-	if err := checkProjectedPolicy(data, "none", limits, nil, "", "", nil); err != nil {
+	if err := checkExpectedPolicy(data, expected{network: "none", limits: limits}); err != nil {
 		t.Fatal(err)
 	}
 	// A container created with other limits (the defaults) fails the configured policy.
-	if checkProjectedPolicy(data, "none", DefaultResources, nil, "", "", nil) == nil {
+	if checkExpectedPolicy(data, expected{network: "none", limits: DefaultResources}) == nil {
 		t.Fatal("inspect accepted against different resources")
 	}
 	host["Ulimits"] = []any{map[string]any{"Name": "nofile", "Soft": 2048, "Hard": 4096}}
 	data, _ = json.Marshal(fixture)
-	if checkProjectedPolicy(data, "none", limits, nil, "", "", nil) == nil {
+	if checkExpectedPolicy(data, expected{network: "none", limits: limits}) == nil {
 		t.Fatal("raised hard nofile accepted")
 	}
 }

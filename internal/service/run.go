@@ -103,11 +103,10 @@ func openCodeAdapter(ctx context.Context, c Config, stateDir string, api *multic
 	if err = opencode.ValidEnvAllow(c.OpenCode.EnvAllow); err != nil {
 		return nil, err
 	}
-	resources, err := c.OpenCode.Resources.Resolve()
+	workloads, err := attemptWorkloads(c.OpenCode, backend)
 	if err != nil {
 		return nil, err
 	}
-	workloads := &docker.Projected{Backend: *backend, Network: c.OpenCode.Network, Peers: c.OpenCode.Peers, Helper: c.OpenCode.Helper, Resources: resources}
 	if s := c.OpenCode.Sessions; s != nil {
 		ttl, err := time.ParseDuration(s.TTL)
 		interval, intervalErr := optionalDuration(s.Interval, 2*time.Hour)
@@ -166,7 +165,15 @@ func openCodeAdapter(ctx context.Context, c Config, stateDir string, api *multic
 	if err = opencode.CheckImageRevision(report, revision, git); err != nil {
 		return nil, err
 	}
+	if workloads.Runtime == docker.Sysbox {
+		if err = opencode.CheckEngine(report); err != nil {
+			return nil, err
+		}
+	}
 	if err = checkTools(ctx, workloads, c.Tools); err != nil {
+		return nil, err
+	}
+	if err = workloads.Preflight(ctx); err != nil {
 		return nil, err
 	}
 	config, err := agentidentity.ReadConfig(c.OpenCode.IdentityFile)
@@ -225,6 +232,21 @@ func openCodeAdapter(ctx context.Context, c Config, stateDir string, api *multic
 		go workloads.Sessions.Sweep(ctx, c.Daemon, func(err error) { fmt.Fprintf(out, "session sweep failed: %v\n", err) })
 	}
 	return adapter, nil
+}
+
+// attemptWorkloads builds the Docker backend of attempts: runtime and resources.
+func attemptWorkloads(c *OpenCodeConfig, backend *docker.Backend) (*docker.Projected, error) {
+	runtime, dind, err := attemptRuntime(c)
+	if err != nil {
+		return nil, err
+	}
+	resources, err := c.Resources.Resolve(runtime)
+	if err != nil {
+		return nil, err
+	}
+	workloads := &docker.Projected{Backend: *backend, Network: c.Network, Peers: c.Peers, Helper: c.Helper, Resources: resources, DinD: dind}
+	workloads.Runtime = runtime
+	return workloads, nil
 }
 
 func optionalDuration(value string, fallback time.Duration) (time.Duration, error) {

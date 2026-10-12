@@ -23,7 +23,15 @@ type Backend struct {
 	Image   string
 	Owner   string
 	Command []string
+	// Runtime is runc (empty) or Sysbox, which runs a nested engine (ADR 0019).
+	Runtime string
 }
+
+// Sysbox is the OCI runtime that gives attempts their own user namespace and Docker engine.
+const Sysbox = "sysbox-runc"
+
+// AttemptUser runs every agent and controller command inside attempts.
+const AttemptUser = "65532:65532"
 
 func (b *Backend) Validate(ctx context.Context) error {
 	_, _, err := b.validate(ctx)
@@ -53,12 +61,16 @@ func (b *Backend) validate(ctx context.Context) (string, imageConfig, error) {
 		OSType, CgroupVersion                                        string
 		MemoryLimit, SwapLimit, PidsLimit, CpuCfsPeriod, CpuCfsQuota bool
 		SecurityOptions                                              []string
+		Runtimes                                                     map[string]json.RawMessage
 	}
 	if err = json.Unmarshal(data, &info); err != nil {
 		return "", image, err
 	}
 	if info.OSType != "linux" || info.CgroupVersion != "2" || !info.MemoryLimit || !info.SwapLimit || !info.PidsLimit || !info.CpuCfsPeriod || !info.CpuCfsQuota || !strings.Contains(strings.Join(info.SecurityOptions, ","), "name=seccomp,profile=builtin") {
 		return "", image, fmt.Errorf("Linux cgroup v2, resource controllers and builtin seccomp required")
+	}
+	if b.Runtime != "" && (b.Runtime != Sysbox || info.Runtimes[Sysbox] == nil) {
+		return "", image, fmt.Errorf("runtime %.32q is not registered with the Docker engine", b.Runtime)
 	}
 	image, err = inspectImage(ctx, b.Image, info.Architecture)
 	return info.Architecture, image, err
@@ -137,10 +149,16 @@ func (b *Backend) cleanupUncertainCreate(r *run) error {
 	return r.Remove(ctx)
 }
 
-// createArgs places extra controller-owned options before the entrypoint.
+// createArgs places extra controller-owned options before the entrypoint. Under sysbox
+// PID 1 is root of the user namespace for the nested engine; commands run as AttemptUser.
 func (b *Backend) createArgs(name string, limits Resources, extra ...string) []string {
+	runtime, user := "runc", AttemptUser
+	if b.Runtime == Sysbox {
+		runtime, user = Sysbox, "0:0"
+		extra = append([]string{"--tmpfs=/run:" + runTmpfs}, extra...)
+	}
 	args := []string{"create", "--name", name, "--label", ownerLabel + "=" + b.Owner,
-		"--pull=never", "--runtime=runc", "--network=none", "--read-only", "--user=65532:65532",
+		"--pull=never", "--runtime=" + runtime, "--network=none", "--read-only", "--user=" + user,
 		"--cap-drop=ALL", "--security-opt=no-new-privileges=true", "--cgroupns=private", "--ipc=private",
 		"--restart=no", "--no-healthcheck", "--log-driver=none", "--workdir=/workspace", "--env=HOME=/workspace"}
 	args = append(append(append(args, limits.args()...), extra...), "--entrypoint", b.Command[0], b.Image)
