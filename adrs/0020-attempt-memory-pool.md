@@ -50,7 +50,7 @@ Attempts may share one host cgroup slice, the pool, instead of fixed limits.
 - **Out of memory.** When the agent command fails or its stream ends early (a killed
   OpenCode leaves a step open, which Multica would retry as a provider stream cut),
   the controller reads the attempt's
-  `memory.events`, `memory.peak` and `memory.max` (through the pool on the host,
+  `memory.events`, `memory.max` and, from Linux 5.19, `memory.peak` (through the pool on the host,
   otherwise inside the attempt, otherwise Docker's `OOMKilled`). An `oom_kill` makes the
   failure an `OOMError`, reported with the canonical `agent_error.process_failure`:
   outside Multica's automatic retries and resume-safe. The message names the killed

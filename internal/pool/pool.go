@@ -150,7 +150,8 @@ func (p *Pool) AttemptMemory(id string) (Memory, error) {
 }
 
 // Memory is the state of an attempt cgroup: memory.events oom (limit reached and
-// allocation failed) and oom_kill (processes killed), memory.peak and memory.max.
+// allocation failed) and oom_kill (processes killed), memory.max and memory.peak (-1
+// before Linux 5.19, which added it).
 type Memory struct {
 	OOM, OOMKill, Peak, Max int64
 }
@@ -158,8 +159,11 @@ type Memory struct {
 // ReadMemory reads an attempt cgroup directory.
 func ReadMemory(dir string) (Memory, error) {
 	var data []byte
-	for _, name := range []string{"memory.events", "memory.peak", "memory.max"} {
+	for _, name := range []string{"memory.events", "memory.max", "memory.peak"} {
 		part, err := os.ReadFile(filepath.Join(dir, name))
+		if name == "memory.peak" && errors.Is(err, fs.ErrNotExist) {
+			break
+		}
 		if err != nil {
 			return Memory{}, err
 		}
@@ -168,11 +172,11 @@ func ReadMemory(dir string) (Memory, error) {
 	return ParseMemory(data)
 }
 
-// ParseMemory reads memory.events, memory.peak and memory.max concatenated, as `cat`
-// prints them inside the attempt.
+// ParseMemory reads memory.events, memory.max and the optional memory.peak
+// concatenated, as `cat` prints them inside the attempt.
 func ParseMemory(data []byte) (Memory, error) {
 	m := Memory{Peak: -1, Max: -1}
-	values := []*int64{&m.Peak, &m.Max}
+	values := []*int64{&m.Max, &m.Peak}
 	events := 0
 	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
 		fields := strings.Fields(line)
@@ -198,7 +202,7 @@ func ParseMemory(data []byte) (Memory, error) {
 			return m, fmt.Errorf("invalid attempt memory state")
 		}
 	}
-	if events != 2 || len(values) != 0 {
+	if events != 2 || len(values) == 2 {
 		return m, fmt.Errorf("incomplete attempt memory state")
 	}
 	return m, nil
