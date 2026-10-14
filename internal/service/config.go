@@ -69,7 +69,7 @@ const (
 )
 
 type OpenCodeConfig struct {
-	IdentityFile string         `json:"identity_file"`
+	IdentityFile string         `json:"identity_file,omitempty"`
 	Authority    attempt.Config `json:"authority"`
 	Network      string         `json:"network"`
 	Peers        []string       `json:"peers"`

@@ -199,3 +199,21 @@ func (s *stubWorkload) Capture(context.Context, []string, map[string]string) ([]
 	return nil, nil
 }
 func (s *stubWorkload) Result() execution.Result { return execution.Result{} }
+
+func TestWithoutIdentityOnlyAgentsWithoutMCPRun(t *testing.T) {
+	workload := &stubWorkload{}
+	a := Adapter{Workloads: workload, Status: stubStatus{}}
+	var rejected *execution.RejectedError
+	if _, err := a.Start(context.Background(), safeTask()); !errors.As(err, &rejected) || workload.writes != 0 || workload.runs != 0 {
+		t.Fatalf("MCP selection without identity not refused: %v", err)
+	}
+	task := safeTask()
+	task.Agent.MCPConfig = nil
+	run, err := a.Start(context.Background(), task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := run.Remove(context.Background()); err != nil || !workload.removed {
+		t.Fatalf("cleanup without authority: %v", err)
+	}
+}

@@ -141,8 +141,8 @@ with `VERIFY_SERVICE=1` for the real Multica → Compose controller task.
 Set `VERIFY_COMMIT_RANGE=master..HEAD` to validate published commit messages.
 All available Harness checks for Go, YAML and repository documentation are required.
 Harness does not execute tests or toolchains; `verify.sh` runs those locally.
-CI is paused during development. The workflow supports manual dispatch only;
-enable it explicitly when ready; stage new files before verification.
+CI is paused; workflows run on manual dispatch only. Stage new files before verification.
+`images.yml` publishes ghcr.io controller, helper and CLI images for one platform.
 Run `.git/harness/bin/harness commit-message template` for the required format.
 
 ## License

@@ -61,8 +61,9 @@ Agent environment: `env_allow` lists up to 32 agent `custom_env` names passed to
 
 `internal/attempt` POSTs authenticated version-1 JSON to one configured endpoint.
 It disables redirects/proxy environment, re-reads the controller-only bearer file
-and requires HTTP 204. HTTPS is required outside explicit isolated fixtures.
-The authority is external; this repository contains only a fixture implementation.
+and requires HTTP 204. HTTPS is required outside explicit isolated fixtures. The
+authority is external; this repository contains only a fixture implementation.
+Without `identity_file` and `authority` agents selecting MCP are refused (ADR 0009).
 
 `renew` includes `controller`, the dispatch-fenced `attempt`, `server`,
 `workspace_id`, `agent_id`, `task_id`, `mcp_url`, SHA-256 `token_hash`, and epoch-second

@@ -79,6 +79,7 @@ checks; add `VERIFY_SERVICE=1 VERIFY_OPENCODE=1` for real controller inference.
 The end-to-end lab uses `scripts/e2e.sh`; real inference requires explicit local
 subscription login. Never copy account data into documentation or test reports.
 CI is paused; run verification locally. Do not re-enable CI without an explicit
-request. Use `VERIFY_COMMIT_RANGE=master..HEAD ./verify.sh` before publishing.
+request. `images.yml` (manual) publishes the controller, helper and CLI images for one
+platform. Use `VERIFY_COMMIT_RANGE=master..HEAD ./verify.sh` before publishing.
 Before starting an issue, inspect its ADRs and existing branches/PRs. Leave a concise
 handoff with commit, verified result, next action and blocker when interrupted.

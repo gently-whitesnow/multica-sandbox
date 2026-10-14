@@ -100,6 +100,9 @@ func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, 
 	if err != nil {
 		return nil, &execution.RejectedError{Err: err}
 	}
+	if len(connections) != 0 && (a.Issuer == nil || a.Authority == nil) {
+		return nil, &execution.RejectedError{Err: fmt.Errorf("MCP connections require identity_file and authority: %w", ErrDenied)}
+	}
 	continuity := Fresh
 	if task.PriorSessionID != "" {
 		continuity = Lost
@@ -403,7 +406,9 @@ func (r *running) Remove(ctx context.Context) error {
 		}
 		cleanCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
-		r.cleanupErr = r.adapter.Authority.Apply(cleanCtx, r.grant("revoke"))
+		if r.adapter.Authority != nil {
+			r.cleanupErr = r.adapter.Authority.Apply(cleanCtx, r.grant("revoke"))
+		}
 		if r.workload != nil {
 			r.cleanupErr = errors.Join(r.cleanupErr, r.workload.Remove(cleanCtx))
 		}
