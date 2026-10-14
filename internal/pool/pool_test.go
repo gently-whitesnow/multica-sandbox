@@ -97,6 +97,12 @@ func TestAttemptPlacementAndMemory(t *testing.T) {
 		if m, err := p.AttemptMemory(attemptID); err != nil || m != (Memory{OOM: 0, OOMKill: 2, Peak: 3 << 30, Max: Unlimited}) {
 			t.Fatal(m, err)
 		}
+		if err := os.Remove(filepath.Join(p.Dir, dir, "memory.peak")); err != nil {
+			t.Fatal(err)
+		}
+		if m, err := p.AttemptMemory(attemptID); err != nil || m != (Memory{OOMKill: 2, Peak: -1, Max: Unlimited}) {
+			t.Fatal("without memory.peak:", m, err)
+		}
 		write(t, filepath.Join(p.Dir, dir), map[string]string{"memory.max": "6442450944\n", "memory.swap.max": "0\n"})
 		if p.CheckAttempt(attemptID, 6<<30) == nil {
 			t.Fatal("attempt without swap accepted")
@@ -105,11 +111,15 @@ func TestAttemptPlacementAndMemory(t *testing.T) {
 }
 
 func TestParseMemoryAsCatPrintsIt(t *testing.T) {
-	m, err := ParseMemory([]byte("low 0\nhigh 0\nmax 12\noom 3\noom_kill 3\noom_group_kill 0\n1073741824\n1073741824\n"))
-	if err != nil || m != (Memory{OOM: 3, OOMKill: 3, Peak: 1 << 30, Max: 1 << 30}) {
+	m, err := ParseMemory([]byte("low 0\nhigh 0\nmax 12\noom 3\noom_kill 3\noom_group_kill 0\n1073741824\n805306368\n"))
+	if err != nil || m != (Memory{OOM: 3, OOMKill: 3, Peak: 768 << 20, Max: 1 << 30}) {
 		t.Fatal(m, err)
 	}
-	for _, bad := range []string{"", "oom 1\noom_kill 1\n5\n", "oom 1\noom_kill x\n1\n2\n", "oom 1\n1\n2\n", "oom 1\noom_kill 1\n1\n2\n3\n", "a b c\n"} {
+	// Before Linux 5.19 there is no memory.peak.
+	if m, err := ParseMemory([]byte("oom 0\noom_kill 1\nmax\n")); err != nil || m != (Memory{OOMKill: 1, Peak: -1, Max: Unlimited}) {
+		t.Fatal(m, err)
+	}
+	for _, bad := range []string{"", "oom 1\noom_kill 1\n", "oom 1\noom_kill x\n1\n2\n", "oom 1\n1\n2\n", "oom 1\noom_kill 1\n1\n2\n3\n", "a b c\n"} {
 		if _, err := ParseMemory([]byte(bad)); err == nil {
 			t.Errorf("accepted %q", bad)
 		}

@@ -598,14 +598,19 @@ func (r *projectedRun) memory() (pool.Memory, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	out, err := command(ctx, "exec", "--user", AttemptUser, r.name, "cat", "/sys/fs/cgroup/memory.events", "/sys/fs/cgroup/memory.peak", "/sys/fs/cgroup/memory.max")
+	out, err := command(ctx, "exec", "--user", AttemptUser, r.name, "cat", "/sys/fs/cgroup/memory.events", "/sys/fs/cgroup/memory.max")
 	if err != nil {
 		return pool.Memory{}, err
+	}
+	// memory.peak needs Linux 5.19.
+	if peak, err := command(ctx, "exec", "--user", AttemptUser, r.name, "cat", "/sys/fs/cgroup/memory.peak"); err == nil {
+		out = append(out, peak...)
 	}
 	return pool.ParseMemory(out)
 }
 
-// PeakMemory is the attempt cgroup's memory.peak at the agent's last exit, 0 if unread.
+// PeakMemory is the attempt cgroup's memory.peak at the agent's last exit, 0 if unread
+// (before Linux 5.19).
 func (r *projectedRun) PeakMemory() int64 { return r.peak }
 
 // outOfMemory reports an OOM kill in the attempt cgroup from its memory reading, else
