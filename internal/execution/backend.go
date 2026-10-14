@@ -10,6 +10,15 @@ import (
 type Result struct {
 	Output, SessionID, WorkDir, RetiredSessionID string
 	Disposable                                   bool
+	Telemetry                                    Telemetry
+}
+
+// Telemetry describes an attempt for controller logs; it never reaches Multica.
+// PeakMemory is in bytes, 0 when not measured.
+type Telemetry struct {
+	Model, Effort                           string
+	InputTokens, OutputTokens, CachedTokens int64
+	PeakMemory                              int64
 }
 
 // Workdir asks for the retained workdir of an issue or chat conversation (ADR 0015,

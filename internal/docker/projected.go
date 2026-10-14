@@ -340,6 +340,7 @@ type projectedRun struct {
 	// sessions holds the retained volume's writer slot; reused means it already existed.
 	sessions *Sessions
 	reused   bool
+	peak     int64
 }
 
 func (r *projectedRun) Workdir() (string, bool) {
@@ -570,10 +571,14 @@ func (r *projectedRun) Stream(ctx context.Context, args []string, env map[string
 		cancel()
 	}
 	waitErr := cmd.Wait()
+	m, memErr := r.memory()
+	if memErr == nil && m.Peak > 0 {
+		r.peak = m.Peak
+	}
 	// An agent killed for memory also ends its stream early; the kill decides the failure,
 	// which Multica must not retry as a provider stream cut.
 	if readErr != nil || waitErr != nil {
-		if oom := r.outOfMemory(); oom != nil {
+		if oom := r.outOfMemory(m, memErr); oom != nil {
 			return oom
 		}
 	}
@@ -586,22 +591,28 @@ func (r *projectedRun) Stream(ctx context.Context, args []string, env map[string
 	return nil
 }
 
-// outOfMemory reports an OOM kill in the attempt cgroup: read on the host through the
-// pool, else inside the attempt, else Docker's record of a container that is gone.
-func (r *projectedRun) outOfMemory() *execution.OOMError {
+// memory reads the attempt cgroup on the host through the pool, else inside the attempt.
+func (r *projectedRun) memory() (pool.Memory, error) {
+	if r.pool != nil {
+		return r.pool.AttemptMemory(r.id)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	var m pool.Memory
-	var err error
-	if r.pool != nil {
-		m, err = r.pool.AttemptMemory(r.id)
-	} else {
-		var out []byte
-		out, err = command(ctx, "exec", "--user", AttemptUser, r.name, "cat", "/sys/fs/cgroup/memory.events", "/sys/fs/cgroup/memory.peak", "/sys/fs/cgroup/memory.max")
-		if err == nil {
-			m, err = pool.ParseMemory(out)
-		}
+	out, err := command(ctx, "exec", "--user", AttemptUser, r.name, "cat", "/sys/fs/cgroup/memory.events", "/sys/fs/cgroup/memory.peak", "/sys/fs/cgroup/memory.max")
+	if err != nil {
+		return pool.Memory{}, err
 	}
+	return pool.ParseMemory(out)
+}
+
+// PeakMemory is the attempt cgroup's memory.peak at the agent's last exit, 0 if unread.
+func (r *projectedRun) PeakMemory() int64 { return r.peak }
+
+// outOfMemory reports an OOM kill in the attempt cgroup from its memory reading, else
+// Docker's record of a container that is gone.
+func (r *projectedRun) outOfMemory(m pool.Memory, err error) *execution.OOMError {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	if err != nil {
 		data, inspectErr := command(ctx, "inspect", "--format", "{{.State.OOMKilled}}", r.name)
 		if inspectErr != nil || strings.TrimSpace(string(data)) != "true" {

@@ -52,7 +52,7 @@ func (r *running) configureInference(ctx context.Context, config []byte) ([]byte
 	}
 	// Only the selected model is projected: the catalog may hold hundreds of advisory entries.
 	provider, pkg := inference.Provider(selection.api), providerPackages[selection.api]
-	r.model = provider + "/" + selection.model
+	r.model, r.effort = provider+"/"+selection.model, selection.effort
 	models := map[string]any{selection.model: nativeModel(selection.model, selection.api, selection.metadata, selection.effort)}
 	projected["model"] = r.model
 	if selection.effort != "" {

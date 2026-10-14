@@ -32,7 +32,20 @@ type Probe struct {
 	Duration time.Duration
 	Fail     bool
 	Observe  func(string, string)
+	// Finished, when set, receives every attempt whose terminal report Multica accepted
+	// or queued.
+	Finished func(Finish)
 	Launch   func(context.Context, multica.Task) (execution.Run, error)
+}
+
+// Finish is a reported attempt: Failure is nil on completion; Started is zero when the
+// task was rejected before its workload ran.
+type Finish struct {
+	Task                    multica.Task
+	Failure                 error
+	Result                  execution.Result
+	Claimed, Started, Ended time.Time
+	Deferred                bool
 }
 
 func (p *Probe) Connect(ctx context.Context, workspace, daemon string) (multica.Runtime, multica.Recovery, error) {
@@ -78,6 +91,7 @@ func (p *Probe) Run(ctx context.Context, runtime string) error {
 // nothing else heartbeats.
 func (p *Probe) execute(ctx context.Context, t multica.Task, ticks <-chan time.Time, beat bool) (result error) {
 	p.observe("claimed", t.ID)
+	f := Finish{Task: t, Claimed: time.Now()}
 	if err := p.API.RenewPreparation(ctx, t); err != nil {
 		return err
 	}
@@ -98,7 +112,7 @@ func (p *Probe) execute(ctx context.Context, t multica.Task, ticks <-chan time.T
 		var rejected *execution.RejectedError
 		if errors.As(err, &rejected) {
 			p.observe("rejected ("+rejected.Error()+")", t.ID)
-			return p.finish(ctx, t.ID, err, func() error { return nil }, func() execution.Result { return execution.Result{Disposable: p.Launch != nil} })
+			return p.finish(ctx, f, err, func() error { return nil }, func() execution.Result { return execution.Result{Disposable: p.Launch != nil} })
 		}
 		return err
 	}
@@ -108,6 +122,7 @@ func (p *Probe) execute(ctx context.Context, t multica.Task, ticks <-chan time.T
 		}
 	}()
 	p.observe("started", t.ID)
+	f.Started = time.Now()
 	timer := time.NewTimer(p.Duration)
 	defer timer.Stop()
 	for {
@@ -125,7 +140,7 @@ func (p *Probe) execute(ctx context.Context, t multica.Task, ticks <-chan time.T
 				return err
 			}
 		case err := <-done:
-			return p.finish(ctx, t.ID, err, stop, outcome)
+			return p.finish(ctx, f, err, stop, outcome)
 		case <-timer.C:
 			var failure error
 			if p.Backend != nil || p.Launch != nil {
@@ -133,11 +148,12 @@ func (p *Probe) execute(ctx context.Context, t multica.Task, ticks <-chan time.T
 			} else if p.Fail {
 				failure = fmt.Errorf("probe failure requested")
 			}
-			return p.finish(ctx, t.ID, failure, stop, outcome)
+			return p.finish(ctx, f, failure, stop, outcome)
 		}
 	}
 }
-func (p *Probe) finish(ctx context.Context, id string, failure error, stop func() error, outcome func() execution.Result) error {
+func (p *Probe) finish(ctx context.Context, f Finish, failure error, stop func() error, outcome func() execution.Result) error {
+	id := f.Task.ID
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -148,19 +164,25 @@ func (p *Probe) finish(ctx context.Context, id string, failure error, stop func(
 	if err != nil || !active {
 		return err
 	}
+	f.Failure, f.Result, f.Ended = failure, outcome(), time.Now()
 	if failure != nil {
-		err = p.API.Fail(ctx, id, failure, outcome())
+		err = p.API.Fail(ctx, id, failure, f.Result)
 	} else {
-		err = p.API.Complete(ctx, id, outcome())
+		err = p.API.Complete(ctx, id, f.Result)
 	}
 	switch {
 	case err == nil:
 		p.observe("reported", id)
 	case errors.Is(err, multica.ErrDeferred):
 		p.observe("report-deferred", id)
-		return nil
+		f.Deferred, err = true, nil
+	default:
+		return err
 	}
-	return err
+	if p.Finished != nil {
+		p.Finished(f)
+	}
+	return nil
 }
 func (p *Probe) reconcile(ctx context.Context, id string, stop func() error) (bool, error) {
 	status, err := p.API.Status(ctx, id)

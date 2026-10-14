@@ -77,6 +77,7 @@ type running struct {
 	cleanupErr  error
 	events      *eventStream
 	model       string
+	effort      string
 	relayToken  string
 	// inferenceToken is the opaque per-attempt provider key; it never rotates.
 	inferenceToken string
@@ -373,10 +374,16 @@ func (r *running) retryFresh(ctx context.Context) bool {
 
 // Result reports the session as retained only with a retained workdir.
 func (r *running) Result() execution.Result {
-	if r.events == nil {
-		return execution.Result{Disposable: true}
+	t := execution.Telemetry{Model: r.model, Effort: r.effort}
+	if peak, ok := r.workload.(interface{ PeakMemory() int64 }); ok {
+		t.PeakMemory = peak.PeakMemory()
 	}
-	return execution.Result{Output: r.events.output.String(), SessionID: r.events.session, WorkDir: r.workDir, RetiredSessionID: r.retired, Disposable: r.workDir == ""}
+	if r.events == nil {
+		return execution.Result{Disposable: true, Telemetry: t}
+	}
+	u := r.events.usage
+	t.InputTokens, t.OutputTokens, t.CachedTokens = u.Input, u.Output, u.CacheRead
+	return execution.Result{Output: r.events.output.String(), SessionID: r.events.session, WorkDir: r.workDir, RetiredSessionID: r.retired, Disposable: r.workDir == "", Telemetry: t}
 }
 
 func (r *running) Wait(ctx context.Context) error {
