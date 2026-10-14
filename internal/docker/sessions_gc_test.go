@@ -62,7 +62,7 @@ func TestSessionIssueChecksAreScopedPerWorkspace(t *testing.T) {
 		}
 		return map[string]time.Time{"i1": time.Unix(1, 0)}
 	}}
-	closed := s.closed(context.Background(), map[string]string{"a": "w1/agent/i1", "b": "w2/agent/i1", "c": "w2/agent/i2", "d": "malformed"})
+	closed := s.closed(context.Background(), map[string]string{"a": "w1/agent/i1", "b": "w2/agent/i1", "c": "w2/agent/i2", "d": "malformed", "e": "w1/agent/chat:s1"})
 	slices.Sort(asked["w2"])
 	if len(asked) != 2 || !slices.Equal(asked["w1"], []string{"i1"}) || !slices.Equal(asked["w2"], []string{"i1", "i2"}) {
 		t.Fatalf("asked %v", asked)

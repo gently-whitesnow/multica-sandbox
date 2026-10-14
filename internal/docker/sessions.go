@@ -164,9 +164,11 @@ func (s *Sessions) closed(ctx context.Context, labels map[string]string) map[str
 	return closed
 }
 
+// sessionIssue returns the workspace and issue of an issue session; chat sessions
+// (`chat:<id>`) have none, and asking Multica about them fails the whole batch.
 func sessionIssue(label string) (string, string, bool) {
 	parts := strings.Split(label, "/")
-	return parts[0], parts[len(parts)-1], len(parts) == 3
+	return parts[0], parts[len(parts)-1], len(parts) == 3 && !strings.HasPrefix(parts[2], "chat:")
 }
 
 // plan reserves and returns the idle volumes to remove: past the TTL, of issues
