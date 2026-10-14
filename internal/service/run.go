@@ -186,19 +186,8 @@ func newOpenCodeAdapter(ctx context.Context, c Config, stateDir string, api *mul
 	if err = workloads.Preflight(ctx); err != nil {
 		return nil, nil, err
 	}
-	config, err := agentidentity.ReadConfig(c.OpenCode.IdentityFile)
+	issuer, authority, err := attemptIdentity(ctx, c)
 	if err != nil {
-		return nil, nil, agentidentity.ErrDenied
-	}
-	issuer, err := agentidentity.New(config, strings.TrimRight(c.Server, "/"))
-	if err != nil {
-		return nil, nil, err
-	}
-	authority, err := attempt.New(c.OpenCode.Authority)
-	if err != nil {
-		return nil, nil, err
-	}
-	if err = authority.Apply(ctx, attempt.Grant{Controller: c.Daemon, Action: "recover"}); err != nil {
 		return nil, nil, err
 	}
 	if err = workloads.ValidateNetwork(ctx); err != nil {
@@ -315,4 +304,36 @@ func cliRevision(c *OpenCodeConfig) (string, error) {
 		return "", fmt.Errorf("multica_cli_revision must be a full lower-case commit hash")
 	}
 	return c.MulticaCLIRevision, nil
+}
+
+// attemptIdentity builds the MCP issuer and the attempt authority. Both are optional:
+// without identity_file attempts get no MCP credentials and agents selecting MCP are
+// refused; without authority attempts are not registered. Identity requires the
+// authority, which registers every MCP token before OpenCode sees it.
+func attemptIdentity(ctx context.Context, c Config) (opencode.Issuer, opencode.Authority, error) {
+	var issuer opencode.Issuer
+	var authority opencode.Authority
+	if c.OpenCode.IdentityFile != "" {
+		if c.OpenCode.Authority == (attempt.Config{}) {
+			return nil, nil, fmt.Errorf("identity_file requires authority")
+		}
+		config, err := agentidentity.ReadConfig(c.OpenCode.IdentityFile)
+		if err != nil {
+			return nil, nil, agentidentity.ErrDenied
+		}
+		if issuer, err = agentidentity.New(config, strings.TrimRight(c.Server, "/")); err != nil {
+			return nil, nil, err
+		}
+	}
+	if c.OpenCode.Authority != (attempt.Config{}) {
+		a, err := attempt.New(c.OpenCode.Authority)
+		if err != nil {
+			return nil, nil, err
+		}
+		if err = a.Apply(ctx, attempt.Grant{Controller: c.Daemon, Action: "recover"}); err != nil {
+			return nil, nil, err
+		}
+		authority = a
+	}
+	return issuer, authority, nil
 }

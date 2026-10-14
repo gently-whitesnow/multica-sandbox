@@ -62,6 +62,11 @@ check leases on every operation and fail closed after restart. Its wire adapter 
 experimental integration plumbing, not a runtime-owned IAM service.
 No security capability is inferred from protocol compatibility.
 
+Identity and authority are optional together, for deployments without managed MCP.
+Without `identity_file` the controller issues no MCP credentials and refuses agents
+that select MCP connections; without `authority` it registers no attempts. Identity
+requires the authority, so no MCP token reaches OpenCode unregistered.
+
 ## References
 
 - [OAuth security BCP](https://www.rfc-editor.org/rfc/rfc9700.html)
