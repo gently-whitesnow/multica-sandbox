@@ -74,7 +74,8 @@ func Run(ctx context.Context, c Config, stateDir, tokenPath string, out io.Write
 		return fmt.Errorf("positive timeout required")
 	}
 	p := controller.Probe{API: api, Backend: backend, Duration: duration, Interval: time.Second,
-		Observe: func(event, id string) { fmt.Fprintf(out, "%s task=%s\n", event, id) }}
+		Observe:  func(event, id string) { fmt.Fprintf(out, "%s task=%s\n", event, id) },
+		Finished: func(f controller.Finish) { fmt.Fprintln(out, finished(f)) }}
 	// Reconcile before validation so a missing image cannot strand old executions.
 	if err = backend.Reconcile(ctx); err != nil {
 		return err

@@ -60,7 +60,10 @@ These are capabilities, not grants.
 workspace's key, so the catalog is exactly what the key may use (up to 512 models).
 Anthropic models get `messages`, OpenAI models `responses`, others `chat`; non-chat
 modes are skipped. Limits, reasoning support and prices come from the gateway;
-deployment parameters are discarded. A catalog is reused for `ttl` (default 5m),
+deployment parameters are discarded. Reasoning levels are LiteLLM's
+`reasoning_effort_levels` when set; otherwise `low`/`medium`/`high` (Messages:
+`high`/`max`) plus or minus each `supports_<level>_reasoning_effort` flag, with
+`default_reasoning_effort` as the default. Messages keeps levels with a budget. A catalog is reused for `ttl` (default 5m),
 and a failed refresh keeps the last good one.
 
 The model's `api` selects the OpenCode provider and picker prefix:
@@ -82,7 +85,7 @@ for Messages, `low`/`medium`/`high`/`max` map to extended-thinking budgets and o
 tokens are denied.
 Omission uses the selected model's advertised default, or sends no effort.
 
-Discovery reuses Multica heartbeat pending requests and model result reports in
+Discovery reuses Multica heartbeat pending requests (woken by the daemon WebSocket) and model result reports in
 upstream's shape. The controller registers one runtime per workspace, so the
 workspace comes from the registered runtime. Entries use IDs
 `<provider>/<gateway-model>`, labels, default and thinking options; upstream

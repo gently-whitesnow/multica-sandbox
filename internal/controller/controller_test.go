@@ -105,3 +105,26 @@ func TestRecoveryMustSucceedBeforeRun(t *testing.T) {
 		t.Fatalf("unexpected startup calls: %v", calls)
 	}
 }
+
+func TestFinishedReceivesReportedAttempts(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/claim"):
+			fmt.Fprintf(w, `{"task":{"id":%q,"runtime_id":%q,"start_claim_supported":true,"dispatched_at":"2026-10-04T00:00:00Z"}}`, id, id)
+		case strings.HasSuffix(r.URL.Path, "/status"):
+			fmt.Fprint(w, `{"status":"running"}`)
+		default:
+			fmt.Fprint(w, `{}`)
+		}
+	}))
+	defer server.Close()
+	api, _ := multica.New(server.URL, "token")
+	var got []Finish
+	p := Probe{API: api, Interval: time.Millisecond, Duration: 5 * time.Millisecond, Fail: true, Finished: func(f Finish) { got = append(got, f) }}
+	if err := p.Run(context.Background(), id); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Task.ID != id || got[0].Failure == nil || got[0].Started.Before(got[0].Claimed) || got[0].Ended.Before(got[0].Started) {
+		t.Fatalf("finished = %+v", got)
+	}
+}
