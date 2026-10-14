@@ -288,3 +288,45 @@ func TestReplayPrecedesRecovery(t *testing.T) {
 		t.Fatalf("calls=%v", a.calls)
 	}
 }
+
+// wakeFake is a fleet API with the daemon WebSocket: hints go out as sent.
+type wakeFake struct {
+	*fleetFake
+	hints chan multica.Wakeup
+	beat  chan string
+}
+
+func (a *wakeFake) Heartbeat(_ context.Context, rt string) error {
+	a.beat <- rt
+	return nil
+}
+func (a *wakeFake) Wakeups(ctx context.Context, _ []string, connected func(), deliver func(multica.Wakeup)) error {
+	connected()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case w := <-a.hints:
+			deliver(w)
+		}
+	}
+}
+
+func TestPendingWorkHintHeartbeatsItsRuntimeNow(t *testing.T) {
+	a := &wakeFake{fleetFake: &fleetFake{workspaces: []multica.Workspace{{ID: "ws-a"}, {ID: "ws-b"}}, queued: map[string]int{}},
+		hints: make(chan multica.Wakeup, 1), beat: make(chan string, 16)}
+	f := newFleetState(a, "test", t.TempDir(), io.Discard, map[string]string{}, 1, 0)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	execute, _, _ := track()
+	go func() { _ = f.serve(ctx, 1, execute) }()
+	a.hints <- multica.Wakeup{Event: multica.WakeupPendingWork, Runtime: "ws-b"}
+	select {
+	case rt := <-a.beat:
+		if rt != "ws-b" {
+			t.Fatalf("heartbeat for %s, want ws-b", rt)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("pending work waited for the scheduled heartbeat")
+	}
+}

@@ -16,7 +16,7 @@ from verified behavior.
   repository workdirs, mediated Git and session resume (0015),
   `gh pr create` through Git remote aliases (0016),
   web chat tasks (0017), agent skills (0018), nested Docker under sysbox-runc (0019),
-  shared attempt memory pool (0020).
+  shared attempt memory pool (0020), daemon WebSocket wakeups (0021).
 - `examples/end-to-end/`: opt-in real Multica/OpenCode/inference lab.
 - `examples/identity-mcp/`: disposable identity and MCP contract fixture.
 - `internal/inference/`: workspace gateway bindings, relay policy and advisory model catalogs.

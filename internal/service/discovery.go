@@ -78,22 +78,24 @@ func (f *fleet) remove(ws, rt string) {
 // attempts do not heartbeat (controller.Probe.Execute).
 func (f *fleet) beat(ctx context.Context) error {
 	for ws, rt := range f.ready {
-		err := f.api.Heartbeat(ctx, rt)
-		var unanswered *multica.UnansweredError
-		if errors.As(err, &unanswered) {
-			fmt.Fprintf(f.out, "runtime=%s %v\n", rt, err)
-			continue
-		}
-		if inaccessible(err) {
-			f.remove(ws, rt)
-			continue
-		}
-		if multica.Transient(err) {
-			continue
-		}
-		if err != nil {
+		if err := f.beatRuntime(ctx, ws, rt); err != nil && !multica.Transient(err) {
 			return err
 		}
 	}
 	return nil
+}
+
+// beatRuntime heartbeats one runtime; a revoked runtime is removed.
+func (f *fleet) beatRuntime(ctx context.Context, ws, rt string) error {
+	err := f.api.Heartbeat(ctx, rt)
+	var unanswered *multica.UnansweredError
+	switch {
+	case errors.As(err, &unanswered):
+		fmt.Fprintf(f.out, "runtime=%s %v\n", rt, err)
+		return nil
+	case inaccessible(err):
+		f.remove(ws, rt)
+		return nil
+	}
+	return err
 }

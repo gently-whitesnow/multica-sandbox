@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
+	"slices"
 	"time"
 
 	"github.com/gently-whitesnow/multica-sandbox/internal/controller"
@@ -47,6 +49,26 @@ type fleet struct {
 	paused  bool
 	refused time.Time
 	clock   func() time.Time
+	// wake carries daemon WebSocket hints and connection changes from listen; runtimes
+	// hands it the ready set, published the last set handed over.
+	wake      chan wakeEvent
+	runtimes  chan []string
+	published []string
+	// wsUp and wsErr keep wakeup connection logs to state changes.
+	wsUp  bool
+	wsErr string
+}
+
+// wakeupAPI is the upstream daemon WebSocket (multica.Client.Wakeups).
+type wakeupAPI interface {
+	Wakeups(context.Context, []string, func(), func(multica.Wakeup)) error
+}
+
+// wakeEvent is a wakeup hint, or with connected/err a connection change.
+type wakeEvent struct {
+	multica.Wakeup
+	connected bool
+	err       error
 }
 
 // admissionCooldown keeps claims paused until the pool has been calm this long: under
@@ -55,7 +77,8 @@ const admissionCooldown = 15 * time.Second
 
 func newFleetState(api fleetAPI, daemon, dir string, out io.Writer, known map[string]string, capacity, workspaceLimit int) *fleet {
 	return &fleet{api: api, daemon: daemon, dir: dir, out: out, known: known, ready: map[string]string{}, served: map[string]bool{},
-		active: map[string]running{}, perRuntime: map[string]int{}, workspaceLimit: workspaceLimit, done: make(chan completion, capacity), clock: time.Now}
+		active: map[string]running{}, perRuntime: map[string]int{}, workspaceLimit: workspaceLimit, done: make(chan completion, capacity), clock: time.Now,
+		wake: make(chan wakeEvent, 64), runtimes: make(chan []string, 1)}
 }
 
 func serveFleet(ctx context.Context, c Config, dir string, api fleetAPI, p *controller.Probe, out io.Writer, admit func() (bool, string)) error {
@@ -90,6 +113,12 @@ func (f *fleet) serve(ctx context.Context, capacity int, execute func(context.Co
 		return err
 	}
 	fmt.Fprintf(f.out, "ready workspaces=%d capacity=%d workspace_capacity=%d\n", len(f.ready), capacity, f.workspaceLimit)
+	if api, ok := f.api.(wakeupAPI); ok {
+		listenCtx, stop := context.WithCancel(ctx)
+		defer stop()
+		go f.listen(listenCtx, api)
+		f.publish()
+	}
 	poll := time.NewTicker(time.Second)
 	discovery := time.NewTicker(10 * time.Second)
 	heartbeat := time.NewTicker(15 * time.Second)
@@ -111,8 +140,14 @@ func (f *fleet) serve(ctx context.Context, capacity int, execute func(context.Co
 			if err := f.tolerate("sync", f.sync(ctx)); err != nil {
 				return err
 			}
+			f.publish()
 		case <-heartbeat.C:
 			if err := f.tolerate("heartbeat", f.beat(ctx)); err != nil {
+				return err
+			}
+			f.publish()
+		case e := <-f.wake:
+			if err := f.wakeup(ctx, e, capacity, execute); err != nil {
 				return err
 			}
 		case <-poll.C:
@@ -236,4 +271,101 @@ func (f *fleet) completed(done completion) error {
 		return nil
 	}
 	return done.err
+}
+
+// publish hands listen the ready runtimes when they change.
+func (f *fleet) publish() {
+	ids := slices.Sorted(maps.Values(f.ready))
+	if slices.Equal(ids, f.published) {
+		return
+	}
+	f.published = ids
+	select {
+	case <-f.runtimes:
+	default:
+	}
+	f.runtimes <- ids
+}
+
+// listen keeps the daemon WebSocket open for the ready runtimes, reconnecting with
+// backoff and on every change of the set. Scheduled heartbeats and claim polling stay
+// the correctness path; hints only make them happen now.
+func (f *fleet) listen(ctx context.Context, api wakeupAPI) {
+	var runtimes []string
+	backoff := time.Second
+	for {
+		for len(runtimes) == 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case runtimes = <-f.runtimes:
+			}
+		}
+		conn, cancel := context.WithCancel(ctx)
+		result := make(chan error, 1)
+		started := time.Now()
+		go func(ids []string) {
+			result <- api.Wakeups(conn, ids, func() { f.notify(wakeEvent{connected: true}) }, func(w multica.Wakeup) { f.notify(wakeEvent{Wakeup: w}) })
+		}(runtimes)
+		select {
+		case <-ctx.Done():
+			cancel()
+			return
+		case runtimes = <-f.runtimes:
+			cancel()
+			<-result
+			continue
+		case err := <-result:
+			cancel()
+			f.notify(wakeEvent{err: err})
+		}
+		if time.Since(started) > 10*time.Second {
+			backoff = time.Second
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case runtimes = <-f.runtimes:
+		case <-time.After(backoff):
+		}
+		backoff = min(2*backoff, 30*time.Second)
+	}
+}
+
+// notify drops events when the loop is behind: hints are advisory.
+func (f *fleet) notify(e wakeEvent) {
+	select {
+	case f.wake <- e:
+	default:
+	}
+}
+
+// wakeup acts on a hint as the upstream daemon does: a heartbeat for pending runtime
+// work (model lists), a claim round for tasks, a sync for membership changes.
+func (f *fleet) wakeup(ctx context.Context, e wakeEvent, capacity int, execute func(context.Context, multica.Task) error) error {
+	switch {
+	case e.connected:
+		if !f.wsUp {
+			fmt.Fprintf(f.out, "wakeups connected runtimes=%d\n", len(f.published))
+		}
+		f.wsUp, f.wsErr = true, ""
+	case e.err != nil:
+		if f.wsUp || e.err.Error() != f.wsErr {
+			fmt.Fprintf(f.out, "wakeups unavailable, polling only: %v\n", e.err)
+		}
+		f.wsUp, f.wsErr = false, e.err.Error()
+	case e.Event == multica.WakeupPendingWork:
+		for ws, rt := range f.ready {
+			if rt == e.Runtime {
+				return f.tolerate("heartbeat", f.beatRuntime(ctx, ws, rt))
+			}
+		}
+	case e.Event == multica.WakeupTask:
+		return f.tolerate("claim", f.claim(ctx, capacity, execute))
+	case e.Event == multica.WakeupWorkspaces:
+		err := f.tolerate("sync", f.sync(ctx))
+		f.publish()
+		return err
+	}
+	return nil
 }

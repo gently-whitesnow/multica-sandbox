@@ -85,7 +85,7 @@ for Messages, `low`/`medium`/`high`/`max` map to extended-thinking budgets and o
 tokens are denied.
 Omission uses the selected model's advertised default, or sends no effort.
 
-Discovery reuses Multica heartbeat pending requests and model result reports in
+Discovery reuses Multica heartbeat pending requests (woken by the daemon WebSocket) and model result reports in
 upstream's shape. The controller registers one runtime per workspace, so the
 workspace comes from the registered runtime. Entries use IDs
 `<provider>/<gateway-model>`, labels, default and thinking options; upstream
