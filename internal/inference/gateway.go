@@ -1,11 +1,14 @@
 package inference
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"io"
+	"maps"
 	"math"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -18,12 +21,17 @@ const gatewayModels = 512
 // gatewayInfoLimit bounds the /v1/model/info response read with a workspace key.
 const gatewayInfoLimit = 8 << 20
 
-// Reasoning variants offered per wire API when the gateway reports reasoning support.
-var gatewayLevels = map[string][]ThinkingLevel{
-	APIChat:      {{Value: "low", Label: "Low"}, {Value: "medium", Label: "Medium"}, {Value: "high", Label: "High"}},
-	APIResponses: {{Value: "low", Label: "Low"}, {Value: "medium", Label: "Medium"}, {Value: "high", Label: "High"}},
-	APIMessages:  {{Value: "high", Label: "High"}, {Value: "max", Label: "Max"}},
-}
+// effortOrder sorts reasoning levels from LiteLLM; unknown levels follow in name order.
+var effortOrder = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}
+
+// effortLabels names known levels in the picker; others show their value.
+var effortLabels = map[string]string{"none": "None", "minimal": "Minimal", "low": "Low", "medium": "Medium", "high": "High", "xhigh": "Extra high", "max": "Max"}
+
+// Base levels when LiteLLM lists none: OpenAI-style effort, and Messages budgets.
+var (
+	openAILevels   = []string{"low", "medium", "high"}
+	messagesLevels = []string{"high", "max"}
+)
 
 type gatewayCatalog struct {
 	service *Service
@@ -78,18 +86,103 @@ type modelInfo struct {
 		Params struct {
 			Model string `json:"model"`
 		} `json:"litellm_params"`
-		Info struct {
-			Mode      string   `json:"mode"`
-			Provider  string   `json:"litellm_provider"`
-			Input     int      `json:"max_input_tokens"`
-			Output    int      `json:"max_output_tokens"`
-			Reasoning bool     `json:"supports_reasoning"`
-			InputUSD  *float64 `json:"input_cost_per_token"`
-			OutputUSD *float64 `json:"output_cost_per_token"`
-			CacheUSD  *float64 `json:"cache_read_input_token_cost"`
-		} `json:"model_info"`
+		Info modelDetails `json:"model_info"`
 	} `json:"data"`
 }
+
+type modelDetails struct {
+	Mode      string   `json:"mode"`
+	Provider  string   `json:"litellm_provider"`
+	Input     int      `json:"max_input_tokens"`
+	Output    int      `json:"max_output_tokens"`
+	Reasoning bool     `json:"supports_reasoning"`
+	InputUSD  *float64 `json:"input_cost_per_token"`
+	OutputUSD *float64 `json:"output_cost_per_token"`
+	CacheUSD  *float64 `json:"cache_read_input_token_cost"`
+	// Levels and DefaultLevel are LiteLLM's reasoning_effort_levels and
+	// default_reasoning_effort; Efforts holds its supports_<level>_reasoning_effort flags.
+	Levels       []string `json:"reasoning_effort_levels"`
+	DefaultLevel string   `json:"default_reasoning_effort"`
+	Efforts      map[string]bool
+}
+
+func (d *modelDetails) UnmarshalJSON(data []byte) error {
+	type fields modelDetails
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, (*fields)(d)); err != nil || json.Unmarshal(data, &raw) != nil {
+		return ErrDenied
+	}
+	for key, value := range raw {
+		level, ok := strings.CutPrefix(key, "supports_")
+		if level, ok = strings.CutSuffix(level, "_reasoning_effort"); !ok || !ValidEffort(level) {
+			continue
+		}
+		var supported *bool
+		if json.Unmarshal(value, &supported) == nil && supported != nil {
+			if d.Efforts == nil {
+				d.Efforts = map[string]bool{}
+			}
+			d.Efforts[level] = *supported
+		}
+	}
+	return nil
+}
+
+// thinking offers the levels LiteLLM reports for the model: its level list when set,
+// otherwise the wire API's base levels adjusted by the per-level flags. Messages keeps
+// only levels with an extended-thinking budget.
+func (d modelDetails) thinking(api string) *Thinking {
+	base := openAILevels
+	if api == APIMessages {
+		base = messagesLevels
+	}
+	levels := map[string]bool{}
+	if len(d.Levels) > 0 {
+		base = d.Levels
+	}
+	for _, level := range base {
+		levels[level] = ValidEffort(level)
+	}
+	if len(d.Levels) == 0 {
+		maps.Copy(levels, d.Efforts)
+	}
+	for level := range levels {
+		if api == APIMessages && !thinkingBudgets[level] {
+			levels[level] = false
+		}
+	}
+	if !slices.Contains(slices.Collect(maps.Values(levels)), true) {
+		return nil
+	}
+	names := []string{}
+	for level, ok := range levels {
+		if ok {
+			names = append(names, level)
+		}
+	}
+	slices.SortFunc(names, func(a, b string) int {
+		i, j := slices.Index(effortOrder, a), slices.Index(effortOrder, b)
+		if i < 0 || j < 0 {
+			return cmp.Or(cmp.Compare(j, i), strings.Compare(a, b))
+		}
+		return cmp.Compare(i, j)
+	})
+	t := &Thinking{}
+	for _, name := range names {
+		label := effortLabels[name]
+		if label == "" {
+			label = name
+		}
+		t.SupportedLevels = append(t.SupportedLevels, ThinkingLevel{Value: name, Label: label})
+	}
+	if levels[d.DefaultLevel] {
+		t.DefaultLevel = d.DefaultLevel
+	}
+	return t
+}
+
+// thinkingBudgets lists the Messages levels OpenCode maps to extended-thinking budgets.
+var thinkingBudgets = map[string]bool{"low": true, "medium": true, "high": true, "max": true}
 
 // fetch reads /v1/model/info with the workspace key. Only listed fields are kept:
 // deployment parameters such as upstream bases never leave this function.
@@ -136,7 +229,7 @@ func gatewayModelsCatalog(info modelInfo, defaultModel string) Catalog {
 			m.Output = min(16384, m.Context)
 		}
 		if d.Info.Reasoning {
-			m.Thinking = &Thinking{SupportedLevels: append([]ThinkingLevel(nil), gatewayLevels[api]...)}
+			m.Thinking = d.Info.thinking(api)
 		}
 		if in, out := perMillion(d.Info.InputUSD), perMillion(d.Info.OutputUSD); in > 0 || out > 0 {
 			m.Cost = &Cost{Input: in, Output: out, CacheRead: perMillion(d.Info.CacheUSD)}

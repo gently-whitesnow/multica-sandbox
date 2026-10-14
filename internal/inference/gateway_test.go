@@ -135,3 +135,44 @@ func TestRelayPathsAdmitNativeModelAPIs(t *testing.T) {
 		}
 	}
 }
+
+func TestGatewayCatalogReasoningLevelsFollowLiteLLM(t *testing.T) {
+	const info = `{"data":[
+{"model_name":"gpt-flags","litellm_params":{"model":"openai/gpt-flags"},"model_info":{"mode":"chat","supports_reasoning":true,"supports_none_reasoning_effort":false,"supports_minimal_reasoning_effort":false,"supports_low_reasoning_effort":null,"supports_xhigh_reasoning_effort":true,"supports_max_reasoning_effort":true,"reasoning_effort_levels":null,"default_reasoning_effort":null}},
+{"model_name":"gpt-list","litellm_params":{"model":"openai/gpt-list"},"model_info":{"mode":"chat","supports_reasoning":true,"supports_xhigh_reasoning_effort":true,"reasoning_effort_levels":["minimal","high","custom-1"],"default_reasoning_effort":"high"}},
+{"model_name":"claude-flags","litellm_params":{"model":"anthropic/claude-flags"},"model_info":{"mode":"chat","supports_reasoning":true,"supports_low_reasoning_effort":true,"supports_xhigh_reasoning_effort":true}},
+{"model_name":"gpt-off","litellm_params":{"model":"openai/gpt-off"},"model_info":{"mode":"chat","supports_reasoning":true,"reasoning_effort_levels":["bad level"]}}
+]}`
+	var body atomic.Value
+	var calls atomic.Int32
+	body.Store(info)
+	s, scope := gatewayFixture(t, &body, &calls)
+	c, err := s.Catalog(context.Background(), scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	levels := func(name string) string {
+		m := c.Models[name]
+		if m.Thinking == nil {
+			return "-"
+		}
+		values := []string{}
+		for _, level := range m.Thinking.SupportedLevels {
+			values = append(values, level.Value)
+		}
+		return strings.Join(values, ",") + "/" + m.Thinking.DefaultLevel
+	}
+	for name, want := range map[string]string{
+		"gpt-flags":    "low,medium,high,xhigh,max/",
+		"gpt-list":     "minimal,high,custom-1/high",
+		"claude-flags": "low,high,max/",
+		"gpt-off":      "-",
+	} {
+		if got := levels(name); got != want {
+			t.Errorf("%s levels = %s, want %s", name, got, want)
+		}
+	}
+	if c.Models["gpt-flags"].Thinking.SupportedLevels[3].Label != "Extra high" {
+		t.Fatal("known level without its label")
+	}
+}
