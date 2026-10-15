@@ -17,7 +17,9 @@ func (s *Service) configureMCP(urls []string, allowHTTP bool) error {
 // It approves a delivery target; it neither connects to MCP nor checks tool roles.
 func (s *Service) AcquireForMCP(ctx context.Context, r Ref, env Env, selectedURL string) (AccessToken, error) {
 	if !s.mcp[selectedURL] {
+		s.debug.printf("identity denied agent=%s mcp=%s: not in the mcp list", r.AgentID, selectedURL)
 		return AccessToken{}, ErrDenied
 	}
+	s.debug.printf("identity for mcp=%s agent=%s", selectedURL, r.AgentID)
 	return s.Acquire(ctx, r, env)
 }

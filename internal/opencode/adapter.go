@@ -103,8 +103,8 @@ func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, 
 	if err != nil {
 		return nil, &execution.RejectedError{Err: err}
 	}
-	if len(connections) != 0 && (a.Issuer == nil || a.Authority == nil) {
-		return nil, &execution.RejectedError{Err: fmt.Errorf("MCP connections require identity_file and authority: %w", ErrDenied)}
+	if len(connections) != 0 && a.Issuer == nil {
+		return nil, &execution.RejectedError{Err: fmt.Errorf("MCP connections require identity_file: %w", ErrDenied)}
 	}
 	continuity := Fresh
 	if task.PriorSessionID != "" {
@@ -278,13 +278,15 @@ func (r *running) refresh(ctx context.Context) error {
 			}
 			changed = true
 		}
-		grant := r.grant("renew")
-		grant.URL = connection.URL
-		grant.TokenHash = attempt.Fingerprint(token.Bearer())
-		grant.ExpiresAt = min(token.ExpiresAt.Unix(), time.Now().Add(15*time.Second).Unix())
-		// Authority registers the JWT fingerprint before it becomes visible to OpenCode.
-		if err := r.adapter.Authority.Apply(ctx, grant); err != nil {
-			return err
+		// An optional authority registers the JWT fingerprint before OpenCode sees it.
+		if r.adapter.Authority != nil {
+			grant := r.grant("renew")
+			grant.URL = connection.URL
+			grant.TokenHash = attempt.Fingerprint(token.Bearer())
+			grant.ExpiresAt = min(token.ExpiresAt.Unix(), time.Now().Add(15*time.Second).Unix())
+			if err := r.adapter.Authority.Apply(ctx, grant); err != nil {
+				return err
+			}
 		}
 		r.tokens[name] = token
 	}

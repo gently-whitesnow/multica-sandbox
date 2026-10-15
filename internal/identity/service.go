@@ -17,6 +17,7 @@ type Service struct {
 	resolver Resolver
 	issuer   *issuer
 	mcp      map[string]bool
+	debug    Debug
 }
 
 func New(c Config, server string) (*Service, error) {
@@ -81,18 +82,23 @@ func (s *Service) Resolve(ctx context.Context, r Ref, env Env) (Credentials, err
 		if len(values) > 0 {
 			id, secret := values[EnvClientID], values[EnvClientSecret]
 			if !text(id, 256) || !text(secret, 8192) {
+				s.debug.printf("identity denied agent=%s: agent env needs both %s and %s without line breaks", r.AgentID, EnvClientID, EnvClientSecret)
 				return Credentials{}, ErrDenied
 			}
+			s.debug.printf("identity source=agent_env agent=%s workspace=%s client=%s", r.AgentID, r.WorkspaceID, id)
 			return Credentials{ClientID: id, secret: secret}, nil
 		}
 	}
 	if s.resolver == nil {
+		s.debug.printf("identity denied agent=%s: no %s in agent env and no bindings or resolver", r.AgentID, EnvClientID)
 		return Credentials{}, ErrDenied
 	}
 	credentials, err := s.resolver.Resolve(ctx, r)
 	if err != nil || !text(credentials.ClientID, 256) || !validTokenRequest(credentials.request) {
+		s.debug.printf("identity denied agent=%s workspace=%s: no binding or resolver refused", r.AgentID, r.WorkspaceID)
 		return Credentials{}, ErrDenied
 	}
+	s.debug.printf("identity source=configuration agent=%s workspace=%s client=%s", r.AgentID, r.WorkspaceID, credentials.ClientID)
 	return credentials, nil
 }
 

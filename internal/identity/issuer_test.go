@@ -5,9 +5,11 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -236,5 +238,38 @@ func TestAgentEnvPrecedesConfiguredBinding(t *testing.T) {
 	}
 	if _, err = s.Resolve(context.Background(), Ref{"https://other.example", workspaceA, agentA}, env); err != ErrDenied {
 		t.Fatal("agent env accepted for another server")
+	}
+}
+
+func TestDebugNamesReasonsWithoutSecrets(t *testing.T) {
+	f := newTokenFixture(t)
+	c := f.config(t)
+	c.AgentEnv = true
+	c.MCP = []string{"https://tools.example/mcp"}
+	s, err := New(c, identityTestServer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lines []string
+	s.SetDebug(func(format string, args ...any) { lines = append(lines, fmt.Sprintf(format, args...)) })
+	env := agentEnv{EnvClientID: "client-env", EnvClientSecret: "env-secret"}
+	f.claims["azp"] = "client-env"
+	token, err := s.AcquireForMCP(context.Background(), ref(c), env, "https://tools.example/mcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.claims["azp"] = "someone-else"
+	if _, err = s.AcquireForMCP(context.Background(), ref(c), env, "https://tools.example/mcp"); err != ErrDenied {
+		t.Fatal("foreign azp accepted")
+	}
+	_, _ = s.AcquireForMCP(context.Background(), ref(c), env, "https://other.example/mcp")
+	all := strings.Join(lines, "\n")
+	for _, want := range []string{"source=agent_env", "client=client-env", "token issued", `azp "someone-else"`, "not in the mcp list"} {
+		if !strings.Contains(all, want) {
+			t.Errorf("debug lacks %q:\n%s", want, all)
+		}
+	}
+	if strings.Contains(all, "env-secret") || strings.Contains(all, token.Bearer()) {
+		t.Fatal("debug exposed a secret")
 	}
 }

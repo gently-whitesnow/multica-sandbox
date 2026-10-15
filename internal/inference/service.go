@@ -35,6 +35,7 @@ type Service struct {
 	catalogs map[Scope]Catalog
 	gateway  *gatewayCatalog
 	client   *http.Client
+	debug    Debug
 }
 
 func New(c Config, server string) (*Service, error) {
@@ -76,28 +77,37 @@ func (s *Service) Acquire(ctx context.Context, scope Scope) (Target, error) {
 	}
 	target, found, err := s.fromEnv(ctx, scope)
 	if err != nil {
+		s.debug.printf("inference denied workspace=%s: %v", scope.WorkspaceID, err)
 		return Target{}, err
 	}
+	source := "workspace_env"
 	switch {
 	case found:
 	case s.config.External != nil:
+		source = "resolver"
 		if target, err = s.remote(ctx, scope); err != nil {
+			s.debug.printf("inference denied workspace=%s: resolver refused", scope.WorkspaceID)
 			return Target{}, ErrDenied
 		}
 	default:
+		source = "binding"
 		binding, ok := s.bindings[scope]
 		if !ok {
+			s.debug.printf("inference denied workspace=%s: no workspace env connection and no binding", scope.WorkspaceID)
 			return Target{}, ErrDenied
 		}
 		data, err := readFile(binding.KeyFile, 4096)
 		if err != nil {
+			s.debug.printf("inference denied workspace=%s: binding key file unreadable", scope.WorkspaceID)
 			return Target{}, ErrDenied
 		}
 		target = Target{Gateway: binding.Gateway, Key: Key{strings.TrimSpace(string(data))}}
 	}
 	if !origin(target.Gateway, s.config.AllowHTTP) || !target.Key.valid() {
+		s.debug.printf("inference denied workspace=%s source=%s: invalid gateway %q or key", scope.WorkspaceID, source, target.Gateway)
 		return Target{}, ErrDenied
 	}
+	s.debug.printf("inference source=%s workspace=%s gateway=%s", source, scope.WorkspaceID, target.Gateway)
 	return target, nil
 }
 
@@ -113,7 +123,12 @@ func (s *Service) fromEnv(ctx context.Context, scope Scope) (Target, bool, error
 	}
 	env, ok, err := s.env(ctx, scope.WorkspaceID)
 	if err != nil {
+		// HTTP 403: the controller user is not a workspace owner or admin.
+		s.debug.printf("inference workspace env unreadable workspace=%s: %v", scope.WorkspaceID, err)
 		return Target{}, false, fmt.Errorf("read workspace env: %w", ErrDenied)
+	}
+	if !ok {
+		s.debug.printf("inference workspace env unsupported by the server workspace=%s", scope.WorkspaceID)
 	}
 	values := map[string]string{}
 	if ok {

@@ -237,3 +237,19 @@ func TestIssuerReceivesClaimAgentEnv(t *testing.T) {
 		t.Fatal("issuer did not receive the claim's agent env")
 	}
 }
+
+func TestMCPWithoutAuthority(t *testing.T) {
+	issuer, workload := &stubIssuer{}, &stubWorkload{}
+	a := Adapter{Server: "https://multica.example.invalid", Controller: "controller", Issuer: issuer, Workloads: workload, Status: stubStatus{}}
+	run, err := a.Start(context.Background(), safeTask())
+	if err != nil || issuer.calls == 0 {
+		t.Fatalf("MCP token not issued without authority: %v", err)
+	}
+	if err = run.Remove(context.Background()); err != nil || !workload.removed {
+		t.Fatal("cleanup without authority failed", err)
+	}
+	a.Issuer = nil
+	if _, err = a.Start(context.Background(), safeTask()); err == nil {
+		t.Fatal("MCP without identity accepted")
+	}
+}
