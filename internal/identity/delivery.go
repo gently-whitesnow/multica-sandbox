@@ -2,27 +2,22 @@ package identity
 
 import "context"
 
-func (s *Service) configureMCP(rules []MCPRule, allowHTTP bool) error {
-	s.mcp = map[string]string{}
-	for _, rule := range rules {
-		if !endpoint(rule.URL, allowHTTP) || s.issuers[rule.Issuer] == nil || s.mcp[rule.URL] != "" {
+func (s *Service) configureMCP(urls []string, allowHTTP bool) error {
+	s.mcp = map[string]bool{}
+	for _, u := range urls {
+		if !endpoint(u, allowHTTP) || s.mcp[u] {
 			return ErrDenied
 		}
-		s.mcp[rule.URL] = rule.Issuer
+		s.mcp[u] = true
 	}
 	return nil
 }
 
 // AcquireForMCP is called only for a connection selected by trusted Multica data.
 // It approves a delivery target; it neither connects to MCP nor checks tool roles.
-func (s *Service) AcquireForMCP(ctx context.Context, r Ref, selectedURL string) (AccessToken, error) {
-	expected, ok := s.mcp[selectedURL]
-	if !ok {
+func (s *Service) AcquireForMCP(ctx context.Context, r Ref, env Env, selectedURL string) (AccessToken, error) {
+	if !s.mcp[selectedURL] {
 		return AccessToken{}, ErrDenied
 	}
-	c, err := s.Resolve(ctx, r)
-	if err != nil || c.Issuer != expected {
-		return AccessToken{}, ErrDenied
-	}
-	return s.issuers[c.Issuer].issue(ctx, c)
+	return s.Acquire(ctx, r, env)
 }

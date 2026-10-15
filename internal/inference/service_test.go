@@ -26,7 +26,7 @@ func testConfig(t *testing.T) Config {
 	if err := os.WriteFile(key, []byte(testKey+"\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	return Config{Version: 1, Gateways: []string{testGateway}, Bindings: []Binding{{WorkspaceID: testScope().WorkspaceID, Gateway: testGateway, KeyFile: key}}}
+	return Config{Version: 1, Bindings: []Binding{{WorkspaceID: testScope().WorkspaceID, Gateway: testGateway, KeyFile: key}}}
 }
 func TestStaticBindingRereadsKeyAndIsolatesWorkspaces(t *testing.T) {
 	c := testConfig(t)
@@ -68,20 +68,18 @@ func TestStaticBindingRereadsKeyAndIsolatesWorkspaces(t *testing.T) {
 }
 func TestConfigBoundaries(t *testing.T) {
 	for name, mutate := range map[string]func(*Config){
-		"gateway slash": func(c *Config) { c.Gateways[0] += "/inference/"; c.Bindings[0].Gateway = c.Gateways[0] },
-		"gateway dots":  func(c *Config) { c.Gateways[0] += "/a/../b"; c.Bindings[0].Gateway = c.Gateways[0] },
-		"unapproved":    func(c *Config) { c.Bindings[0].Gateway = "https://other.example.invalid" },
-		"http": func(c *Config) {
-			c.Gateways[0] = "http://gateway.example.invalid"
-			c.Bindings[0].Gateway = c.Gateways[0]
-		},
+		"gateway slash":     func(c *Config) { c.Bindings[0].Gateway += "/inference/" },
+		"gateway dots":      func(c *Config) { c.Bindings[0].Gateway += "/a/../b" },
+		"gateway query":     func(c *Config) { c.Bindings[0].Gateway += "?x=1" },
+		"gateway userinfo":  func(c *Config) { c.Bindings[0].Gateway = "https://user@gateway.example.invalid" },
+		"http":              func(c *Config) { c.Bindings[0].Gateway = "http://gateway.example.invalid" },
 		"relative key file": func(c *Config) { c.Bindings[0].KeyFile = "workspace-key" },
 		"duplicate":         func(c *Config) { c.Bindings = append(c.Bindings, c.Bindings[0]) },
 		"workspace":         func(c *Config) { c.Bindings[0].WorkspaceID = "workspace" },
 		"both sources": func(c *Config) {
 			c.External = &identity.ExternalConfig{URL: "https://resolver.example.invalid", BearerFile: "/bearer"}
 		},
-		"no gateways": func(c *Config) { c.Gateways = nil },
+		"no source": func(c *Config) { c.Bindings = nil },
 	} {
 		c := testConfig(t)
 		mutate(&c)
@@ -90,8 +88,7 @@ func TestConfigBoundaries(t *testing.T) {
 		}
 	}
 	c := testConfig(t)
-	c.Gateways[0] += "/inference"
-	c.Bindings[0].Gateway = c.Gateways[0]
+	c.Bindings[0].Gateway += "/inference"
 	if _, err := New(c, "https://multica.example.invalid/multica"); err != nil {
 		t.Fatal("base paths of the gateway and server denied")
 	}
@@ -100,7 +97,7 @@ func TestConfigBoundaries(t *testing.T) {
 			t.Fatalf("server %s accepted", server)
 		}
 	}
-	if decode([]byte(`{"version":1,"gateways":[],"bindings":[{"workspace_id":"w","agent_id":"a","gateway":"g","key_file":"/k"}]}`), &c) == nil {
+	if decode([]byte(`{"version":1,"bindings":[{"workspace_id":"w","agent_id":"a","gateway":"g","key_file":"/k"}]}`), &c) == nil {
 		t.Fatal("agent-scoped binding accepted")
 	}
 }
@@ -144,7 +141,7 @@ func TestExternalBindingFailsClosed(t *testing.T) {
 				case "spoof":
 					scope.WorkspaceID = "10000000-0000-4000-8000-000000000002"
 				case "gateway":
-					target["gateway"] = "https://unapproved.example.invalid"
+					target["gateway"] = "https://gateway.example.invalid/"
 				case "empty key":
 					target["key"] = ""
 				case "unknown":
@@ -170,5 +167,83 @@ func TestExternalBindingFailsClosed(t *testing.T) {
 				t.Fatal("unsafe response accepted")
 			}
 		})
+	}
+}
+
+type fixtureEnv map[string]string
+
+func (e fixtureEnv) Allowed(names []string) map[string]string {
+	out := map[string]string{}
+	for _, name := range names {
+		if value, ok := e[name]; ok {
+			out[name] = value
+		}
+	}
+	return out
+}
+
+func TestWorkspaceEnvPrecedesConfiguredBinding(t *testing.T) {
+	c := testConfig(t)
+	c.WorkspaceEnv = true
+	s, err := New(c, testScope().Server)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Acquire(context.Background(), testScope()); err == nil {
+		t.Fatal("workspace_env without a reader accepted")
+	}
+	var env fixtureEnv
+	supported, readErr, reads := true, error(nil), 0
+	s.UseWorkspaceEnv(func(_ context.Context, workspace string) (Env, bool, error) {
+		reads++
+		if workspace != testScope().WorkspaceID {
+			t.Error("env of another workspace read", workspace)
+		}
+		return env, supported, readErr
+	})
+	for name, tc := range map[string]struct {
+		env       fixtureEnv
+		supported bool
+		err       error
+		gateway   string
+		key       string
+	}{
+		"env":            {fixtureEnv{EnvBaseURL: "https://env.example.invalid/inference/v1", EnvAPIKey: "sk-env\n", "OTHER": "x"}, true, nil, "https://env.example.invalid/inference", "sk-env"},
+		"neither":        {fixtureEnv{"OTHER": "x"}, true, nil, testGateway, testKey},
+		"unsupported":    {nil, false, nil, testGateway, testKey},
+		"key only":       {fixtureEnv{EnvAPIKey: "sk-env"}, true, nil, "", ""},
+		"base only":      {fixtureEnv{EnvBaseURL: "https://env.example.invalid/v1"}, true, nil, "", ""},
+		"empty key":      {fixtureEnv{EnvBaseURL: "https://env.example.invalid/v1", EnvAPIKey: ""}, true, nil, "", ""},
+		"without /v1":    {fixtureEnv{EnvBaseURL: "https://env.example.invalid", EnvAPIKey: "sk-env"}, true, nil, "", ""},
+		"trailing slash": {fixtureEnv{EnvBaseURL: "https://env.example.invalid/v1/", EnvAPIKey: "sk-env"}, true, nil, "", ""},
+		"http":           {fixtureEnv{EnvBaseURL: "http://env.example.invalid/v1", EnvAPIKey: "sk-env"}, true, nil, "", ""},
+		"query":          {fixtureEnv{EnvBaseURL: "https://env.example.invalid/v1?a=1", EnvAPIKey: "sk-env"}, true, nil, "", ""},
+		"bad key":        {fixtureEnv{EnvBaseURL: "https://env.example.invalid/v1", EnvAPIKey: "sk env"}, true, nil, "", ""},
+		"forbidden":      {nil, false, fmt.Errorf("HTTP 403"), "", ""},
+	} {
+		env, supported, readErr = tc.env, tc.supported, tc.err
+		target, err := s.Acquire(context.Background(), testScope())
+		if tc.gateway == "" {
+			if err == nil {
+				t.Errorf("%s accepted", name)
+			}
+			continue
+		}
+		if err != nil || target.Gateway != tc.gateway || target.Key.Reveal() != tc.key {
+			t.Errorf("%s: %v %s", name, err, target.Gateway)
+		}
+	}
+	// Without a configured binding, a workspace without env has no connection.
+	c.Bindings = nil
+	if s, err = New(c, testScope().Server); err != nil {
+		t.Fatal("workspace_env alone denied", err)
+	}
+	env, supported, readErr = fixtureEnv{}, true, nil
+	s.UseWorkspaceEnv(func(context.Context, string) (Env, bool, error) { return env, supported, readErr })
+	if _, err = s.Acquire(context.Background(), testScope()); err == nil {
+		t.Fatal("workspace without env or binding accepted")
+	}
+	if reads == 0 {
+		t.Fatal("workspace env never read")
 	}
 }

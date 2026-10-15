@@ -22,7 +22,7 @@ func newIssuer(c IssuerConfig, allowHTTP bool) (*issuer, error) {
 	if c.MaxTTLSeconds == 0 {
 		c.MaxTTLSeconds = 300
 	}
-	if !text(c.Name, 128) || !endpoint(c.URL, allowHTTP) || !endpoint(c.TokenURL, allowHTTP) || !endpoint(c.JWKSURL, allowHTTP) || c.MaxTTLSeconds < 1 || c.MaxTTLSeconds > 3600 {
+	if !endpoint(c.URL, allowHTTP) || !endpoint(c.TokenURL, allowHTTP) || !endpoint(c.JWKSURL, allowHTTP) || c.MaxTTLSeconds < 1 || c.MaxTTLSeconds > 3600 {
 		return nil, ErrDenied
 	}
 	client := httpClient(c.TokenURL, c.JWKSURL)
@@ -30,7 +30,8 @@ func newIssuer(c IssuerConfig, allowHTTP bool) (*issuer, error) {
 	return &issuer{c, client, keys}, nil
 }
 
-// This first adapter verifies Keycloak service-account JWTs (RS256, typ=Bearer, azp).
+// This first adapter verifies Keycloak service-account JWTs: RS256 signature of the
+// configured realm, typ=Bearer, azp of the client and a bounded lifetime.
 func (i *issuer) issue(ctx context.Context, c Credentials) (AccessToken, error) {
 	params := url.Values{}
 	if c.request.Resource != "" {
@@ -41,7 +42,7 @@ func (i *issuer) issue(ctx context.Context, c Credentials) (AccessToken, error) 
 	if err != nil || !strings.EqualFold(token.TokenType, "Bearer") || token.AccessToken == "" {
 		return AccessToken{}, ErrDenied
 	}
-	// MCP validates audience and roles; issuance verifies the bound principal.
+	// MCP validates audience and roles; issuance verifies the token is the client's.
 	verifier := oidc.NewVerifier(i.config.URL, i.keys, &oidc.Config{SkipClientIDCheck: true, SupportedSigningAlgs: []string{"RS256"}})
 	parsed, err := verifier.Verify(ctx, token.AccessToken)
 	if err != nil {
@@ -52,7 +53,7 @@ func (i *issuer) issue(ctx context.Context, c Credentials) (AccessToken, error) 
 		Type   string `json:"typ"`
 	}
 	now := time.Now()
-	if parsed.Claims(&claims) != nil || parsed.Subject != c.Subject || claims.Client != c.ClientID || claims.Type != "Bearer" || parsed.IssuedAt.IsZero() || parsed.IssuedAt.After(now.Add(30*time.Second)) || !parsed.Expiry.After(now) || !parsed.Expiry.After(parsed.IssuedAt) || parsed.Expiry.Sub(parsed.IssuedAt) > time.Duration(i.config.MaxTTLSeconds)*time.Second {
+	if parsed.Claims(&claims) != nil || claims.Client != c.ClientID || claims.Type != "Bearer" || parsed.IssuedAt.IsZero() || parsed.IssuedAt.After(now.Add(30*time.Second)) || !parsed.Expiry.After(now) || !parsed.Expiry.After(parsed.IssuedAt) || parsed.Expiry.Sub(parsed.IssuedAt) > time.Duration(i.config.MaxTTLSeconds)*time.Second {
 		return AccessToken{}, ErrDenied
 	}
 	return AccessToken{parsed.Expiry, token.AccessToken}, nil

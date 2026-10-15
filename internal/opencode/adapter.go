@@ -20,7 +20,9 @@ import (
 )
 
 type Issuer interface {
-	AcquireForMCP(context.Context, identity.Ref, string) (identity.AccessToken, error)
+	// AcquireForMCP issues the agent's token for a selected MCP URL; env is the claim's
+	// agent custom_env, which may carry the agent's credentials (ADR 0022).
+	AcquireForMCP(context.Context, identity.Ref, identity.Env, string) (identity.AccessToken, error)
 }
 type Authority interface {
 	Apply(context.Context, attempt.Grant) error
@@ -270,7 +272,7 @@ func (r *running) refresh(ctx context.Context) error {
 	for name, connection := range r.connections {
 		token := r.tokens[name]
 		if time.Until(token.ExpiresAt) <= 10*time.Second {
-			token, err = r.adapter.Issuer.AcquireForMCP(ctx, ref, connection.URL)
+			token, err = r.adapter.Issuer.AcquireForMCP(ctx, ref, r.task.Agent.CustomEnv, connection.URL)
 			if err != nil || time.Until(token.ExpiresAt) <= 10*time.Second {
 				return fmt.Errorf("MCP issuance: %w", ErrDenied)
 			}

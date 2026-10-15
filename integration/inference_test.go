@@ -67,7 +67,7 @@ func configureInference(t *testing.T, dir, project string, c *service.Config) *w
 	w.key(t, "exhausted", map[string]any{"models": []string{"fixture"}, "max_budget": 0})
 	w.bind(t, "workspace")
 	catalog := inference.Catalog{DefaultModel: "fixture", Models: map[string]inference.Model{"fixture": {Label: "Fixture", Context: 64000, Output: 4096, Thinking: &inference.Thinking{DefaultLevel: "medium", SupportedLevels: []inference.ThinkingLevel{{Value: "medium", Label: "Medium"}, {Value: "high", Label: "High"}}}}}}
-	writeJSON(t, filepath.Join(dir, "inference.json"), inference.Config{Version: 1, AllowHTTP: true, Gateways: []string{gatewayOrigin}, Bindings: []inference.Binding{{WorkspaceID: workspace, Gateway: gatewayOrigin, KeyFile: "/etc/multica-sandbox/inference-keys/" + workspace}}, Catalogs: []inference.CatalogBinding{{WorkspaceID: workspace, Catalog: catalog}}})
+	writeJSON(t, filepath.Join(dir, "inference.json"), inference.Config{Version: 1, AllowHTTP: true, Bindings: []inference.Binding{{WorkspaceID: workspace, Gateway: gatewayOrigin, KeyFile: "/etc/multica-sandbox/inference-keys/" + workspace}}, Catalogs: []inference.CatalogBinding{{WorkspaceID: workspace, Catalog: catalog}}})
 	c.Command = nil
 	c.OpenCode.InferenceFile = "/etc/multica-sandbox/inference.json"
 	c.OpenCode.InferenceRelay = &service.RelayConfig{Listen: ":8092", URL: "http://inference-relay:8092"}

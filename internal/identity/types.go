@@ -18,17 +18,23 @@ type Ref struct {
 	AgentID     string `json:"agent_id"`
 }
 
-type Principal struct {
-	Issuer   string `json:"issuer"`
-	ClientID string `json:"client_id"`
-	Subject  string `json:"subject"`
+// Agent custom_env names of its identity (ADR 0022): the OAuth client ID of its
+// service-account client and that client's secret.
+const (
+	EnvClientID     = "IDP_IAM_CLIENT_ID"
+	EnvClientSecret = "IDP_IAM_CLIENT_SECRET"
+)
+
+// Env is a redacted view of the agent's custom_env from the claim.
+type Env interface {
+	Allowed(names []string) map[string]string
 }
 
 // Credentials cannot be serialized or formatted with their client secret.
 type Credentials struct {
-	Principal
-	secret  string
-	request TokenRequest
+	ClientID string
+	secret   string
+	request  TokenRequest
 }
 
 func (Credentials) Format(s fmt.State, _ rune)   { fmt.Fprint(s, "<identity credentials>") }
@@ -54,9 +60,9 @@ type resolveRequest struct {
 	Agent   Ref `json:"agent"`
 }
 type resolveResponse struct {
-	Version int `json:"version"`
-	Agent   Ref `json:"agent"`
-	Principal
+	Version      int          `json:"version"`
+	Agent        Ref          `json:"agent"`
+	ClientID     string       `json:"client_id"`
 	ClientSecret string       `json:"client_secret"`
 	Token        TokenRequest `json:"token,omitempty"`
 }

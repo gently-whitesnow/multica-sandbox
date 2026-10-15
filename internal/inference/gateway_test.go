@@ -39,8 +39,7 @@ func gatewayFixture(t *testing.T, body *atomic.Value, calls *atomic.Int32) (*Ser
 	t.Cleanup(server.Close)
 	c := testConfig(t)
 	c.AllowHTTP = true
-	c.Gateways = []string{server.URL + "/inference"}
-	c.Bindings[0].Gateway = c.Gateways[0]
+	c.Bindings[0].Gateway = server.URL + "/inference"
 	c.GatewayCatalog = &GatewayCatalog{TTL: "1h", DefaultModel: "claude-demo"}
 	s, err := New(c, testScope().Server)
 	if err != nil {

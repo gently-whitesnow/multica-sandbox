@@ -17,16 +17,16 @@ identity and inference constructors; their files have no redundant server field.
 External resolver requests and authority grants retain the derived installation
 namespace for shared services.
 Use either static bindings with absolute secret-file references or an authenticated
-HTTP resolver with a version-1 JSON contract. Do not fall back between sources.
-An external response must echo the reference and name a locally approved issuer.
-Keep issuer/token/JWKS endpoints and a bounded token lifetime in operator
-configuration. Bindings carry optional OAuth issuance parameters; there is no
-resource catalog. Separate delivery rules map exact selected MCP URLs to approved
-issuer names. Missing rules, duplicate URLs and issuer mismatches deny delivery. The external resolver is trusted to assign principals to agents;
+HTTP resolver with a version-1 JSON contract. Do not fall back between them; ADR
+0022 adds the agent's `custom_env` ahead of either. An external response must echo
+the reference and name the client. Keep the one issuer's token/JWKS endpoints and a
+bounded token lifetime in operator configuration. Bindings carry optional OAuth
+issuance parameters; there is no resource catalog. A separate list names the exact
+MCP URLs that receive the token; others are denied. The external resolver is trusted to assign clients to agents;
 MCP and inference remain responsible for authorizing attempts and resources.
 
 Resolve credentials afresh on issuance, allowing secret and binding changes without
-persisting resolved secrets. Static principal/client bindings cannot be shared by
+persisting resolved secrets. Static client bindings cannot be shared by
 different agents. External services enforce the equivalent consistency rule.
 Reject malformed/oversized responses, redirects and unapproved endpoints. Disable
 proxy environment variables and require HTTPS outside explicitly insecure fixtures.
@@ -34,8 +34,8 @@ Use bounded requests and sanitized errors; make credential serialization explici
 and unavailable through ordinary JSON or formatting.
 
 Reuse OAuth2 client credentials and go-oidc verification. The first issuer adapter
-supports Keycloak RS256 access tokens with typ=Bearer and azp. Verify the expected
-issuer, subject, client and bounded lifetime before exposing the bearer. IAM owns
+supports Keycloak RS256 access tokens with typ=Bearer and azp. Verify the signature,
+issuer, client and bounded lifetime before exposing the bearer. IAM owns
 audience, roles and groups; receiving MCP services validate audience and permissions.
 Controller verification establishes identity, not recipient authorization.
 Do not implement an issuer or assume that ID tokens and access tokens interchange.

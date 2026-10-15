@@ -2,6 +2,7 @@ package opencode
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"strings"
@@ -17,10 +18,12 @@ import (
 type stubIssuer struct {
 	calls  int
 	denyAt int
+	env    identity.Env
 }
 
-func (s *stubIssuer) AcquireForMCP(context.Context, identity.Ref, string) (identity.AccessToken, error) {
+func (s *stubIssuer) AcquireForMCP(_ context.Context, _ identity.Ref, env identity.Env, _ string) (identity.AccessToken, error) {
 	s.calls++
+	s.env = env
 	if s.calls == s.denyAt {
 		return identity.AccessToken{}, identity.ErrDenied
 	}
@@ -215,5 +218,22 @@ func TestWithoutIdentityOnlyAgentsWithoutMCPRun(t *testing.T) {
 	}
 	if err := run.Remove(context.Background()); err != nil || !workload.removed {
 		t.Fatalf("cleanup without authority: %v", err)
+	}
+}
+
+func TestIssuerReceivesClaimAgentEnv(t *testing.T) {
+	issuer := &stubIssuer{}
+	a := Adapter{Server: "https://multica.example.invalid", Controller: "controller", Issuer: issuer, Authority: &stubAuthority{}, Workloads: &stubWorkload{}, Status: stubStatus{}}
+	task := safeTask()
+	if err := json.Unmarshal([]byte(`{"IDP_IAM_CLIENT_ID":"client-env","IDP_IAM_CLIENT_SECRET":"env-secret"}`), &task.Agent.CustomEnv); err != nil {
+		t.Fatal(err)
+	}
+	run, err := a.Start(context.Background(), task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer run.Remove(context.Background())
+	if issuer.env == nil || issuer.env.Allowed([]string{identity.EnvClientID})[identity.EnvClientID] != "client-env" {
+		t.Fatal("issuer did not receive the claim's agent env")
 	}
 }

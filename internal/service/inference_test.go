@@ -36,7 +36,7 @@ func TestInferenceRequiresRelay(t *testing.T) {
 		if (c.InferenceFile == "") == (c.InferenceRelay == nil) {
 			t.Fatal("fixture must configure exactly one side")
 		}
-		if _, _, err := openCodeInference(t.Context(), Config{Server: "https://multica.example.com", OpenCode: &c}); err == nil {
+		if _, _, err := openCodeInference(t.Context(), Config{Server: "https://multica.example.com", OpenCode: &c}, nil); err == nil {
 			t.Fatal("inference without its relay accepted")
 		}
 	}

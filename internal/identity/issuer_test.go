@@ -67,9 +67,9 @@ func (f *tokenFixture) reset() {
 }
 func (f *tokenFixture) config(t *testing.T) Config {
 	c := config(t)
-	c.Issuers[0].URL = f.server.URL
-	c.Issuers[0].TokenURL = f.server.URL + "/token"
-	c.Issuers[0].JWKSURL = f.server.URL + "/keys"
+	c.Issuer.URL = f.server.URL
+	c.Issuer.TokenURL = f.server.URL + "/token"
+	c.Issuer.JWKSURL = f.server.URL + "/keys"
 	return c
 }
 func TestVerifiedIssuanceAndCredentialRotation(t *testing.T) {
@@ -83,13 +83,13 @@ func TestVerifiedIssuanceAndCredentialRotation(t *testing.T) {
 		if err = os.WriteFile(c.Bindings[0].SecretFile, []byte(secret), 0600); err != nil {
 			t.Fatal(err)
 		}
-		token, err := s.Acquire(context.Background(), ref(c))
+		token, err := s.Acquire(context.Background(), ref(c), nil)
 		if err != nil || token.Bearer() == "" || !token.ExpiresAt.After(time.Now()) || f.gotSecret != secret {
 			t.Fatal("issuance or rotation failed", err)
 		}
 	}
 	f.gotSecret = ""
-	if _, err = s.AcquireForMCP(context.Background(), ref(c), "https://unapproved.example/mcp"); err != ErrDenied || f.gotSecret != "" {
+	if _, err = s.AcquireForMCP(context.Background(), ref(c), nil, "https://unapproved.example/mcp"); err != ErrDenied || f.gotSecret != "" {
 		t.Fatal("unapproved MCP contacted issuer")
 	}
 }
@@ -97,12 +97,12 @@ func TestRejectInvalidAccessTokens(t *testing.T) {
 	f := newTokenFixture(t)
 	c := f.config(t)
 	s, _ := New(c, identityTestServer)
-	changes := map[string]any{"sub": "other", "iss": "https://other.example", "azp": "other", "typ": "ID", "exp": time.Now().Unix() - 10, "iat": time.Now().Unix() + 60}
+	changes := map[string]any{"iss": "https://other.example", "azp": "other", "typ": "ID", "exp": time.Now().Unix() - 10, "iat": time.Now().Unix() + 60}
 	for field, value := range changes {
 		t.Run(field, func(t *testing.T) {
 			f.reset()
 			f.claims[field] = value
-			if _, err := s.Acquire(context.Background(), ref(c)); err != ErrDenied {
+			if _, err := s.Acquire(context.Background(), ref(c), nil); err != ErrDenied {
 				t.Fatal("invalid claim accepted")
 			}
 		})
@@ -110,12 +110,12 @@ func TestRejectInvalidAccessTokens(t *testing.T) {
 	f.reset()
 	f.claims["iat"] = time.Now().Unix() + 20
 	f.claims["exp"] = time.Now().Unix() + 10
-	if _, err := s.Acquire(context.Background(), ref(c)); err != ErrDenied {
+	if _, err := s.Acquire(context.Background(), ref(c), nil); err != ErrDenied {
 		t.Fatal("negative token lifetime accepted")
 	}
 	f.reset()
 	f.claims["exp"] = time.Now().Unix() + 3600
-	if _, err := s.Acquire(context.Background(), ref(c)); err != ErrDenied {
+	if _, err := s.Acquire(context.Background(), ref(c), nil); err != ErrDenied {
 		t.Fatal("excessive lifetime accepted")
 	}
 	f.reset()
@@ -124,7 +124,7 @@ func TestRejectInvalidAccessTokens(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.key = other
-	if _, err = s.Acquire(context.Background(), ref(c)); err != ErrDenied {
+	if _, err = s.Acquire(context.Background(), ref(c), nil); err != ErrDenied {
 		t.Fatal("forged signature accepted")
 	}
 }
@@ -134,7 +134,6 @@ func TestConcurrentWorkspaceBindings(t *testing.T) {
 	b.WorkspaceID = workspaceB
 	b.AgentID = agentB
 	b.ClientID = "client-b"
-	b.Subject = "subject-b"
 	b.SecretFile = secretFile(t, "second-secret")
 	c.Bindings = append(c.Bindings, b)
 	s, err := New(c, identityTestServer)
@@ -145,8 +144,8 @@ func TestConcurrentWorkspaceBindings(t *testing.T) {
 	for range 20 {
 		for _, b := range c.Bindings {
 			wg.Go(func() {
-				v, e := s.Resolve(context.Background(), Ref{identityTestServer, b.WorkspaceID, b.AgentID})
-				if e != nil || v.Subject != b.Subject {
+				v, e := s.Resolve(context.Background(), Ref{identityTestServer, b.WorkspaceID, b.AgentID}, nil)
+				if e != nil || v.ClientID != b.ClientID {
 					t.Error("cross-workspace identity")
 				}
 			})
@@ -158,14 +157,14 @@ func TestConcurrentWorkspaceBindings(t *testing.T) {
 func TestMCPDeliveryAndIAMParameters(t *testing.T) {
 	f := newTokenFixture(t)
 	c := f.config(t)
-	c.MCP = []MCPRule{{URL: "https://tools.example/mcp", Issuer: "corp"}}
+	c.MCP = []string{"https://tools.example/mcp"}
 	c.Bindings[0].Token = TokenRequest{Scopes: []string{"profile"}, Resource: "https://tools.example"}
 	s, err := New(c, identityTestServer)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, target := range []string{"https://other.example/mcp", "https://tools.example/mcp/", "https://tools.example/mcp?next=other", "https://tools.example/mcp/extra"} {
-		if _, err = s.AcquireForMCP(context.Background(), ref(c), target); err != ErrDenied || f.gotSecret != "" {
+		if _, err = s.AcquireForMCP(context.Background(), ref(c), nil, target); err != ErrDenied || f.gotSecret != "" {
 			t.Fatal("unapproved destination contacted issuer")
 		}
 	}
@@ -178,21 +177,64 @@ func TestMCPDeliveryAndIAMParameters(t *testing.T) {
 			f.claims["aud"] = aud
 		}
 		f.claims["realm_access"] = map[string]any{"roles": []string{"arbitrary-role"}}
-		if _, err = s.AcquireForMCP(context.Background(), ref(c), "https://tools.example/mcp"); err != nil || f.gotScope != "profile" || f.gotResource != "https://tools.example" {
+		if _, err = s.AcquireForMCP(context.Background(), ref(c), nil, "https://tools.example/mcp"); err != nil || f.gotScope != "profile" || f.gotResource != "https://tools.example" {
 			t.Fatal("delivery depends on recipient permissions or lost IAM parameters", err)
 		}
 	}
-	other := c.Issuers[0]
-	other.Name = "other"
-	other.URL = "https://other.example/realm"
-	c.Issuers = append(c.Issuers, other)
-	c.MCP[0].Issuer = "other"
-	s, err = New(c, identityTestServer)
+}
+
+type agentEnv map[string]string
+
+func (e agentEnv) Allowed(names []string) map[string]string {
+	out := map[string]string{}
+	for _, name := range names {
+		if value, ok := e[name]; ok {
+			out[name] = value
+		}
+	}
+	return out
+}
+
+func TestAgentEnvPrecedesConfiguredBinding(t *testing.T) {
+	f := newTokenFixture(t)
+	c := f.config(t)
+	env := agentEnv{EnvClientID: "client-env", EnvClientSecret: "env-secret", "OTHER": "x"}
+	s, err := New(c, identityTestServer)
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.gotSecret = ""
-	if _, err = s.AcquireForMCP(context.Background(), ref(c), "https://tools.example/mcp"); err != ErrDenied || f.gotSecret != "" {
-		t.Fatal("wrong realm delivered")
+	if got, err := s.Resolve(context.Background(), ref(c), env); err != nil || got.ClientID != "client-a" {
+		t.Fatal("agent env used without agent_env", err)
+	}
+	c.AgentEnv = true
+	if s, err = New(c, identityTestServer); err != nil {
+		t.Fatal(err)
+	}
+	f.claims["azp"] = "client-env"
+	token, err := s.Acquire(context.Background(), ref(c), env)
+	if err != nil || token.Bearer() == "" || f.gotSecret != "env-secret" {
+		t.Fatal("agent env credentials not issued", err)
+	}
+	f.claims["azp"] = "client-a"
+	for _, fallback := range []Env{nil, agentEnv{"OTHER": "x"}} {
+		if got, err := s.Resolve(context.Background(), ref(c), fallback); err != nil || got.ClientID != "client-a" {
+			t.Fatal("agent without env did not fall back to its binding", err)
+		}
+	}
+	for _, bad := range []agentEnv{{EnvClientID: "client-env"}, {EnvClientSecret: "env-secret"}, {EnvClientID: "client-env", EnvClientSecret: ""}, {EnvClientID: "a\nb", EnvClientSecret: "s"}} {
+		if _, err = s.Resolve(context.Background(), ref(c), bad); err != ErrDenied {
+			t.Fatal("incomplete agent env accepted", bad)
+		}
+	}
+	// agent_env alone: an agent without env has no identity.
+	c.Bindings = nil
+	if s, err = New(c, identityTestServer); err != nil {
+		t.Fatal("agent_env alone denied", err)
+	}
+	if _, err = s.Resolve(context.Background(), ref(c), agentEnv{}); err != ErrDenied {
+		t.Fatal("agent without env or binding resolved")
+	}
+	if _, err = s.Resolve(context.Background(), Ref{"https://other.example", workspaceA, agentA}, env); err != ErrDenied {
+		t.Fatal("agent env accepted for another server")
 	}
 }

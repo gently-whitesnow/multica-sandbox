@@ -29,7 +29,7 @@ func secretFile(t *testing.T, value string) string {
 	return p
 }
 func config(t *testing.T) Config {
-	return Config{Version: 1, AllowHTTP: true, Issuers: []IssuerConfig{{Name: "corp", URL: "https://issuer.example/realm", TokenURL: "https://issuer.example/token", JWKSURL: "https://issuer.example/keys", MaxTTLSeconds: 300}}, Bindings: []Binding{{WorkspaceID: workspaceA, AgentID: agentA, Principal: Principal{"corp", "client-a", "subject-a"}, SecretFile: secretFile(t, "private-sentinel")}}}
+	return Config{Version: 1, AllowHTTP: true, Issuer: IssuerConfig{URL: "https://issuer.example/realm", TokenURL: "https://issuer.example/token", JWKSURL: "https://issuer.example/keys", MaxTTLSeconds: 300}, Bindings: []Binding{{WorkspaceID: workspaceA, AgentID: agentA, ClientID: "client-a", SecretFile: secretFile(t, "private-sentinel")}}}
 }
 func ref(c Config) Ref { return Ref{identityTestServer, workspaceA, agentA} }
 func TestStaticBindingIsolationAndRotation(t *testing.T) {
@@ -38,19 +38,19 @@ func TestStaticBindingIsolationAndRotation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, err := s.Resolve(context.Background(), ref(c))
+	first, err := s.Resolve(context.Background(), ref(c), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, r := range []Ref{{identityTestServer, workspaceB, agentA}, {identityTestServer, workspaceA, agentB}, {"https://other.example", workspaceA, agentA}} {
-		if _, err = s.Resolve(context.Background(), r); err == nil {
+		if _, err = s.Resolve(context.Background(), r, nil); err == nil {
 			t.Fatal("cross-binding resolution allowed")
 		}
 	}
 	if err = os.WriteFile(c.Bindings[0].SecretFile, []byte("replacement"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	next, err := s.Resolve(context.Background(), ref(c))
+	next, err := s.Resolve(context.Background(), ref(c), nil)
 	if err != nil || next.secret == first.secret {
 		t.Fatal("secret not re-read")
 	}
@@ -64,37 +64,32 @@ func TestStaticBindingIsolationAndRotation(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err = s.Acquire(ctx, ref(c)); err == nil {
+	if _, err = s.Acquire(ctx, ref(c), nil); err == nil {
 		t.Fatal("cancel ignored")
 	}
 }
 func TestInvalidConfiguration(t *testing.T) {
 	tests := map[string]func(*Config){
 		"duplicate binding": func(c *Config) { c.Bindings = append(c.Bindings, c.Bindings[0]) },
-		"duplicate issuer":  func(c *Config) { c.Issuers = append(c.Issuers, c.Issuers[0]) },
-		"issuer aliases":    func(c *Config) { other := c.Issuers[0]; other.Name = "alias"; c.Issuers = append(c.Issuers, other) },
 		"agent has two clients": func(c *Config) {
 			b := c.Bindings[0]
 			b.WorkspaceID = workspaceB
 			b.ClientID = "other-client"
-			b.Subject = "other-subject"
 			c.Bindings = append(c.Bindings, b)
 		},
-		"missing source":  func(c *Config) { c.Bindings = nil },
-		"two sources":     func(c *Config) { c.External = &ExternalConfig{URL: "https://resolver.example", BearerFile: "/key"} },
-		"unknown issuer":  func(c *Config) { c.Bindings[0].Issuer = "unknown" },
-		"relative secret": func(c *Config) { c.Bindings[0].SecretFile = "secret" },
-		"shared client":   func(c *Config) { b := c.Bindings[0]; b.AgentID = agentB; c.Bindings = append(c.Bindings, b) },
-		"duplicate MCP": func(c *Config) {
-			c.MCP = []MCPRule{{"https://tools.example/mcp", "corp"}, {"https://tools.example/mcp", "corp"}}
-		},
-		"unknown MCP issuer":     func(c *Config) { c.MCP = []MCPRule{{"https://tools.example/mcp", "unknown"}} },
-		"insecure MCP":           func(c *Config) { c.AllowHTTP = false; c.MCP = []MCPRule{{"http://tools.example/mcp", "corp"}} },
+		"missing source":         func(c *Config) { c.Bindings = nil },
+		"two sources":            func(c *Config) { c.External = &ExternalConfig{URL: "https://resolver.example", BearerFile: "/key"} },
+		"empty client":           func(c *Config) { c.Bindings[0].ClientID = "" },
+		"no issuer":              func(c *Config) { c.Issuer = IssuerConfig{} },
+		"relative secret":        func(c *Config) { c.Bindings[0].SecretFile = "secret" },
+		"shared client":          func(c *Config) { b := c.Bindings[0]; b.AgentID = agentB; c.Bindings = append(c.Bindings, b) },
+		"duplicate MCP":          func(c *Config) { c.MCP = []string{"https://tools.example/mcp", "https://tools.example/mcp"} },
+		"insecure MCP":           func(c *Config) { c.AllowHTTP = false; c.MCP = []string{"http://tools.example/mcp"} },
 		"invalid scope":          func(c *Config) { c.Bindings[0].Token.Scopes = []string{"bad scope"} },
 		"invalid OAuth resource": func(c *Config) { c.Bindings[0].Token.Resource = "https://user:secret@tools.example" },
-		"unbounded ttl":          func(c *Config) { c.Issuers[0].MaxTTLSeconds = 99999 },
-		"url credentials":        func(c *Config) { c.Issuers[0].TokenURL = "https://secret@issuer.example/token" },
-		"insecure endpoint":      func(c *Config) { c.AllowHTTP = false; c.Issuers[0].JWKSURL = "http://issuer.example/keys" },
+		"unbounded ttl":          func(c *Config) { c.Issuer.MaxTTLSeconds = 99999 },
+		"url credentials":        func(c *Config) { c.Issuer.TokenURL = "https://secret@issuer.example/token" },
+		"insecure endpoint":      func(c *Config) { c.AllowHTTP = false; c.Issuer.JWKSURL = "http://issuer.example/keys" },
 	}
 	for name, change := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -109,7 +104,7 @@ func TestInvalidConfiguration(t *testing.T) {
 func TestRemoteResolverContract(t *testing.T) {
 	c := config(t)
 	r := ref(c)
-	response := resolveResponse{Version: 1, Agent: r, Principal: c.Bindings[0].Principal, ClientSecret: "private-sentinel"}
+	response := resolveResponse{Version: 1, Agent: r, ClientID: c.Bindings[0].ClientID, ClientSecret: "private-sentinel"}
 	bearer := secretFile(t, "resolver-a")
 	expectedBearer := "resolver-a"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, q *http.Request) {
@@ -129,7 +124,7 @@ func TestRemoteResolverContract(t *testing.T) {
 	}
 	for _, secret := range []string{"private-sentinel", "rotated"} {
 		response.ClientSecret = secret
-		got, err := s.Resolve(context.Background(), r)
+		got, err := s.Resolve(context.Background(), r, nil)
 		if err != nil || got.secret != secret {
 			t.Fatal("external binding not refreshed")
 		}
@@ -138,26 +133,26 @@ func TestRemoteResolverContract(t *testing.T) {
 	if err = os.WriteFile(bearer, []byte(expectedBearer), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.Resolve(context.Background(), r); err != nil {
+	if _, err = s.Resolve(context.Background(), r, nil); err != nil {
 		t.Fatal("resolver credential not refreshed")
 	}
 	response.Agent.WorkspaceID = workspaceB
-	if _, err = s.Resolve(context.Background(), r); err == nil {
+	if _, err = s.Resolve(context.Background(), r, nil); err == nil {
 		t.Fatal("mismatched binding accepted")
 	}
 	response.Agent = r
 	response.Token.Scopes = []string{"bad scope"}
-	if _, err = s.Resolve(context.Background(), r); err != ErrDenied {
+	if _, err = s.Resolve(context.Background(), r, nil); err != ErrDenied {
 		t.Fatal("malformed IAM parameters accepted")
 	}
 	response.Token.Scopes = []string{"profile"}
-	got, err := s.Resolve(context.Background(), r)
+	got, err := s.Resolve(context.Background(), r, nil)
 	if err != nil || len(got.request.Scopes) != 1 || got.request.Scopes[0] != "profile" {
 		t.Fatal("external IAM parameters lost")
 	}
-	response.Issuer = "unapproved"
-	if _, err = s.Resolve(context.Background(), r); err == nil {
-		t.Fatal("unapproved issuer accepted")
+	response.ClientID = ""
+	if _, err = s.Resolve(context.Background(), r, nil); err == nil {
+		t.Fatal("empty client accepted")
 	}
 }
 func TestResolverFailuresDoNotLeak(t *testing.T) {
@@ -170,7 +165,7 @@ func TestResolverFailuresDoNotLeak(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, err = s.Resolve(context.Background(), ref(c))
+		_, err = s.Resolve(context.Background(), ref(c), nil)
 		server.Close()
 		if err != ErrDenied {
 			t.Fatalf("unsafe error: %v", err)
@@ -184,11 +179,11 @@ func TestResolverFailuresDoNotLeak(t *testing.T) {
 	c.Bindings = nil
 	c.External = &ExternalConfig{redirect.URL, secretFile(t, "bearer")}
 	s, _ := New(c, identityTestServer)
-	if _, err := s.Resolve(context.Background(), ref(c)); err != ErrDenied || hits != 0 {
+	if _, err := s.Resolve(context.Background(), ref(c), nil); err != ErrDenied || hits != 0 {
 		t.Fatal("redirect followed")
 	}
 	redirect.Close()
-	if _, err := s.Resolve(context.Background(), ref(c)); err != ErrDenied {
+	if _, err := s.Resolve(context.Background(), ref(c), nil); err != ErrDenied {
 		t.Fatal("outage not denied")
 	}
 }
@@ -233,7 +228,7 @@ func TestRemoteContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { _, err := s.Resolve(ctx, ref(c)); done <- err }()
+	go func() { _, err := s.Resolve(ctx, ref(c), nil); done <- err }()
 	<-started
 	cancel()
 	select {

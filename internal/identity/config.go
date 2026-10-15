@@ -15,16 +15,20 @@ const maxDocument = 65536
 
 var uuid = regexp.MustCompile(`^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`)
 
+// Config has one issuer (realm) for every agent. Credentials come from the agent's
+// custom_env when AgentEnv is set and it names them, otherwise from Bindings or External.
 type Config struct {
-	Version   int             `json:"version"`
-	AllowHTTP bool            `json:"allow_http,omitempty"`
-	Issuers   []IssuerConfig  `json:"issuers"`
-	Bindings  []Binding       `json:"bindings,omitempty"`
-	External  *ExternalConfig `json:"external,omitempty"`
-	MCP       []MCPRule       `json:"mcp,omitempty"`
+	Version   int          `json:"version"`
+	AllowHTTP bool         `json:"allow_http,omitempty"`
+	Issuer    IssuerConfig `json:"issuer"`
+	// AgentEnv reads EnvClientID and EnvClientSecret from the claim's agent custom_env first.
+	AgentEnv bool            `json:"agent_env,omitempty"`
+	Bindings []Binding       `json:"bindings,omitempty"`
+	External *ExternalConfig `json:"external,omitempty"`
+	// MCP lists the exact MCP URLs that receive the agent's access token.
+	MCP []string `json:"mcp,omitempty"`
 }
 type IssuerConfig struct {
-	Name          string `json:"name"`
 	URL           string `json:"url"`
 	TokenURL      string `json:"token_url"`
 	JWKSURL       string `json:"jwks_url"`
@@ -37,17 +41,12 @@ type TokenRequest struct {
 	Resource string   `json:"resource,omitempty"`
 }
 
-// MCPRule approves delivery of an issuer's identity to one exact selected URL.
-type MCPRule struct {
-	URL    string `json:"url"`
-	Issuer string `json:"issuer"`
-}
 type Binding struct {
-	WorkspaceID string `json:"workspace_id"`
-	AgentID     string `json:"agent_id"`
-	Principal
-	SecretFile string       `json:"secret_file"`
-	Token      TokenRequest `json:"token,omitempty"`
+	WorkspaceID string       `json:"workspace_id"`
+	AgentID     string       `json:"agent_id"`
+	ClientID    string       `json:"client_id"`
+	SecretFile  string       `json:"secret_file"`
+	Token       TokenRequest `json:"token,omitempty"`
 }
 type ExternalConfig struct {
 	URL        string `json:"url"`

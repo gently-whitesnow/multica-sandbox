@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gently-whitesnow/multica-sandbox/internal/identity"
+	"github.com/gently-whitesnow/multica-sandbox/internal/inference"
 	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
 	"github.com/gently-whitesnow/multica-sandbox/internal/repo"
 )
@@ -58,9 +60,11 @@ func (r *running) environment() map[string]string {
 	return env
 }
 
-// reservedEnv are names and prefixes the controller or the attempt image owns.
+// reservedEnv are names and prefixes the controller or the attempt image owns, including
+// the connection and identity credentials only the controller consumes (ADR 0022).
 var reservedEnv = []string{"HOME", "PATH", "USER", "SHELL", "TERM", "TMPDIR", "TMP", "TEMP", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY",
-	"MULTICA_", "OPENCODE_", "XDG_", "GIT_", "GH_", "GITLAB_", "SSL_CERT_", "LD_"}
+	"MULTICA_", "OPENCODE_", "XDG_", "GIT_", "GH_", "GITLAB_", "SSL_CERT_", "LD_",
+	inference.EnvBaseURL, inference.EnvAPIKey, identity.EnvClientID, identity.EnvClientSecret}
 
 // ValidEnvAllow checks a custom_env allowlist: at most 32 distinct names the controller
 // does not own (upstream also blocks MULTICA_* and the process basics).
