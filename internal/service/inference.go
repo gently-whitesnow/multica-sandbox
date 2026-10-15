@@ -28,6 +28,7 @@ func openCodeInference(ctx context.Context, c Config, api *multica.Client) (*inf
 	if err != nil {
 		return nil, nil, err
 	}
+	source.SetDebug(c.debugf())
 	if config.WorkspaceEnv {
 		source.UseWorkspaceEnv(func(ctx context.Context, workspace string) (inference.Env, bool, error) {
 			return api.WorkspaceEnv(ctx, workspace)

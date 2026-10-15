@@ -23,6 +23,15 @@ type Config struct {
 	Tools                []Tool          `json:"tools,omitempty"`
 	Command              []string        `json:"command"`
 	Timeout              string          `json:"timeout"`
+	Debug                bool            `json:"debug,omitempty"`
+	log                  io.Writer
+}
+
+func (c Config) debugf() func(string, ...any) {
+	if !c.Debug || c.log == nil {
+		return nil
+	}
+	return func(format string, args ...any) { fmt.Fprintf(c.log, "debug "+format+"\n", args...) }
 }
 
 var uuid = regexp.MustCompile(`^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`)

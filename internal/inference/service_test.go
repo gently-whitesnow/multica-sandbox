@@ -247,3 +247,31 @@ func TestWorkspaceEnvPrecedesConfiguredBinding(t *testing.T) {
 		t.Fatal("workspace env never read")
 	}
 }
+
+func TestDebugNamesSourceWithoutKey(t *testing.T) {
+	c := testConfig(t)
+	c.WorkspaceEnv = true
+	s, err := New(c, testScope().Server)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lines []string
+	s.SetDebug(func(format string, args ...any) { lines = append(lines, fmt.Sprintf(format, args...)) })
+	env := fixtureEnv{EnvBaseURL: "https://env.example.invalid/v1", EnvAPIKey: "sk-env-secret"}
+	status := error(nil)
+	s.UseWorkspaceEnv(func(context.Context, string) (Env, bool, error) { return env, true, status })
+	_, _ = s.Acquire(context.Background(), testScope())
+	env = fixtureEnv{}
+	_, _ = s.Acquire(context.Background(), testScope())
+	status = fmt.Errorf("Multica HTTP status 403 (response body withheld)")
+	_, _ = s.Acquire(context.Background(), testScope())
+	all := strings.Join(lines, "\n")
+	for _, want := range []string{"source=workspace_env", "gateway=https://env.example.invalid", "source=binding", "status 403"} {
+		if !strings.Contains(all, want) {
+			t.Errorf("debug lacks %q:\n%s", want, all)
+		}
+	}
+	if strings.Contains(all, "sk-env-secret") || strings.Contains(all, testKey) {
+		t.Fatal("debug exposed a key")
+	}
+}

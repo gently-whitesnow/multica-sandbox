@@ -25,6 +25,7 @@ import (
 )
 
 func Run(ctx context.Context, c Config, stateDir, tokenPath string, out io.Writer) error {
+	c.log = out
 	if c.Concurrency == 0 {
 		c.Concurrency = DefaultConcurrency
 	}
@@ -309,22 +310,21 @@ func cliRevision(c *OpenCodeConfig) (string, error) {
 
 // attemptIdentity builds the MCP issuer and the attempt authority. Both are optional:
 // without identity_file attempts get no MCP credentials and agents selecting MCP are
-// refused; without authority attempts are not registered. Identity requires the
-// authority, which registers every MCP token before OpenCode sees it.
+// refused; without authority MCP tokens are not registered and end only at expiry.
 func attemptIdentity(ctx context.Context, c Config) (opencode.Issuer, opencode.Authority, error) {
 	var issuer opencode.Issuer
 	var authority opencode.Authority
 	if c.OpenCode.IdentityFile != "" {
-		if c.OpenCode.Authority == (attempt.Config{}) {
-			return nil, nil, fmt.Errorf("identity_file requires authority")
-		}
 		config, err := agentidentity.ReadConfig(c.OpenCode.IdentityFile)
 		if err != nil {
 			return nil, nil, agentidentity.ErrDenied
 		}
-		if issuer, err = agentidentity.New(config, strings.TrimRight(c.Server, "/")); err != nil {
+		service, err := agentidentity.New(config, strings.TrimRight(c.Server, "/"))
+		if err != nil {
 			return nil, nil, err
 		}
+		service.SetDebug(c.debugf())
+		issuer = service
 	}
 	if c.OpenCode.Authority != (attempt.Config{}) {
 		a, err := attempt.New(c.OpenCode.Authority)

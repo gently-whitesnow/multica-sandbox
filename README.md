@@ -89,7 +89,7 @@ An mdt_ token discovers only its bound workspace; registration never sweeps acti
 
 Workspace discovery is always enabled. A single accessible workspace uses the same
 execution path as many workspaces; `concurrency: 1` limits global execution to one
-attempt at a time. Membership determines which workspaces are served.
+attempt at a time. Membership determines which workspaces are served. `"debug": true` adds `debug` log lines naming identity and inference sources, clients, gateways and refusal reasons (such as the token endpoint's error code), never secrets.
 
 `docker compose stop` gracefully removes active execution and intentionally leaves
 the controller stopped. Restart with `docker compose up -d`; interrupted tasks are
