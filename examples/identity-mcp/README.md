@@ -76,7 +76,7 @@ Revocation applies to new calls, not cancellation of already running operations.
 
 ## What we still need to integrate
 
-- Map `(issuer, subject)` to a Multica agent; keep client authentication outside
+- Map a Keycloak client to a Multica agent; keep client authentication outside
   sandboxes. This fixture restricts a single Keycloak client with `azp`.
 - Bind grants to controller-authorized attempts; revoke on completion, cancellation
   and recovery. Define leases/fail-closed behavior during controller outages.

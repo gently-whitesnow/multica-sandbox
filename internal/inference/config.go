@@ -20,11 +20,13 @@ import (
 var ErrDenied = errors.New("inference binding unavailable or denied")
 var uuid = regexp.MustCompile(`^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`)
 
-// Config binds workspaces to an approved gateway origin and a controller-only key.
+// Config binds workspaces to a gateway and a controller-only key: from the workspace's
+// Multica env when WorkspaceEnv is set, otherwise from Bindings or External.
 type Config struct {
-	Version         int                      `json:"version"`
-	AllowHTTP       bool                     `json:"allow_http,omitempty"`
-	Gateways        []string                 `json:"gateways"`
+	Version   int  `json:"version"`
+	AllowHTTP bool `json:"allow_http,omitempty"`
+	// WorkspaceEnv reads EnvBaseURL and EnvAPIKey from the workspace's Multica env first.
+	WorkspaceEnv    bool                     `json:"workspace_env,omitempty"`
 	Bindings        []Binding                `json:"bindings,omitempty"`
 	External        *identity.ExternalConfig `json:"external,omitempty"`
 	Catalogs        []CatalogBinding         `json:"catalogs,omitempty"`
@@ -166,6 +168,7 @@ func readFile(path string, limit int64) ([]byte, error) {
 }
 
 // origin admits a gateway origin with an optional base path; the relay joins only the admitted /v1 paths below it.
+// Gateways are not allow-listed: the operator's bindings, resolver or workspace env name them.
 func origin(s string, allowHTTP bool) bool {
 	u, err := url.Parse(s)
 	return err == nil && endpoint(s, allowHTTP) && baseurl.Path(u)

@@ -32,7 +32,8 @@ a workspace to an approved gateway origin and its key:
 
 `server` comes from controller configuration and `workspace_id` from the claim.
 Agent IDs, URLs, headers and request bodies never select the upstream or the key.
-The gateway must be in the configured `gateways` list. Keys are a redacted type
+Gateways are checked for URL shape, not against an allow-list (ADR 0022, which
+also adds the workspace's Multica env as a source). Keys are a redacted type
 that never formats, marshals or logs.
 
 At attempt start, the adapter resolves the binding and issues one opaque

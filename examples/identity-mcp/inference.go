@@ -35,7 +35,7 @@ var inferenceWorkspaces = [2]string{"10000000-0000-4000-8000-000000000001", "100
 // noMCP is the identity issuer for inference-only attempts; no MCP is selected.
 type noMCP struct{}
 
-func (noMCP) AcquireForMCP(context.Context, identity.Ref, string) (identity.AccessToken, error) {
+func (noMCP) AcquireForMCP(context.Context, identity.Ref, identity.Env, string) (identity.AccessToken, error) {
 	return identity.AccessToken{}, identity.ErrDenied
 }
 
@@ -208,7 +208,7 @@ func inferenceScenario() error {
 		return err
 	}
 	catalog := inference.Catalog{DefaultModel: "fixture", Models: map[string]inference.Model{"fixture": {Label: "Fixture", Context: 64000, Output: 4096, Thinking: &inference.Thinking{DefaultLevel: "medium", SupportedLevels: []inference.ThinkingLevel{{Value: "medium", Label: "Medium"}, {Value: "high", Label: "High"}}}}}}
-	config := inference.Config{Version: 1, AllowHTTP: true, Gateways: []string{gatewayOrigin}}
+	config := inference.Config{Version: 1, AllowHTTP: true}
 	for _, ws := range inferenceWorkspaces {
 		config.Bindings = append(config.Bindings, inference.Binding{WorkspaceID: ws, Gateway: gatewayOrigin, KeyFile: filepath.Join("/tmp/keys", ws)})
 		config.Catalogs = append(config.Catalogs, inference.CatalogBinding{WorkspaceID: ws, Catalog: catalog})

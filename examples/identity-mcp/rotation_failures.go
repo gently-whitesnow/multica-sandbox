@@ -45,7 +45,7 @@ func rotationFailure(ctx context.Context, base *opencode.Adapter, states *rotati
 				w.WriteHeader(400)
 				return
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"version": 1, "agent": request.Agent, "issuer": "fixture", "client_id": "example-agent", "subject": serviceSubject, "client_secret": string(secret)})
+			_ = json.NewEncoder(w).Encode(map[string]any{"version": 1, "agent": request.Agent, "client_id": "example-agent", "client_secret": string(secret)})
 			return
 		}
 		req, err := http.NewRequestWithContext(r.Context(), "POST", issuer+"/protocol/openid-connect/token", r.Body)
@@ -69,7 +69,7 @@ func rotationFailure(ctx context.Context, base *opencode.Adapter, states *rotati
 		config.Bindings = nil
 		config.External = &identity.ExternalConfig{URL: endpoint.URL, BearerFile: "/secrets/admin"}
 	} else {
-		config.Issuers[0].TokenURL = endpoint.URL
+		config.Issuer.TokenURL = endpoint.URL
 	}
 	service, err := identity.New(config, fixtureServer)
 	if err != nil {

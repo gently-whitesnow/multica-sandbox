@@ -12,7 +12,7 @@ import (
 
 func rotationLease(ctx context.Context, adapter *opencode.Adapter, task multica.Task) error {
 	task.ID = "40000000-0000-4000-8000-000000000030"
-	token, err := adapter.Issuer.AcquireForMCP(ctx, identity.Ref{Server: adapter.Server, WorkspaceID: task.WorkspaceID, AgentID: task.AgentID}, "http://gateway:8080/mcp")
+	token, err := adapter.Issuer.AcquireForMCP(ctx, identity.Ref{Server: adapter.Server, WorkspaceID: task.WorkspaceID, AgentID: task.AgentID}, nil, "http://gateway:8080/mcp")
 	if err != nil {
 		return err
 	}

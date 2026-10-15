@@ -13,16 +13,28 @@ Set `opencode.inference_file` to an absolute path and `opencode.inference_relay`
 execution template `peers` with the alias named by `url`, as for `multica_relay`.
 Keep the gateway on the control network, off attempt networks.
 
-The file (`deploy/inference.example.json`) holds approved gateway origins
-(`gateways`) and either static `bindings` or an authenticated `external` resolver:
+The file (`deploy/inference.example.json`) holds static `bindings` or an
+authenticated `external` resolver, and optionally `workspace_env`:
 
-- a static binding has `workspace_id`, `gateway` (an approved origin, optionally with a clean base path)
+- a static binding has `workspace_id`, `gateway` (an HTTPS origin, optionally with a clean base path)
   and `key_file`, an absolute controller-only file with the key. The file is
   re-read for each new attempt, so a rotated key applies to new attempts only;
 - an external resolver receives `{version: 1, workspace: {server, workspace_id}}`
   with a bearer from `bearer_file`. It returns the echoed `workspace` and
-  `target: {gateway, key}`. Unknown fields, mismatched references, unapproved
-  gateways, empty keys, oversized responses and redirects deny the attempt.
+  `target: {gateway, key}`. Unknown fields, mismatched references, malformed
+  gateways, empty keys, oversized responses and redirects deny the attempt;
+- `"workspace_env": true` (ADR 0022) first reads the workspace's Multica env through
+  `GET /api/workspaces/{id}/env` (upstream PR 4521) with the controller token:
+  `INFERENCE_BASE_URL`, the OpenAI-compatible base ending in `/v1`, and
+  `INFERENCE_API_KEY`. Both present select that connection; neither, or a server
+  without the endpoint (404), falls back to the bindings or resolver; one alone,
+  a base without `/v1` or another error deny. `workspace_env` may be the only
+  source. The controller user must be a workspace owner or admin, and each read
+  (per attempt and catalog refresh) is audited. `env_allow` cannot name either
+  variable.
+
+Gateways are not allow-listed: an HTTPS URL without credentials, query or fragment
+is accepted from any source.
 
 The controller's `server` supplies the Multica origin; bindings cannot override it.
 Keys are a redacted type: they never format, marshal or reach logs, results or

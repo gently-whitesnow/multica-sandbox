@@ -39,8 +39,8 @@ type recordingIssuer struct {
 	issued map[string][]identity.AccessToken
 }
 
-func (s *recordingIssuer) AcquireForMCP(ctx context.Context, ref identity.Ref, url string) (identity.AccessToken, error) {
-	token, err := s.Service.AcquireForMCP(ctx, ref, url)
+func (s *recordingIssuer) AcquireForMCP(ctx context.Context, ref identity.Ref, env identity.Env, url string) (identity.AccessToken, error) {
+	token, err := s.Service.AcquireForMCP(ctx, ref, env, url)
 
 	if err == nil {
 		s.Lock()

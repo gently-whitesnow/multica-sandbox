@@ -220,7 +220,7 @@ func newOpenCodeAdapter(ctx context.Context, c Config, stateDir string, api *mul
 		adapter.Relay = grants
 		adapter.RelayURL = strings.TrimRight(c.OpenCode.MulticaRelay.URL, "/")
 	}
-	source, grants, err := openCodeInference(ctx, c)
+	source, grants, err := openCodeInference(ctx, c, api)
 	if err != nil {
 		return nil, nil, err
 	}

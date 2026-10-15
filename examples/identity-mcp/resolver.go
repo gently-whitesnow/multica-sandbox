@@ -9,6 +9,7 @@ import (
 	"os"
 
 	"github.com/gently-whitesnow/multica-sandbox/internal/identity"
+	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
 )
 
 const fixtureServer = "https://multica.example.invalid"
@@ -16,10 +17,10 @@ const fixtureServer = "https://multica.example.invalid"
 const serviceSubject = "30000000-0000-4000-8000-000000000001"
 
 func resolverConfig() identity.Config {
-	return identity.Config{Version: 1, AllowHTTP: true, Issuers: []identity.IssuerConfig{{Name: "fixture", URL: issuer, TokenURL: issuer + "/protocol/openid-connect/token", JWKSURL: issuer + "/protocol/openid-connect/certs", MaxTTLSeconds: 180}}, MCP: []identity.MCPRule{{URL: "http://gateway:8080/mcp", Issuer: "fixture"}}, Bindings: []identity.Binding{{WorkspaceID: "10000000-0000-4000-8000-000000000001", AgentID: "20000000-0000-4000-8000-000000000001", Principal: identity.Principal{Issuer: "fixture", ClientID: "example-agent", Subject: serviceSubject}, SecretFile: "/secrets/client"}}}
+	return identity.Config{Version: 1, AllowHTTP: true, Issuer: identity.IssuerConfig{URL: issuer, TokenURL: issuer + "/protocol/openid-connect/token", JWKSURL: issuer + "/protocol/openid-connect/certs", MaxTTLSeconds: 180}, MCP: []string{"http://gateway:8080/mcp"}, Bindings: []identity.Binding{{WorkspaceID: "10000000-0000-4000-8000-000000000001", AgentID: "20000000-0000-4000-8000-000000000001", ClientID: "example-agent", SecretFile: "/secrets/client"}}}
 }
 
-// Both resolution sources must obtain and verify the same real Keycloak principal.
+// Every credential source must obtain and verify a real Keycloak token of the client.
 func checkResolvers(ctx context.Context) error {
 	c := resolverConfig()
 	ref := identity.Ref{Server: fixtureServer, WorkspaceID: c.Bindings[0].WorkspaceID, AgentID: c.Bindings[0].AgentID}
@@ -27,7 +28,7 @@ func checkResolvers(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if _, err = static.AcquireForMCP(ctx, ref, "http://gateway:8080/mcp"); err != nil {
+	if _, err = static.AcquireForMCP(ctx, ref, nil, "http://gateway:8080/mcp"); err != nil {
 		return fmt.Errorf("static identity issuance failed")
 	}
 	secret, err := os.ReadFile("/secrets/client")
@@ -48,7 +49,7 @@ func checkResolvers(ctx context.Context) error {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"version": 1, "agent": ref, "issuer": "fixture", "client_id": "example-agent", "subject": serviceSubject, "client_secret": string(secret)})
+		_ = json.NewEncoder(w).Encode(map[string]any{"version": 1, "agent": ref, "client_id": "example-agent", "client_secret": string(secret)})
 	}))
 	defer remote.Close()
 	c.Bindings = nil
@@ -57,21 +58,35 @@ func checkResolvers(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if _, err = external.AcquireForMCP(ctx, ref, "http://gateway:8080/mcp"); err != nil {
+	if _, err = external.AcquireForMCP(ctx, ref, nil, "http://gateway:8080/mcp"); err != nil {
 		return fmt.Errorf("external identity issuance failed")
 	}
-	if _, err = external.AcquireForMCP(ctx, ref, "http://unapproved:8080/mcp"); err != identity.ErrDenied {
+	if _, err = external.AcquireForMCP(ctx, ref, nil, "http://unapproved:8080/mcp"); err != identity.ErrDenied {
 		return fmt.Errorf("unapproved MCP delivery accepted")
 	}
+	envConfig := resolverConfig()
+	envConfig.Bindings, envConfig.AgentEnv = nil, true
+	fromEnv, err := identity.New(envConfig, fixtureServer)
+	if err != nil {
+		return err
+	}
+	var env multica.SecretEnv
+	data, _ := json.Marshal(map[string]string{identity.EnvClientID: "example-agent", identity.EnvClientSecret: string(secret)})
+	if err = json.Unmarshal(data, &env); err != nil {
+		return err
+	}
+	if _, err = fromEnv.AcquireForMCP(ctx, ref, env, "http://gateway:8080/mcp"); err != nil {
+		return fmt.Errorf("agent env identity issuance failed")
+	}
 	bad := resolverConfig()
-	bad.Bindings[0].Subject = "unrelated-principal"
+	bad.Bindings[0].ClientID = "unrelated-client"
 	wrong, err := identity.New(bad, fixtureServer)
 	if err != nil {
 		return err
 	}
-	if _, err = wrong.AcquireForMCP(ctx, ref, "http://gateway:8080/mcp"); err == nil {
-		return fmt.Errorf("wrong Keycloak subject accepted")
+	if _, err = wrong.AcquireForMCP(ctx, ref, nil, "http://gateway:8080/mcp"); err == nil {
+		return fmt.Errorf("wrong Keycloak client accepted")
 	}
-	fmt.Println("PASS static/external resolvers verified real Keycloak identity; wrong subject and unapproved MCP denied")
+	fmt.Println("PASS static/external/agent-env sources verified real Keycloak identity; wrong client and unapproved MCP denied")
 	return nil
 }

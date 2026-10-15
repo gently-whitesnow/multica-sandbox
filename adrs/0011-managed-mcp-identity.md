@@ -13,7 +13,7 @@ rotation without exposing OIDC client secrets or maintaining a second tool catal
 Use the effective MCP configuration delivered by Multica. Do not add connections
 from controller policy. Operators configure identity bindings by Multica server,
 workspace ID and agent ID; client ID is a resolved IAM attribute, not a selector
-supplied by the workload. Verify the issued principal against the binding.
+supplied by the workload. Verify the issued token belongs to the bound client.
 
 Define an identity resolver with static configuration and an authenticated external
 service implementation. Static bindings reference controller-only secret files;
@@ -21,7 +21,7 @@ external resolution can obtain credentials from deployment-owned secret storage.
 Keep client secrets outside the workload and out of logs and persisted task state.
 
 Define MCP identity delivery rules, initially static, with an interface for future
-external resolution. Match exact approved server URLs to issuer names, not
+external resolution. Match exact approved server URLs, not
 user-selected connection names. IAM bindings carry optional OAuth issuance
 parameters. Do not require placeholder headers or per-tool scopes in Multica.
 IAM owns token audiences, roles and groups; MCP validates its intended audience

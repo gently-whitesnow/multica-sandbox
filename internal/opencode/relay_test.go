@@ -225,7 +225,7 @@ func TestEnvAllowRejectsControllerNames(t *testing.T) {
 	if err := ValidEnvAllow([]string{"FEED_URL", "NUGET_SOURCE"}); err != nil {
 		t.Fatal(err)
 	}
-	for _, names := range [][]string{{"MULTICA_TOKEN"}, {"HOME"}, {"GH_TOKEN"}, {"XDG_CONFIG_HOME"}, {"lower"}, {"A", "A"}, {"OPENCODE_CONFIG_CONTENT"}, {"GITLAB_TOKEN"}} {
+	for _, names := range [][]string{{"MULTICA_TOKEN"}, {"HOME"}, {"GH_TOKEN"}, {"XDG_CONFIG_HOME"}, {"lower"}, {"A", "A"}, {"OPENCODE_CONFIG_CONTENT"}, {"GITLAB_TOKEN"}, {"INFERENCE_API_KEY"}, {"INFERENCE_BASE_URL"}, {"IDP_IAM_CLIENT_ID"}, {"IDP_IAM_CLIENT_SECRET"}} {
 		if ValidEnvAllow(names) == nil {
 			t.Errorf("accepted %v", names)
 		}
