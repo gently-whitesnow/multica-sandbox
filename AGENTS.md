@@ -17,7 +17,8 @@ from verified behavior.
   `gh pr create` through Git remote aliases (0016),
   web chat tasks (0017), agent skills (0018), nested Docker under sysbox-runc (0019),
   shared attempt memory pool (0020), daemon WebSocket wakeups (0021),
-  inference connection and agent identity from Multica env (0022).
+  inference connection and agent identity from Multica env (0022),
+  OpenCode over ACP (0023, proposed).
 - `examples/end-to-end/`: opt-in real Multica/OpenCode/inference lab.
 - `examples/identity-mcp/`: disposable identity and MCP contract fixture.
 - `internal/inference/`: workspace gateway bindings, relay policy and advisory model catalogs.
@@ -30,6 +31,7 @@ from verified behavior.
 - `examples/agent-image/`: example user-owned OpenCode image on a Debian base; the
   controller mounts the `multica` CLI artifact (`deploy/multica-cli.Dockerfile`).
 - `examples/tool-bundle/`: example user-owned tool bundle (static `jq`).
+- `examples/acp-spike/`: `opencode acp` capability spike with fixtures (ADR 0023).
 - `examples/sysbox-host/`: Lima/Linux Sysbox host recipe, attempt pool slice and engine test image (ADR 0019, 0020).
 - `internal/pool/`: attempt pool slice limits, PSI admission and attempt memory events (ADR 0020).
 - `internal/opencode/`: OpenCode adapter, native reporting, conformance
