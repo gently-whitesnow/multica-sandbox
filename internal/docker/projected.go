@@ -170,7 +170,21 @@ func (b *Projected) Start(ctx context.Context, attempt string, w execution.Workd
 	for _, host := range loopbackHosts(b.ForgeHosts) {
 		bundles = append(bundles, "--add-host="+host)
 	}
-	bundles = append(bundles, "--env=TMPDIR="+TmpDir, "--env=XDG_DATA_HOME=/workspace/data", "--env=XDG_CONFIG_HOME=/workspace/config", "--env=XDG_CACHE_HOME=/workspace/cache", "--env=XDG_STATE_HOME=/workspace/state", "--env=OPENCODE_DISABLE_AUTOUPDATE=true", "--env=OPENCODE_DISABLE_MODELS_FETCH=true", "--env=OPENCODE_DISABLE_DEFAULT_PLUGINS=true", "--env=OPENCODE_DISABLE_LSP_DOWNLOAD=true")
+	home, tmp := "/workspace", TmpDir
+	if b.Helper != "" {
+		home, tmp = VolumeHome, VolumeTmpDir
+	}
+	if b.Runtime == Sysbox {
+		// Under shiftfs (kernels before 5.19) mappings of shifted image-mount files name host
+		// paths, so tools that locate themselves through a loaded library fail (the dotnet
+		// muxer hands one to testhost). Image mounts are read-only and need no ownership shift.
+		targets := []string{}
+		for _, bundle := range b.mounts() {
+			targets = append(targets, bundle.Target)
+		}
+		bundles = append(bundles, "--env=SYSBOX_SKIP_UID_SHIFT="+strings.Join(targets, ","))
+	}
+	bundles = append(bundles, "--env=HOME="+home, "--env=TMPDIR="+tmp, "--env=XDG_CACHE_HOME="+home+"/.cache", "--env=XDG_DATA_HOME=/workspace/data", "--env=XDG_CONFIG_HOME=/workspace/config", "--env=XDG_STATE_HOME=/workspace/state", "--env=OPENCODE_DISABLE_AUTOUPDATE=true", "--env=OPENCODE_DISABLE_MODELS_FETCH=true", "--env=OPENCODE_DISABLE_DEFAULT_PLUGINS=true", "--env=OPENCODE_DISABLE_LSP_DOWNLOAD=true")
 	if b.Runtime == Sysbox && b.DinD.RyukDisabled {
 		bundles = append(bundles, "--env=TESTCONTAINERS_RYUK_DISABLED=true")
 	}
@@ -185,7 +199,8 @@ func (b *Projected) Start(ctx context.Context, attempt string, w execution.Workd
 	}
 	// Like the upstream task directory, TMPDIR allows executables (go test, build caches);
 	// the agent works in repo.WorkDir, a tmpfs directory unless the workdir volume is mounted.
-	if _, err := command(ctx, "exec", "--user", AttemptUser, r.name, "mkdir", "-p", "-m", "700", TmpDir, repo.WorkDir); err != nil {
+	// A retained volume keeps HOME and its caches; TMPDIR starts empty on every attempt.
+	if _, err := command(ctx, "exec", "--user", AttemptUser, r.name, "/bin/sh", "-c", `rm -rf "$1" && mkdir -p -m 700 "$@"`, "sh", tmp, home+"/.cache", repo.WorkDir); err != nil {
 		return nil, errors.Join(err, cleanup())
 	}
 	if b.Helper != "" {

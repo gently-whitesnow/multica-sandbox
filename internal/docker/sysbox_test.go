@@ -20,6 +20,18 @@ func TestCreateArgsPerRuntime(t *testing.T) {
 			t.Errorf("sysbox attempt lacks %s", want)
 		}
 	}
+	homes := func(args []string) (n int) {
+		for _, a := range args {
+			if strings.HasPrefix(a, "--env=HOME=") {
+				n++
+			}
+		}
+		return n
+	}
+	volume := (&Backend{Image: image, Owner: "o", Command: []string{"/bin/sh"}}).createArgs("n", DefaultResources, "--env=HOME="+VolumeHome)
+	if homes(runc) != 1 || !slices.Contains(runc, "--env=HOME=/workspace") || homes(volume) != 1 || !slices.Contains(volume, "--env=HOME="+VolumeHome) {
+		t.Error("HOME must have one value", runc, volume)
+	}
 	if slices.ContainsFunc(sysbox, func(a string) bool { return strings.HasPrefix(a, "--memory") }) {
 		t.Error("pool attempt without a ceiling has a memory limit")
 	}
