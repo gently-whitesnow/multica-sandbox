@@ -59,17 +59,21 @@ func Select(t multica.Task) (map[string]Remote, error) {
 	return out, nil
 }
 
-// localTools run inside the disposable container; with the Multica relay the agent needs bash
-// for the CLI, and skill loads the claim's skills from the attempt's config directory.
-var localTools = []string{"bash", "read", "edit", "write", "glob", "grep", "list", "todoread", "todowrite", "skill"}
+// unattended are the permissions native OpenCode would ask a person about; under ACP a
+// request is refused, so they are denied up front.
+var unattended = []string{"question", "doom_loop"}
 
-// Config projects deny-by-default permissions; selected MCP connections reach OpenCode
-// through session/new, not the configuration.
+// Config projects permissions; selected MCP connections reach OpenCode through session/new,
+// not the configuration. With the Multica relay (local) the agent works like native
+// OpenCode: the disposable container and its network are the boundary, so every tool is
+// allowed, including paths outside the workdir and web research. Without it permissions are
+// deny-by-default and only the selected MCP tools are allowed.
 func Config(connections map[string]Remote, local bool) ([]byte, error) {
 	permissions := map[string]string{"*": "deny"}
 	if local {
-		for _, tool := range localTools {
-			permissions[tool] = "allow"
+		permissions["*"] = "allow"
+		for _, tool := range unattended {
+			permissions[tool] = "deny"
 		}
 	}
 	for name := range connections {

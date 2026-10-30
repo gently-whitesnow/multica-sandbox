@@ -5,6 +5,8 @@ import (
 	"math"
 	"strconv"
 	"strings"
+
+	"github.com/gently-whitesnow/multica-sandbox/internal/repo"
 )
 
 // Resources bound one attempt container; policy compares the created container with them.
@@ -30,8 +32,17 @@ const runTmpfs = "rw,noexec,nosuid,nodev,size=67108864,mode=0755"
 // probeResources bound the lifecycle probe's test executions.
 var probeResources = Resources{NanoCPUs: 5e8, Memory: 128 << 20, Pids: 64, NoFile: 256, Workspace: 64 << 20, Tmp: 16 << 20, Shm: 8 << 20}
 
-// TmpDir is the attempt TMPDIR: executable, unlike /tmp, and inside the bounded /workspace.
+// TmpDir is the TMPDIR of attempts without the workdir volume: executable, unlike /tmp, and
+// inside the bounded /workspace.
 const TmpDir = "/workspace/tmp"
+
+// With the workdir volume, HOME (with its tool caches) and TMPDIR are on disk in it:
+// builds download gigabytes, and tmpfs pages count against attempt memory. XDG config,
+// data and state, projected files and native auth stores stay in the tmpfs (ADR 0015).
+const (
+	VolumeHome   = repo.WorkDir + "/.multica-sandbox/home"
+	VolumeTmpDir = repo.WorkDir + "/.multica-sandbox/tmp"
+)
 
 // ResourceSpec is the configured form; empty fields keep the defaults.
 type ResourceSpec struct {

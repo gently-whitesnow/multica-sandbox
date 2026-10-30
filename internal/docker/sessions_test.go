@@ -59,7 +59,7 @@ func TestSessionVolumesAreRetainedPerConversation(t *testing.T) {
 	if !strings.HasPrefix(volume, "multica-sandbox-session-") || reused {
 		t.Fatalf("new session volume: %q %t", volume, reused)
 	}
-	shell(first, `echo first > note && stat -c %u:%a .`)
+	shell(first, `echo first > note && echo cached > "$XDG_CACHE_HOME/x" && echo scratch > "$TMPDIR/x" && stat -c %u:%a .`)
 	// A concurrent writer of the same conversation waits, then gets a per-attempt volume.
 	sessionBusyWait = time.Second
 	concurrent, err := backend.Start(ctx, "concurrent", conversation)
@@ -91,7 +91,8 @@ func TestSessionVolumesAreRetainedPerConversation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if name, reused := second.Workdir(); name != volume || !reused || shell(second, `cat note`) != "first" {
+	// HOME and its caches persist with the session; TMPDIR starts empty.
+	if name, reused := second.Workdir(); name != volume || !reused || shell(second, `test ! -e "$TMPDIR/x" && cat note "$XDG_CACHE_HOME/x"`) != "first\ncached" {
 		t.Fatal("follow-up run did not get the retained workdir")
 	}
 	if err := second.Remove(ctx); err != nil {

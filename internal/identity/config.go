@@ -27,6 +27,9 @@ type Config struct {
 	External *ExternalConfig `json:"external,omitempty"`
 	// MCP lists the exact MCP URLs that receive the agent's access token.
 	MCP []string `json:"mcp,omitempty"`
+	// MCPAnonymous lists exact MCP URLs the relay reaches without any token, for servers
+	// that authenticate on their own or not at all.
+	MCPAnonymous []string `json:"mcp_anonymous,omitempty"`
 }
 type IssuerConfig struct {
 	URL           string `json:"url"`

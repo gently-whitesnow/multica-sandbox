@@ -16,8 +16,9 @@ Add these to `opencode` (`deploy/opencode.example.json`). They require `multica_
   off `PATH`.
   - `sandbox-helper init` prepares each attempt's owned volume as uid 65532 with mode
     0700. It runs with no network, a read-only rootfs and only `CAP_CHOWN`.
-  - The volume is the agent working directory `/workspace/work`. Projected
-    configuration, auth stores and `HOME` stay in the `/workspace` tmpfs.
+  - The volume is the agent working directory `/workspace/work`; it also holds
+    `HOME` with its caches and `TMPDIR` (ADR 0015). Projected configuration, XDG
+    config, data and state and auth stores stay in the `/workspace` tmpfs.
   - `sandbox-helper forward` serves `127.0.0.1:19514` (`MULTICA_DAEMON_PORT`) as the
     attempt user, towards the Multica relay listener.
 - `git_relay` (`listen`, an `http` `url`): the Git relay, the HTTP proxy of attempt Git remotes. Give the controller the
@@ -63,7 +64,7 @@ end at cleanup and on restart.
   host, `/api/` only) to loopback, where the helper forwards port 443 to the relay.
 - The relay terminates TLS with certificates from a per-process CA. The CA is
   name-constrained to those names and trusted through `SSL_CERT_DIR`
-  (`/workspace/certs`). It checks that the Host header matches the TLS name.
+  (`/workspace/certs:/etc/ssl/certs`, so clients that read only that variable keep the system roots). It checks that the Host header matches the TLS name.
 - `GH_TOKEN` and `GH_ENTERPRISE_TOKEN` carry the attempt's `msg_` credential, and
   `GH_HOST` names a single bound host. The relay sends `token <password>` upstream.
 - For GitLab hosts `GITLAB_TOKEN` carries it and `GITLAB_HOST` names a single bound host;

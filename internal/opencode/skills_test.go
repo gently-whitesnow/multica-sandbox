@@ -125,7 +125,7 @@ func TestAdapterProjectsSkillsForUpstreamTasks(t *testing.T) {
 	defer run.Remove(context.Background())
 	var config struct{ Permission map[string]string }
 	if workload.trees != 1 || string(workload.files[SkillsDir+"/review/ref.md"]) != "r" || !strings.HasPrefix(string(workload.files[SkillsDir+"/review/SKILL.md"]), "---\nname: review\n") ||
-		json.Unmarshal(workload.files["/workspace/opencode.json"], &config) != nil || config.Permission["skill"] != "allow" {
+		json.Unmarshal(workload.files["/workspace/opencode.json"], &config) != nil || config.Permission["*"] != "allow" || config.Permission["skill"] == "deny" {
 		t.Fatalf("skills not projected: %d %v %v", workload.trees, workload.files, config.Permission)
 	}
 	task.Agent.Skills[0].Files[0].Path = "../escape"

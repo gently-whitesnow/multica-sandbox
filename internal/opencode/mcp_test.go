@@ -94,6 +94,22 @@ func TestMCPRelayForwardsCurrentTokenToExactURL(t *testing.T) {
 	}
 }
 
+func TestMCPRelayAnonymousSendsNoCredential(t *testing.T) {
+	_, r, opaque, upstream, front := mcpRelayFixture(t)
+	r.anonymous = map[string]bool{"docs": true}
+	r.tokens = map[string]identity.AccessToken{}
+	resp := mcpRequest(t, http.MethodPost, front.URL+"/docs", opaque)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || upstream.last() != "POST /mcp  mcp-session" {
+		t.Fatalf("anonymous forwarded %q status %d", upstream.last(), resp.StatusCode)
+	}
+	resp = mcpRequest(t, http.MethodPost, front.URL+"/docs", MCPRelayPrefix+strings.Repeat("0", 64))
+	resp.Body.Close()
+	if resp.StatusCode < 400 || len(upstream.seen) != 1 {
+		t.Fatal("anonymous MCP forwarded without the attempt's grant")
+	}
+}
+
 func TestMCPRelayDiscardsCallerQuery(t *testing.T) {
 	_, _, opaque, upstream, front := mcpRelayFixture(t)
 	for _, query := range []string{"?tenant=other", "?codemode=false", "?"} {

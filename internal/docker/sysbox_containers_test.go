@@ -104,6 +104,9 @@ func TestSysboxAttempt(t *testing.T) {
 test "$(id -u)" = 65532
 test "$(stat -c %a /workspace)" = 1777
 test "$TESTCONTAINERS_RYUK_DISABLED" = true
+# Image mounts are not shifted, so mappings of a mounted binary name its container path.
+test "$(stat -c %U /opt/multica-sandbox/helper/sandbox-helper)" = nobody
+for p in /proc/[0-9]*; do case "$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)" in *sandbox-helper\ forward*) awk '{print $6}' "$p/maps" ;; esac; done | grep -qx /opt/multica-sandbox/helper/sandbox-helper
 test -z "${DOCKER_HOST:-}"
 touch /etc/forbidden 2>/dev/null && exit 1
 docker info --format '{{.ID}}'

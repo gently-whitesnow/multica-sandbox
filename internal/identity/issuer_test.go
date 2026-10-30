@@ -185,6 +185,22 @@ func TestMCPDeliveryAndIAMParameters(t *testing.T) {
 	}
 }
 
+func TestAnonymousMCPNeverReceivesToken(t *testing.T) {
+	f := newTokenFixture(t)
+	c := f.config(t)
+	c.MCP, c.MCPAnonymous = []string{"https://tools.example/mcp"}, []string{"https://search.example/mcp"}
+	s, err := New(c, identityTestServer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.AnonymousMCP("https://search.example/mcp") || s.AnonymousMCP("https://tools.example/mcp") || s.AnonymousMCP("https://search.example/mcp/") {
+		t.Fatal("anonymous approval is not exact")
+	}
+	if _, err = s.AcquireForMCP(context.Background(), ref(c), nil, "https://search.example/mcp"); err != ErrDenied || f.gotSecret != "" {
+		t.Fatal("anonymous MCP received the agent's token")
+	}
+}
+
 type agentEnv map[string]string
 
 func (e agentEnv) Allowed(names []string) map[string]string {

@@ -73,7 +73,7 @@ func TestForgeRelaysGhToTheWorkspaceAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if env["GH_TOKEN"] == "" || env["GH_TOKEN"] != env["GH_ENTERPRISE_TOKEN"] || env["GH_HOST"] != "git.example.test" || env["SSL_CERT_DIR"] != CertDir {
+	if env["GH_TOKEN"] == "" || env["GH_TOKEN"] != env["GH_ENTERPRISE_TOKEN"] || env["GH_HOST"] != "git.example.test" || env["SSL_CERT_DIR"] != CertDirs {
 		t.Fatalf("gh environment: %v", env)
 	}
 	hub, err := g.Issue("hub", other, nil)
@@ -195,7 +195,7 @@ func TestForgeRelaysGlabToGitLab(t *testing.T) {
 		t.Fatal(err)
 	}
 	if env["GITLAB_TOKEN"] == "" || env["GITLAB_HOST"] != "gitlab.example.test" || env["GLAB_NO_PROMPT"] != "true" || env["GLAB_CHECK_UPDATE"] != "false" ||
-		env["GLAB_SEND_TELEMETRY"] != "false" || env["SSL_CERT_DIR"] != CertDir || env["GH_TOKEN"] != "" {
+		env["GLAB_SEND_TELEMETRY"] != "false" || env["SSL_CERT_DIR"] != CertDirs || env["GH_TOKEN"] != "" {
 		t.Fatalf("glab environment: %v", env)
 	}
 	bearer, err := g.Issue("bearer", other, nil)

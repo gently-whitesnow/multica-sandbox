@@ -80,9 +80,10 @@ runtimes of the agent receive it as process env.
 
 ## MCP delivery rules
 
-`mcp` lists exact approved URLs. `AcquireForMCP` rejects unlisted URLs before
-contacting the token endpoint. Matching does not use prefixes, connection names or
-wildcard domains. Duplicate URLs are rejected. No list means no approved MCP delivery.
+`mcp` lists exact approved URLs. `AcquireForMCP` rejects unlisted URLs before contacting
+the token endpoint. Matching does not use prefixes, connection names or wildcard domains.
+Duplicate URLs are rejected. No list means no approved MCP delivery. `mcp_anonymous`
+approves exact URLs the relay reaches without any token; a URL is in one list only.
 
 The caller must supply a connection selected by trusted Multica task data. The list
 approves identity delivery; it does not add MCP connections, connect to servers or

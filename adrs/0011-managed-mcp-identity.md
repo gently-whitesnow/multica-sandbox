@@ -52,7 +52,12 @@ exact approved URL with the current token (ADR 0023, replacing the native auth s
 projection). It renews during the attempt, checks Multica status every second, and
 stops on any issuer, resolver or authority failure. A separate external attempt
 integration registers fingerprints before the relay uses them and enforces a 15-second lease;
-cleanup revokes all fingerprints for that attempt. See ADR 0009.
+cleanup revokes all fingerprints for that attempt. See ADR 0009. Refinement
+(2026-10-30): some approved servers must not receive the agent's token, for example one
+that forwards the caller's `Authorization` to its own backend. `mcp_anonymous` lists
+such exact URLs. They are disjoint from `mcp`, never trigger issuance or authority
+registration, and keep every other relay rule: the attempt's grant, the exact URL,
+dropped caller credentials and revocation on cleanup.
 
 The Docker path creates an internal network per attempt and attaches only operator
 approved MCP/gateway peers from a validated template. Issuers, resolvers and Multica
