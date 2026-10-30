@@ -195,7 +195,7 @@ func (h *Hosts) Has(workspace, host string) bool {
 
 // Identity is the commit identity for a claim repository URL of the workspace.
 func (h *Hosts) Identity(workspace, repository, agent string) (string, string) {
-	if host, _, ok := repoKey(repository); ok && h != nil {
+	if host, _, _, ok := repoKey(repository); ok && h != nil {
 		if b := h.bindings[[2]string{workspace, host}]; b.name != "" {
 			return b.name, b.email
 		}

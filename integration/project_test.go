@@ -21,21 +21,23 @@ func projectClaim(t *testing.T, ctx context.Context, api *multica.Client, rt mul
 	sql(t, fmt.Sprintf(`INSERT INTO project(id,workspace_id,title,description) VALUES('%[1]s','%[2]s','Fixture project','Ship the fixture.');
  INSERT INTO project_resource(project_id,workspace_id,resource_type,resource_ref,label,position) VALUES
   ('%[1]s','%[2]s','github_repo','{"url":"https://git.example.invalid/team/fixture.git","ref":"release"}','Primary source',0),
-  ('%[1]s','%[2]s','local_directory','{"daemon_id":"other-daemon","local_path":"/srv/fixture"}',NULL,1);
+  ('%[1]s','%[2]s','local_directory','{"daemon_id":"other-daemon","local_path":"/srv/fixture"}',NULL,1),
+  ('%[1]s','%[2]s','github_repo','{"url":"git@git.example.invalid:team/docs.git"}','Docs, main line',2);
  UPDATE issue SET project_id='%[1]s' WHERE id='40000000-0000-4000-8000-000000000040';`, project, workspace))
 	task, err := api.Claim(ctx, rt.ID)
 	if err != nil || task == nil || task.ID != id {
 		t.Fatalf("claim: %v", err)
 	}
-	if task.ProjectID != project || len(task.ProjectResources) != 2 || task.ProjectResources[0].Type != "github_repo" || task.ProjectResources[0].Label != "Primary source" ||
-		len(task.Repos) != 1 || task.Repos[0].URL != "https://git.example.invalid/team/fixture.git" || task.Repos[0].Ref != "release" {
+	if task.ProjectID != project || len(task.ProjectResources) != 3 || task.ProjectResources[0].Type != "github_repo" || task.ProjectResources[0].Label != "Primary source" ||
+		len(task.Repos) != 2 || task.Repos[0].URL != "https://git.example.invalid/team/fixture.git" || task.Repos[0].Ref != "release" || task.Repos[1].URL != "git@git.example.invalid:team/docs.git" {
 		t.Fatalf("project context not claimed: %+v %+v", task.ProjectResources, task.Repos)
 	}
 	_, brief, err := opencode.Prompt(*task, true, true, opencode.Fresh)
 	if err != nil || opencode.PinnedHere(*task, daemon) ||
 		!strings.Contains(string(brief), "The active project for this task is **Fixture project**.") ||
 		!strings.Contains(string(brief), "- **GitHub repo**: https://git.example.invalid/team/fixture.git (checkout ref: `release`) — Primary source\n") ||
-		!strings.Contains(string(brief), "- https://git.example.invalid/team/fixture.git (starts from `release`)") {
+		!strings.Contains(string(brief), "- https://git.example.invalid/team/fixture.git (starts from `release`)") ||
+		!strings.Contains(string(brief), "- **GitHub repo**: git@git.example.invalid:team/docs.git — Docs, main line\n") {
 		t.Fatalf("project brief: %v\n%s", err, brief)
 	}
 	if err := api.Start(ctx, *task); err != nil {

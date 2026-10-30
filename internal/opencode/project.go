@@ -1,7 +1,6 @@
 package opencode
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -17,7 +16,8 @@ import (
 // ProjectPath is upstream's .multica/project/resources.json in the agent working directory.
 const ProjectPath = repo.WorkDir + "/.multica/project/resources.json"
 
-const maxProjectResources = 32
+// maxProjectResources bounds resources like repositories; the server sets no limit.
+const maxProjectResources = maxRepositories
 
 var resourceType = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 
@@ -28,12 +28,12 @@ type githubRepo struct {
 	Ref               string `json:"ref,omitempty"`
 }
 
-// validProject bounds the claim's project context. The server sends resources only with
-// their project and lifts every github_repo resource into the claim repositories, which the
-// checkout and Git relay already serve (ADR 0015); a resource outside them is refused.
+// validProject rejects only what the v0.5.2 server never sends: resources without their
+// project, non-UUID IDs, unknown type names, invalid JSON, a local_directory without its
+// daemon (upstream fails it too), and github_repo resources outside the claim
+// repositories, into which the server lifts them (ADR 0015). Other text is rendered inert.
 func validProject(t multica.Task) bool {
-	if t.ProjectID != "" && !multica.ValidID(t.ProjectID) || t.ProjectID == "" && len(t.ProjectResources) > 0 ||
-		len(t.ProjectResources) > maxProjectResources || len(t.ProjectTitle) > 512 {
+	if t.ProjectID != "" && !multica.ValidID(t.ProjectID) || t.ProjectID == "" && len(t.ProjectResources) > 0 || len(t.ProjectResources) > maxProjectResources {
 		return false
 	}
 	repos := map[string]bool{}
@@ -41,19 +41,16 @@ func validProject(t multica.Task) bool {
 		repos[strings.TrimSpace(r.URL)] = true
 	}
 	for _, r := range t.ProjectResources {
-		// Refs are rendered verbatim inside inline code, as upstream does.
-		if !multica.ValidID(r.ID) || !resourceType.MatchString(r.Type) || len(r.Label) > 512 || strings.ContainsRune(r.Label, 0) ||
-			len(r.Ref) > 4096 || bytes.ContainsAny(r.Ref, "`\r\n\x00") || len(r.Ref) > 0 && !json.Valid(r.Ref) {
+		if !multica.ValidID(r.ID) || !resourceType.MatchString(r.Type) || strings.ContainsRune(r.Label, 0) || len(r.Ref) > 0 && !json.Valid(r.Ref) {
 			return false
 		}
 		switch r.Type {
 		case "github_repo":
 			var ref githubRepo
-			if json.Unmarshal(r.Ref, &ref) != nil || !repos[ref.URL] || !validRef(ref.Ref) || !validRef(ref.DefaultBranchHint) {
+			if json.Unmarshal(r.Ref, &ref) != nil || !repos[ref.URL] {
 				return false
 			}
 		case "local_directory":
-			// Upstream fails a task whose local_directory lacks an owning daemon.
 			var ref struct {
 				DaemonID string `json:"daemon_id"`
 			}
@@ -65,8 +62,19 @@ func validProject(t multica.Task) bool {
 	return true
 }
 
-func validRef(ref string) bool {
-	return len(ref) <= 255 && !strings.ContainsAny(ref, "`\r\n\x00")
+// code is an inline code span that holds any text on one line; plain text keeps
+// upstream's single backticks.
+func code(text string) string {
+	text = strings.NewReplacer("\r", " ", "\n", " ").Replace(text)
+	longest := 0
+	for _, part := range strings.FieldsFunc(text, func(c rune) bool { return c != '`' }) {
+		longest = max(longest, len(part))
+	}
+	if longest == 0 {
+		return "`" + text + "`"
+	}
+	fence := strings.Repeat("`", longest+1)
+	return fence + " " + text + " " + fence
 }
 
 // PinnedHere reports a local_directory resource pinned to this controller's daemon ID. The
@@ -119,13 +127,13 @@ func projectResource(r multica.ProjectResource) string {
 	if r.Type == "github_repo" {
 		var ref githubRepo
 		_ = json.Unmarshal(r.Ref, &ref)
-		out = "**GitHub repo**: " + ref.URL
+		out = "**GitHub repo**: " + strings.NewReplacer("\r", " ", "\n", " ").Replace(ref.URL)
 		var details []string
 		if ref.Ref != "" {
-			details = append(details, fmt.Sprintf("checkout ref: `%s`", ref.Ref))
+			details = append(details, "checkout ref: "+code(ref.Ref))
 		}
 		if ref.DefaultBranchHint != "" {
-			details = append(details, fmt.Sprintf("default branch hint: `%s`", ref.DefaultBranchHint))
+			details = append(details, "default branch hint: "+code(ref.DefaultBranchHint))
 		}
 		if len(details) > 0 {
 			out += " (" + strings.Join(details, ", ") + ")"
@@ -135,7 +143,7 @@ func projectResource(r multica.ProjectResource) string {
 		if ref == "" {
 			ref = "{}"
 		}
-		out = fmt.Sprintf("**%s**: `%s`", r.Type, ref)
+		out = fmt.Sprintf("**%s**: %s", r.Type, code(ref))
 	}
 	if r.Label != "" {
 		out += " — " + strings.NewReplacer("\r", " ", "\n", " ").Replace(r.Label)

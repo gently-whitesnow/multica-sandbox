@@ -49,13 +49,14 @@ func NewRelay(relayURL string, hosts *Hosts) *Relay {
 // relay, the same credential is the gh token for the workspace's forge APIs.
 func (g *Relay) Issue(attempt, workspace string, urls []string) (map[string]string, error) {
 	a := access{workspace: workspace, repos: map[string]bool{}}
-	hosts := []string{}
+	hosts, prefixes := []string{}, map[string][]string{}
 	for _, raw := range urls {
-		host, key, ok := repoKey(raw)
+		host, key, prefix, ok := repoKey(raw)
 		if !ok || !g.hosts.Has(workspace, host) {
 			continue
 		}
 		hosts = append(hosts, host)
+		prefixes[host] = append(prefixes[host], prefix)
 		a.repos[key] = true
 	}
 	opaque, err := g.grants.Bind(attempt)
@@ -70,9 +71,15 @@ func (g *Relay) Issue(attempt, workspace string, urls []string) (map[string]stri
 	for _, host := range unique(hosts) {
 		alias := "http://" + host + "/"
 		config = append(config, [2]string{"http." + alias + ".extraHeader", "Authorization: Bearer " + opaque},
-			[2]string{"http." + alias + ".proxy", g.URL}, [2]string{"url." + alias + ".insteadOf", "https://" + host + "/"})
+			[2]string{"http." + alias + ".proxy", g.URL})
+		rewrites := []string{"https://" + host + "/"}
 		if !strings.Contains(host, ":") {
-			config = append(config, [2]string{"url." + alias + ".insteadOf", "git@" + host + ":"}, [2]string{"url." + alias + ".insteadOf", "ssh://git@" + host + "/"})
+			rewrites = append(rewrites, "git@"+host+":", "ssh://git@"+host+"/")
+		}
+		for _, prefix := range unique(append(rewrites, prefixes[host]...)) {
+			if prefix != alias {
+				config = append(config, [2]string{"url." + alias + ".insteadOf", prefix})
+			}
 		}
 	}
 	if g.ca != nil {
@@ -166,19 +173,51 @@ func smartHTTP(p string) (string, string) {
 	return "", ""
 }
 
-// repoKey returns the host and the comparison key of an HTTPS claim URL: lower-case
-// host and path without a trailing slash or .git.
-func repoKey(raw string) (string, string, bool) {
-	u, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || u.Scheme != "https" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.RawPath != "" {
-		return "", "", false
+// repoKey returns the host, the comparison key (lower-case host and path without a
+// trailing slash or .git) and the remote prefix rewritten to the host alias of a claim
+// URL in the forms upstream accepts: https, http, ssh, git and scp-like [user@]host:path.
+// SSH and git ports are dropped: the relay reaches the host over HTTPS.
+func repoKey(raw string) (string, string, string, bool) {
+	raw = strings.TrimSpace(raw)
+	if strings.ContainsFunc(raw, func(r rune) bool { return r <= ' ' || r == 0x7f || r == '\\' }) {
+		return "", "", "", false
 	}
-	host := strings.ToLower(u.Host)
-	p := strings.TrimSuffix(strings.TrimRight(u.Path, "/"), ".git")
+	var host, p, prefix string
+	if scheme, rest, found := strings.Cut(raw, "://"); found {
+		u, err := url.Parse(raw)
+		if err != nil || u.RawQuery != "" || u.Fragment != "" || u.RawPath != "" || u.ForceQuery {
+			return "", "", "", false
+		}
+		_, password := u.User.Password()
+		switch {
+		case (u.Scheme == "https" || u.Scheme == "http") && u.User == nil:
+			host = u.Host
+		case (u.Scheme == "ssh" || u.Scheme == "git") && !password:
+			host = u.Hostname()
+		default:
+			return "", "", "", false
+		}
+		authority, _, _ := strings.Cut(rest, "/")
+		host, p, prefix = strings.ToLower(host), u.Path, scheme+"://"+authority+"/"
+	} else {
+		colon := strings.Index(raw, ":")
+		at := strings.Index(raw, "@")
+		if colon <= 0 || at >= colon || strings.HasPrefix(raw[colon+1:], "/") {
+			return "", "", "", false
+		}
+		host, p, prefix = strings.ToLower(raw[at+1:colon]), "/"+raw[colon+1:], raw[:colon+1]
+	}
+	p = strings.TrimSuffix(strings.TrimRight(p, "/"), ".git")
 	if !hostName.MatchString(host) || strings.Count(p, "/") < 1 || strings.Contains(p, "//") || strings.Contains(p, "/.") {
-		return "", "", false
+		return "", "", "", false
 	}
-	return host, host + p, true
+	return host, host + p, prefix, true
+}
+
+// ValidURL reports a claim repository URL the Git relay can serve.
+func ValidURL(raw string) bool {
+	_, _, _, ok := repoKey(raw)
+	return ok
 }
 
 func unique(values []string) []string {

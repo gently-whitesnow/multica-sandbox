@@ -115,7 +115,7 @@ func TestPromptProjectsOnlySafeSourceReferences(t *testing.T) {
 	if err != nil || !strings.Contains(string(prompt), "chat instruction") || !strings.Contains(string(prompt), "project context") || !strings.Contains(string(prompt), "main") || !strings.Contains(string(prompt), "## Session Continuity Notice") || strings.Contains(string(prompt), "ses_old") {
 		t.Fatalf("source/context projection: %v", err)
 	}
-	for _, u := range []string{"https://user:secret@git.example/repo", "https://git.example/repo?token=secret", "file:///host/repo", "ssh://git.example/repo", "https://git.example/repo\nsecret"} {
+	for _, u := range []string{"https://user:secret@git.example/repo", "https://git.example/repo?token=secret", "file:///host/repo", "ssh://git:secret@git.example/repo", "https://git.example/repo\nsecret"} {
 		task.Repos[0].URL = u
 		if _, _, err := Prompt(task, false, false, Fresh); err == nil {
 			t.Fatal("unsafe source reference accepted")

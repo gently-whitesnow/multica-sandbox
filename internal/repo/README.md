@@ -44,7 +44,9 @@ The agent image must contain `git`; startup checks it. Official-base users add i
 
 Attempts receive `GIT_CONFIG_*` entries per claim host, around the alias
 `http://<host>/` (ADR 0016):
-- `url.http://<host>/.insteadOf` maps `https://<host>/`, `git@<host>:` and `ssh://git@<host>/`;
+- `url.http://<host>/.insteadOf` maps `https://<host>/`, `git@<host>:`, `ssh://git@<host>/`
+  and the prefix of each claim URL in another upstream form (`ssh://user@<host>:port/`,
+  `user@<host>:`, `git://<host>/`); `http://<host>/` is the alias itself;
 - `http.http://<host>/.proxy` sends the alias to the relay `url` as an HTTP proxy;
 - `http.http://<host>/.extraHeader` carries a per-attempt `msg_` credential.
 
@@ -141,5 +143,6 @@ Differences from upstream:
   failed settings read keeps the last value instead of failing the checkout;
 - the identity is repository config of the checkout, not a global one, so clones made
   without `multica repo checkout` have none;
-- claims with a non-HTTPS repository URL are rejected, as before; scp-style remotes
-  of bound hosts are only rewritten.
+- claim URLs take upstream's forms (https, http, ssh, git, scp-like), but are fetched
+  over HTTPS from the bound `upstream`: SSH and git ports are ignored, and URLs with a
+  password, query or fragment reject the claim.

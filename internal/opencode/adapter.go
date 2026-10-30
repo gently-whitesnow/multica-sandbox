@@ -123,7 +123,7 @@ func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, 
 		return nil, &execution.RejectedError{Err: fmt.Errorf("MCP connections require mcp_relay: %w", ErrDenied)}
 	}
 	if PinnedHere(task, a.Controller) {
-		return nil, &execution.RejectedError{Err: fmt.Errorf("local_directory resources are not mounted: %w", ErrDenied)}
+		return nil, &execution.RejectedError{Err: fmt.Errorf("project local_directory is pinned to this sandbox runtime; attempts never mount host paths: %w", ErrDenied)}
 	}
 	continuity := Fresh
 	if task.PriorSessionID != "" {
