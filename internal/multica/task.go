@@ -33,6 +33,14 @@ type SkillFile struct {
 	Content string `json:"content"`
 }
 
+// ProjectResource is upstream ProjectResourceData; Ref is type-specific JSON.
+type ProjectResource struct {
+	ID    string          `json:"id"`
+	Type  string          `json:"resource_type"`
+	Ref   json.RawMessage `json:"resource_ref"`
+	Label string          `json:"label,omitempty"`
+}
+
 // SecretEnv holds an agent's custom_env; like Secret, its values never format or marshal.
 type SecretEnv struct{ values map[string]string }
 

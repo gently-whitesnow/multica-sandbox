@@ -96,9 +96,8 @@ the workdir volume only with the helper. The checkout route shares the Multica r
 listener. Checkout follows upstream isolated mode with a fresh clone and serves only
 the claim's repositories.
 
-Refinement (#52, 2026-10-08). Push follows the native runtime instead of an
-`agent/<agent>/*` ref policy: native agents push with host credentials, so the
-relay adds no ref checks. Checkouts set a per-host commit identity (default: agent
+Refinement (#52, 2026-10-08). Push follows the native runtime, which pushes with
+host credentials: the relay adds no `agent/<agent>/*` ref checks. Checkouts set a per-host commit identity (default: agent
 name) and upstream's Co-authored-by hook, following the setting polled every 10 s (#61).
 
 Refinement (#55, 2026-10-08). Pull requests use the unchanged `gh`, as native.
@@ -107,6 +106,11 @@ controller TLS relay. A per-process CA, name-constrained to those names and
 trusted via `SSL_CERT_DIR`, signs its certificates. The relay swaps the Git
 relay credential, sent as the `gh` token, for the workspace token.
 
+Refinement (#81, 2026-10-30). Project resources follow upstream: the brief's Project
+Context and `.multica/project/resources.json` in the workdir, replaced on reuse.
+`github_repo` resources must be claim repositories. A
+`local_directory` pinned to this controller rejects the claim: no host paths.
+
 ## Consequences
 
 Agents can work on repositories and continue sessions without credentials inside
@@ -114,9 +118,8 @@ the attempt. Retained volumes are part of the trust boundary. They are reused
 only for the same workspace, agent and issue, and must not be returned to any
 clean pool (ADR 0004). Each session pays for its first clone. Git credential
 issuance and forge-side branch protection remain deployment-owned. The
-relay bounds pushes only to the claim's repositories; credential scope and forge
-branch protection bound their refs.
+relay bounds pushes to the claim's repositories; credential scope and branch
+protection bound refs.
 
-Implementation follows #47: 07.2 read path, 07.3 push, 07.4 resume and
-retention, 07.5 pull requests. Kubernetes (#6) needs equivalent volumes and a
+Implementation follows #47. Kubernetes (#6) needs equivalent volumes and a
 loopback-capable helper.

@@ -160,6 +160,7 @@ func TestUpstreamLifecycle(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
+	t.Run("project-resources", func(t *testing.T) { projectClaim(t, ctx, api, rt) })
 	t.Run("restart-reconciliation", func(t *testing.T) {
 		for n, want := range []string{"dispatched", "running"} {
 			id := enqueue(t, rt, 5+n)

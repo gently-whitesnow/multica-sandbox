@@ -27,8 +27,10 @@ type Task struct {
 	IssueID               string            `json:"issue_id"`
 	WorkspaceContext      string            `json:"workspace_context"`
 	ChatMessage           string            `json:"chat_message"`
+	ProjectID             string            `json:"project_id"`
 	ProjectTitle          string            `json:"project_title"`
 	ProjectDescription    string            `json:"project_description"`
+	ProjectResources      []ProjectResource `json:"project_resources"`
 	Repos                 []Repository      `json:"repos"`
 	PriorSessionID        string            `json:"prior_session_id"`
 	PriorWorkDir          string            `json:"prior_work_dir"`
