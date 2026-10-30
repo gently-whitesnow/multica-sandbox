@@ -89,7 +89,7 @@ An mdt_ token discovers only its bound workspace; registration never sweeps acti
 
 Workspace discovery is always enabled. A single accessible workspace uses the same
 execution path as many workspaces; `concurrency: 1` limits global execution to one
-attempt at a time. Membership determines which workspaces are served. `"debug": true` adds `debug` log lines naming identity and inference sources, clients, gateways and refusal reasons (such as the token endpoint's error code), never secrets.
+attempt at a time. Membership determines which workspaces are served. The controller logs JSON lines; each attempt ends with an `attempt finished` event (status, reason, timings, session continuity). `"debug": true` adds `DEBUG` events naming identity and inference sources, clients, gateways, relay refusals, failed Multica requests and refusal reasons (such as the token endpoint's error code), never secrets. `"metrics_listen": "0.0.0.0:9464"` serves Prometheus metrics on `/metrics-text` at that address; see [ADR 0025](adrs/0025-quality-metrics-and-structured-logs.md) for metrics, labels and log events.
 
 `docker compose stop` gracefully removes active execution and intentionally leaves
 the controller stopped. Restart with `docker compose up -d`; interrupted tasks are

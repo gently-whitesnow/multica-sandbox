@@ -4,12 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
+	"log/slog"
 	"maps"
 	"slices"
 	"time"
 
 	"github.com/gently-whitesnow/multica-sandbox/internal/controller"
+	"github.com/gently-whitesnow/multica-sandbox/internal/metrics"
 	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
 )
 
@@ -34,7 +35,8 @@ type running struct {
 type fleet struct {
 	api          fleetAPI
 	daemon, dir  string
-	out          io.Writer
+	log          *slog.Logger
+	metrics      *metrics.Metrics
 	known, ready map[string]string
 	served       map[string]bool
 	// active holds attempts by key; perRuntime counts them per workspace runtime.
@@ -75,19 +77,19 @@ type wakeEvent struct {
 // load the working set hovers at memory.high and single readings flap.
 const admissionCooldown = 15 * time.Second
 
-func newFleetState(api fleetAPI, daemon, dir string, out io.Writer, known map[string]string, capacity, workspaceLimit int) *fleet {
-	return &fleet{api: api, daemon: daemon, dir: dir, out: out, known: known, ready: map[string]string{}, served: map[string]bool{},
+func newFleetState(api fleetAPI, daemon, dir string, log *slog.Logger, known map[string]string, capacity, workspaceLimit int) *fleet {
+	return &fleet{api: api, daemon: daemon, dir: dir, log: log, known: known, ready: map[string]string{}, served: map[string]bool{},
 		active: map[string]running{}, perRuntime: map[string]int{}, workspaceLimit: workspaceLimit, done: make(chan completion, capacity), clock: time.Now,
 		wake: make(chan wakeEvent, 64), runtimes: make(chan []string, 1)}
 }
 
-func serveFleet(ctx context.Context, c Config, dir string, api fleetAPI, p *controller.Probe, out io.Writer, admit func() (bool, string)) error {
+func serveFleet(ctx context.Context, c Config, dir string, api fleetAPI, p *controller.Probe, admit func() (bool, string)) error {
 	known, err := readRegistry(dir)
 	if err != nil {
 		return err
 	}
-	f := newFleetState(api, c.Daemon, dir, out, known, c.Concurrency, c.WorkspaceConcurrency)
-	f.admit = admit
+	f := newFleetState(api, c.Daemon, dir, c.logger(), known, c.Concurrency, c.WorkspaceConcurrency)
+	f.admit, f.metrics = admit, c.metrics
 	return f.serve(ctx, c.Concurrency, p.Execute)
 }
 
@@ -112,7 +114,7 @@ func (f *fleet) serve(ctx context.Context, capacity int, execute func(context.Co
 	if err := f.tolerate("sync", f.sync(ctx)); err != nil {
 		return err
 	}
-	fmt.Fprintf(f.out, "ready workspaces=%d capacity=%d workspace_capacity=%d\n", len(f.ready), capacity, f.workspaceLimit)
+	f.log.Info("controller ready", "workspaces", len(f.ready), "capacity", capacity, "workspace_capacity", f.workspaceLimit)
 	if api, ok := f.api.(wakeupAPI); ok {
 		listenCtx, stop := context.WithCancel(ctx)
 		defer stop()
@@ -195,6 +197,7 @@ func (f *fleet) claim(ctx context.Context, capacity int, execute func(context.Co
 		f.active[key] = running{task.RuntimeID, cancel}
 		f.perRuntime[task.RuntimeID]++
 		f.served[task.RuntimeID], claimed = true, true
+		f.metrics.Active(1)
 		go func() { f.done <- completion{key, task.RuntimeID, execute(runCtx, task)} }()
 	}
 	return nil
@@ -213,11 +216,12 @@ func (f *fleet) admitted() bool {
 	calm := ok && now.Sub(f.refused) >= admissionCooldown
 	switch {
 	case calm && f.paused:
-		fmt.Fprintf(f.out, "claims resumed: %s\n", status)
+		f.log.Info("claims resumed", "pool", status)
 	case !ok && !f.paused:
-		fmt.Fprintf(f.out, "claims paused: %s\n", status)
+		f.log.Warn("claims paused", "pool", status)
 	}
 	f.paused = !calm
+	f.metrics.Paused(f.paused)
 	return calm
 }
 
@@ -226,6 +230,7 @@ func (f *fleet) finish(done completion) {
 	if attempt, ok := f.active[done.attempt]; ok {
 		attempt.cancel()
 		delete(f.active, done.attempt)
+		f.metrics.Active(-1)
 		if f.perRuntime[attempt.runtime]--; f.perRuntime[attempt.runtime] <= 0 {
 			delete(f.perRuntime, attempt.runtime)
 		}
@@ -237,19 +242,19 @@ const replayInterval = 5 * time.Second
 func (f *fleet) replay(ctx context.Context) {
 	delivered, err := f.api.Replay(ctx)
 	if delivered > 0 {
-		fmt.Fprintf(f.out, "replayed terminal reports=%d\n", delivered)
+		f.log.Info("terminal reports replayed", "reports", delivered)
 	}
 	if err != nil && ctx.Err() == nil {
-		fmt.Fprintf(f.out, "terminal report replay failed: %v\n", err)
+		f.log.Warn("terminal report replay failed", "error", err.Error())
 	}
 }
 
 // tolerate keeps the controller serving through transient Multica errors, as the upstream daemon does.
-func (f *fleet) tolerate(stage string, err error) error {
+func (f *fleet) tolerate(stage string, err error, attrs ...any) error {
 	if err == nil || !multica.Transient(err) {
 		return err
 	}
-	fmt.Fprintf(f.out, "deferred %s: %v\n", stage, err)
+	f.log.Warn("deferred "+stage, append(attrs, "error", err.Error())...)
 	return nil
 }
 
@@ -261,13 +266,13 @@ func (f *fleet) completed(done completion) error {
 	if errors.As(done.err, &cleanup) {
 		return done.err
 	}
-	if f.tolerate("attempt runtime="+done.runtime, done.err) == nil {
+	if f.tolerate("attempt", done.err, "runtime", done.runtime) == nil {
 		return nil
 	}
 	// A refused task, for example one deleted between claim and start, ends only its
 	// attempt; a revoked runtime is removed by its heartbeat (beat).
 	if inaccessible(done.err) {
-		fmt.Fprintf(f.out, "attempt ended runtime=%s: %v\n", done.runtime, done.err)
+		f.log.Warn("attempt ended", "runtime", done.runtime, "error", done.err.Error())
 		return nil
 	}
 	return done.err
@@ -346,12 +351,12 @@ func (f *fleet) wakeup(ctx context.Context, e wakeEvent, capacity int, execute f
 	switch {
 	case e.connected:
 		if !f.wsUp {
-			fmt.Fprintf(f.out, "wakeups connected runtimes=%d\n", len(f.published))
+			f.log.Info("wakeups connected", "runtimes", len(f.published))
 		}
 		f.wsUp, f.wsErr = true, ""
 	case e.err != nil:
 		if f.wsUp || e.err.Error() != f.wsErr {
-			fmt.Fprintf(f.out, "wakeups unavailable, polling only: %v\n", e.err)
+			f.log.Warn("wakeups unavailable, polling only", "error", e.err.Error())
 		}
 		f.wsUp, f.wsErr = false, e.err.Error()
 	case e.Event == multica.WakeupPendingWork:

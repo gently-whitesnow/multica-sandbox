@@ -63,6 +63,8 @@ type Policy struct {
 	Proxy bool
 	// EncodedSlash admits %2F in segments (GitLab project paths) if the decoded path is clean.
 	EncodedSlash bool
+	// Record receives the upstream status at response headers, or the relay's own refusal.
+	Record func(r *http.Request, status int, err error, elapsed time.Duration)
 }
 
 type Relay struct {
@@ -71,9 +73,19 @@ type Relay struct {
 	proxy  *httputil.ReverseProxy
 }
 
-type leaseKey struct{}
+type exchangeKey struct{}
 
-var errRedirect = errors.New("upstream redirect refused")
+type exchange struct {
+	lease Lease
+	in    *http.Request
+	start time.Time
+}
+
+var (
+	ErrPolicy     = errors.New("request not permitted")
+	ErrCredential = errors.New("invalid relay credential")
+	ErrRedirect   = errors.New("upstream redirect refused")
+)
 
 // dropped never leave the relay: caller credentials, sessions and forwarding hints.
 var dropped = []string{"Authorization", "X-Api-Key", "Api-Key", "Private-Token", "Job-Token", "Cookie", "Proxy-Authorization", "Forwarded", "X-Real-Ip", "X-Actor-Source", "X-User-Id", "X-User-Email"}
@@ -99,7 +111,7 @@ func New(auth Authorizer, p Policy) (*Relay, error) {
 		FlushInterval: -1,
 		ErrorLog:      log.New(io.Discard, "", 0),
 		Rewrite: func(pr *httputil.ProxyRequest) {
-			lease := pr.In.Context().Value(leaseKey{}).(Lease)
+			lease := pr.In.Context().Value(exchangeKey{}).(exchange).lease
 			pr.SetURL(lease.Origin)
 			if lease.DropQuery {
 				pr.Out.URL.RawQuery, pr.Out.URL.ForceQuery = "", false
@@ -129,13 +141,15 @@ func New(auth Authorizer, p Policy) (*Relay, error) {
 			}
 		},
 		ModifyResponse: func(resp *http.Response) error {
+			x := resp.Request.Context().Value(exchangeKey{}).(exchange)
 			if r, ok := auth.(responder); ok {
-				r.Responded(resp.Request.Context().Value(leaseKey{}).(Lease).Attempt, resp.StatusCode)
+				r.Responded(x.lease.Attempt, resp.StatusCode)
 			}
 			// The transport never follows redirects; refusing them also withholds upstream locations.
 			if resp.StatusCode >= 300 && resp.StatusCode < 400 {
-				return errRedirect
+				return ErrRedirect
 			}
+			r.record(x.in, resp.StatusCode, nil, x.start)
 			resp.Header.Del("Set-Cookie")
 			for name := range resp.Header {
 				if reserved(name, p.Reserved) {
@@ -151,7 +165,9 @@ func New(auth Authorizer, p Policy) (*Relay, error) {
 			}
 			return nil
 		},
-		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, _ error) {
+		ErrorHandler: func(w http.ResponseWriter, req *http.Request, err error) {
+			x := req.Context().Value(exchangeKey{}).(exchange)
+			r.record(x.in, 0, err, x.start)
 			deny(w, http.StatusBadGateway, "upstream unavailable")
 		},
 	}
@@ -159,26 +175,38 @@ func New(auth Authorizer, p Policy) (*Relay, error) {
 }
 
 func (r *Relay) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	start := time.Now()
 	absolute := req.URL.Scheme != "" || req.URL.Host != ""
 	if absolute != r.policy.Proxy || (absolute && (req.URL.Scheme != "http" || req.URL.User != nil)) || req.Method == http.MethodConnect || req.Header.Get("Upgrade") != "" || !cleanPath(req.URL, r.policy.EncodedSlash) || !r.policy.Allow(req.URL.Path) {
-		deny(w, http.StatusForbidden, "request not permitted")
+		r.refuse(w, req, http.StatusForbidden, ErrPolicy, start)
 		return
 	}
 	lease, ok := r.auth.Authorize(req)
 	if !ok {
-		deny(w, http.StatusUnauthorized, "invalid relay credential")
+		r.refuse(w, req, http.StatusUnauthorized, ErrCredential, start)
 		return
 	}
 	defer lease.Release()
 	if lease.Origin == nil || (lease.Path != "" && !strings.HasPrefix(lease.Path, "/")) {
-		deny(w, http.StatusForbidden, "request not permitted")
+		r.refuse(w, req, http.StatusForbidden, ErrPolicy, start)
 		return
 	}
-	ctx, cancel := context.WithCancel(context.WithValue(req.Context(), leaseKey{}, lease))
+	ctx, cancel := context.WithCancel(context.WithValue(req.Context(), exchangeKey{}, exchange{lease, req, start}))
 	defer cancel()
 	defer context.AfterFunc(lease.Context, cancel)()
 	req.Body = http.MaxBytesReader(w, req.Body, r.policy.Limit)
 	r.proxy.ServeHTTP(w, req.WithContext(ctx))
+}
+
+func (r *Relay) refuse(w http.ResponseWriter, req *http.Request, status int, err error, start time.Time) {
+	r.record(req, 0, err, start)
+	deny(w, status, err.Error())
+}
+
+func (r *Relay) record(req *http.Request, status int, err error, start time.Time) {
+	if r.policy.Record != nil {
+		r.policy.Record(req, status, err, time.Since(start))
+	}
 }
 
 // cleanPath rejects traversal, empty segments and encoded separators the upstream router could decode.

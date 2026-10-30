@@ -368,6 +368,15 @@ func (r *running) Result() execution.Result {
 	}
 	output, session, u := r.events.result()
 	t.InputTokens, t.OutputTokens, t.CachedTokens = u.Input, u.Output, u.CacheRead
+	// A failed resume clears resume and continues in a new session.
+	switch {
+	case r.task.PriorSessionID == "":
+		t.Continuity = "fresh"
+	case r.resume != "":
+		t.Continuity = "resumed"
+	default:
+		t.Continuity = "lost"
+	}
 	return execution.Result{Output: output, SessionID: session, WorkDir: r.workDir, RetiredSessionID: r.retired, Disposable: r.workDir == "", Telemetry: t}
 }
 

@@ -206,7 +206,7 @@ func restartFailsClosed(t *testing.T, w *workspaceInference, network, controller
 	}
 	dockerTest(t, "restart", "--time", "5", controllerName)
 	eventually(t, "controller ready after restart", func() bool {
-		return strings.Count(dockerTest(t, "logs", controllerName), "ready workspaces=") >= 2
+		return strings.Count(dockerTest(t, "logs", controllerName), readyEvent) >= 2
 	})
 	// The restarted relay answers, but the in-memory grant is gone: fail closed.
 	if status := relay("fixture"); status != "401" {

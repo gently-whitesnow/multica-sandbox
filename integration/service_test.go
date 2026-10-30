@@ -99,7 +99,7 @@ func containerService(t *testing.T, api *multica.Client, rt multica.Runtime) {
 	}
 	f := prepareService(t)
 	cid := f.compose("ps", "-q", "controller")
-	eventually(t, "controller ready", func() bool { return strings.Contains(dockerTest(t, "logs", cid), "ready workspaces=") })
+	eventually(t, "controller ready", func() bool { return strings.Contains(dockerTest(t, "logs", cid), readyEvent) })
 	started := dockerTest(t, "inspect", "--format", "{{.State.StartedAt}}", cid)
 	first, second := enqueue(t, rt, 30), enqueue(t, rt, 31)
 	firstContainer := waitServiceExecution(t, cid, first)
@@ -122,7 +122,7 @@ func containerService(t *testing.T, api *multica.Client, rt multica.Runtime) {
 
 func waitServiceExecution(t *testing.T, cid, task string) string {
 	t.Helper()
-	eventually(t, "execution started", func() bool { return strings.Contains(dockerTest(t, "logs", cid), "started task="+task) })
+	eventually(t, "execution started", func() bool { return strings.Contains(dockerTest(t, "logs", cid), attemptStarted(task)) })
 	got := ownedContainers(t)
 	if got == "" {
 		t.Fatal("no environment for started attempt")

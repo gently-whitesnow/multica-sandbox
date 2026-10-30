@@ -6,6 +6,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
@@ -38,7 +40,13 @@ func (l *fleetLog) count(s string) int {
 	defer l.Unlock()
 	return strings.Count(l.text.String(), s)
 }
-func fleetWorkspace(n int) string { return fmt.Sprintf("50000000-0000-4000-8000-%012d", n) }
+
+// readyEvent marks a serving controller in its log.
+const readyEvent = `"msg":"controller ready"`
+
+// attemptStarted matches the controller log event of a started attempt.
+func attemptStarted(task string) string { return `"msg":"attempt started","task":"` + task + `"` }
+func fleetWorkspace(n int) string       { return fmt.Sprintf("50000000-0000-4000-8000-%012d", n) }
 
 func seedFleet(t *testing.T) string {
 	var query strings.Builder
@@ -77,7 +85,8 @@ func multiWorkspace(t *testing.T) {
 	if err := os.WriteFile(tokenPath, []byte(pat), 0600); err != nil {
 		t.Fatal(err)
 	}
-	c := service.Config{Server: server.URL, Concurrency: 2, Daemon: daemon, Image: image, Command: []string{"/bin/sh", "-c", "sleep 12"}, Timeout: "30s"}
+	metricsAddr := freeAddress(t)
+	c := service.Config{Server: server.URL, Concurrency: 2, Daemon: daemon, Image: image, Command: []string{"/bin/sh", "-c", "sleep 12"}, Timeout: "30s", MetricsListen: metricsAddr}
 	logs := &fleetLog{}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -88,7 +97,7 @@ func multiWorkspace(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	eventually(t, "100 workspaces registered", func() bool { return logs.contains("ready workspaces=100") })
+	eventually(t, "100 workspaces registered", func() bool { return logs.contains(readyEvent + `,"workspaces":100,`) })
 	startRequests, startClaims := requests.Load(), claims.Load()
 	started := time.Now()
 	time.Sleep(16 * time.Second)
@@ -109,7 +118,7 @@ func multiWorkspace(t *testing.T) {
 	claimStarted := time.Now()
 	first := enqueueWorkspace(t, runtime(1), 101, fleetWorkspace(1))
 	second := enqueueWorkspace(t, runtime(2), 102, fleetWorkspace(2))
-	eventually(t, "two workspace attempts started", func() bool { return logs.contains("started task="+first) && logs.contains("started task="+second) })
+	eventually(t, "two workspace attempts started", func() bool { return logs.contains(attemptStarted(first)) && logs.contains(attemptStarted(second)) })
 	t.Logf("two tasks started across 100 workspaces in %s", time.Since(claimStarted).Round(time.Millisecond))
 	third := enqueueWorkspace(t, runtime(3), 103, fleetWorkspace(3))
 	status(t, api, third, "queued")
@@ -118,7 +127,46 @@ func multiWorkspace(t *testing.T) {
 	}
 	fleetMembershipChange(t, api, logs, first, second)
 	waitTask(t, api, third, "completed")
-	if logs.count("ready workspaces=") != 1 {
+	if logs.count(readyEvent) != 1 {
 		t.Fatal("unexpected restart")
 	}
+	fleetMetrics(t, metricsAddr, third)
+}
+
+// fleetMetrics checks the scrape after real attempts: outcomes, Multica calls, no IDs.
+func fleetMetrics(t *testing.T, addr, task string) {
+	t.Helper()
+	var text string
+	// Slots are released after cleanup, which can follow the task's completed status.
+	eventually(t, "completed attempt exported and slots released", func() bool {
+		resp, err := http.Get("http://" + addr + "/metrics-text")
+		if err != nil {
+			return false
+		}
+		defer resp.Body.Close()
+		data, _ := io.ReadAll(resp.Body)
+		text = string(data)
+		return strings.Contains(text, `sandbox_attempt_duration_seconds_count{kind="issue",status="success"}`) && strings.Contains(text, "sandbox_attempt_active 0")
+	})
+	for _, want := range []string{
+		`http_client_request_duration_seconds_count{method="POST",path="/api/daemon/tasks/claim",status_code="200",target_service_name="multica"}`,
+		`http_client_request_duration_seconds_count{method="POST",path="/api/daemon/tasks/{id}/start",status_code="200",target_service_name="multica"}`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("scrape lacks %s:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, task) || strings.Contains(text, fleetWorkspace(3)) || strings.Contains(text, daemon) {
+		t.Fatal("identifier in metrics")
+	}
+}
+
+func freeAddress(t *testing.T) string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	return listener.Addr().String()
 }
