@@ -89,7 +89,7 @@ func (g *Relay) Issue(attempt, workspace string, urls []string) (map[string]stri
 // without prompts, update checks or telemetry; a single host of a kind is the default.
 func forgeEnv(env map[string]string, opaque string, github, gitlab []string) {
 	if len(github)+len(gitlab) > 0 {
-		env["SSL_CERT_DIR"] = CertDir
+		env["SSL_CERT_DIR"] = CertDirs
 	}
 	if len(github) > 0 {
 		env["GH_TOKEN"], env["GH_ENTERPRISE_TOKEN"], env["GH_PROMPT_DISABLED"], env["GH_NO_UPDATE_NOTIFIER"] = opaque, opaque, "1", "1"

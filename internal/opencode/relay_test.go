@@ -72,8 +72,8 @@ func TestRelayAttemptDeliversOnlyOpaqueCredential(t *testing.T) {
 		t.Fatal("upstream instructions missing")
 	}
 	var config struct{ Permission map[string]string }
-	if json.Unmarshal(workload.files["/workspace/opencode.json"], &config) != nil || config.Permission["bash"] != "allow" || config.Permission["webfetch"] != "" || config.Permission["*"] != "deny" {
-		t.Fatal("CLI access requires local bash only")
+	if json.Unmarshal(workload.files["/workspace/opencode.json"], &config) != nil || config.Permission["*"] != "allow" || config.Permission["question"] != "deny" {
+		t.Fatal("relay attempts need native local tools")
 	}
 	if err := run.Remove(context.Background()); err != nil {
 		t.Fatal(err)
@@ -169,7 +169,7 @@ func TestForgeAttemptGetsGhTokenAndCA(t *testing.T) {
 		t.Fatal(err)
 	}
 	env := <-workload.envs
-	if !strings.HasPrefix(env["GH_TOKEN"], repo.GitPrefix) || env["GH_HOST"] != "github.com" || env["SSL_CERT_DIR"] != repo.CertDir ||
+	if !strings.HasPrefix(env["GH_TOKEN"], repo.GitPrefix) || env["GH_HOST"] != "github.com" || env["SSL_CERT_DIR"] != repo.CertDirs ||
 		string(workload.files[repo.CAPath]) != string(git.CA()) || strings.Contains(strings.Join(values(env), " "), "host-secret") {
 		t.Fatalf("gh environment or CA: %v", env)
 	}

@@ -61,7 +61,7 @@ end at cleanup and on restart.
   host, `/api/` only) to loopback, where the helper forwards port 443 to the relay.
 - The relay terminates TLS with certificates from a per-process CA. The CA is
   name-constrained to those names and trusted through `SSL_CERT_DIR`
-  (`/workspace/certs`). It checks that the Host header matches the TLS name.
+  (`/workspace/certs:/etc/ssl/certs`, so clients that read only that variable keep the system roots). It checks that the Host header matches the TLS name.
 - `GH_TOKEN` and `GH_ENTERPRISE_TOKEN` carry the attempt's `msg_` credential, and
   `GH_HOST` names a single bound host. The relay sends `token <password>` upstream.
 - For GitLab hosts `GITLAB_TOKEN` carries it and `GITLAB_HOST` names a single bound host;

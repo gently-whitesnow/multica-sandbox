@@ -48,6 +48,29 @@ func TestNativeStoreContract(t *testing.T) {
 	}
 }
 
+func TestLocalPermissions(t *testing.T) {
+	data, err := Config(nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config struct {
+		Permission map[string]string `json:"permission"`
+	}
+	// The container is the boundary: every tool is allowed, web research included.
+	if json.Unmarshal(data, &config) != nil || config.Permission["*"] != "allow" {
+		t.Fatalf("local tools not allowed: %s", data)
+	}
+	// Nobody answers a prompt to a person or a loop confirmation inside an attempt.
+	for _, tool := range []string{"question", "doom_loop"} {
+		if config.Permission[tool] != "deny" {
+			t.Fatalf("%s not denied: %s", tool, data)
+		}
+	}
+	if data, _ := Config(nil, false); !strings.Contains(string(data), `"*":"deny"`) {
+		t.Fatalf("local tools without the relay: %s", data)
+	}
+}
+
 func TestSelectAdmitsOnlyRelayableEndpoints(t *testing.T) {
 	for _, server := range []string{
 		`{"url":"https://tools.example.invalid/mcp","type":"sse"}`,
