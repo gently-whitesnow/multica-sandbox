@@ -7,9 +7,11 @@ import (
 	_ "embed"
 	"encoding/json"
 	"io"
+	"maps"
 	"net/http"
 	"path"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -46,9 +48,16 @@ const (
 	SettingsRefresh = 10 * time.Second
 )
 
-// Settings reads the workspace Co-authored-by setting (upstream workspaceCoAuthoredByEnabled).
+// Settings reads the workspace Co-authored-by setting (upstream workspaceCoAuthoredByEnabled)
+// and repositories (upstream GetWorkspaceRepos).
 type Settings interface {
 	CoAuthoredBy(context.Context, string) (bool, error)
+	WorkspaceRepositories(context.Context, string) ([]string, error)
+}
+
+// Granter extends a live attempt's Git relay grant to a workspace repository.
+type Granter interface {
+	Allow(attempt, url string) (alias, prefix string, ok bool)
 }
 
 // Target runs controller-owned commands as the attempt user (execution.ProjectedRun).
@@ -77,6 +86,7 @@ type Checkout struct {
 	Auth     Authorizer
 	Hosts    *Hosts
 	Settings Settings
+	Git      Granter
 	mu       sync.Mutex
 	tasks    map[string]*active
 }
@@ -203,6 +213,19 @@ func (c *Checkout) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	claimRef, allowed := task.Repos[req.URL]
+	env, rewrite := task.Env, []string{}
+	if !allowed && c.Settings != nil {
+		// Like upstream ensureRepoReady, a URL outside the claim rereads the workspace
+		// repositories; project claims list only the project's.
+		repos, err := c.Settings.WorkspaceRepositories(r.Context(), task.Workspace)
+		if err != nil {
+			http.Error(w, "refresh workspace repos: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if allowed = slices.Contains(repos, req.URL); allowed && c.Git != nil {
+			env, rewrite = c.grant(lease.Attempt, req.URL, task.Env)
+		}
+	}
 	name := Name(req.URL)
 	if !allowed || name == "." || name == ".." {
 		http.Error(w, "repo is not configured for this workspace", http.StatusBadRequest)
@@ -241,7 +264,7 @@ func (c *Checkout) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer task.publish.Unlock()
 	commitName, commitEmail := c.Hosts.Identity(task.Workspace, req.URL, task.AgentName)
 	args := []string{"/bin/sh", "-c", script, "checkout", req.URL, ref, Branch(task.AgentName, task.ID), flag[req.Fresh], req.WorkDir, name, WorkDir, commitName, commitEmail, flag[c.setting(ctx, task)], hookText}
-	out, _ := task.Target.Capture(ctx, args, task.Env)
+	out, _ := task.Target.Capture(ctx, append(args, rewrite...), env)
 	if ctx.Err() != nil {
 		return
 	}
@@ -297,6 +320,27 @@ func Branch(agent, task string) string {
 	}
 	key := strings.ReplaceAll(task, "-", "")
 	return "agent/" + name + "/" + key[max(0, len(key)-12):]
+}
+
+// grant extends the attempt's Git relay grant to a workspace repository. A remote prefix
+// the attempt environment does not rewrite is added for the clone and kept in the
+// checkout's configuration.
+func (c *Checkout) grant(attempt, url string, base map[string]string) (map[string]string, []string) {
+	alias, prefix, ok := c.Git.Allow(attempt, url)
+	if !ok || prefix == "" {
+		return base, nil
+	}
+	n, err := strconv.Atoi(base["GIT_CONFIG_COUNT"])
+	if err != nil {
+		n = 0
+	}
+	env := maps.Clone(base)
+	if env == nil {
+		env = map[string]string{}
+	}
+	env["GIT_CONFIG_KEY_"+strconv.Itoa(n)], env["GIT_CONFIG_VALUE_"+strconv.Itoa(n)] = "url."+alias+".insteadOf", prefix
+	env["GIT_CONFIG_COUNT"] = strconv.Itoa(n + 1)
+	return env, []string{alias, prefix}
 }
 
 // Name is upstream's checkout directory name for a repository URL.

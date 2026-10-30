@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
+	gitrepo "github.com/gently-whitesnow/multica-sandbox/internal/repo"
 )
 
 var ErrDenied = errors.New("OpenCode task projection denied")
@@ -96,7 +97,7 @@ const (
 // Prompt returns the per-turn prompt and, for upstream CLI issue and chat tasks, the AGENTS.md brief.
 // With checkout, the brief offers `multica repo checkout` for the claim repositories.
 func Prompt(t multica.Task, upstream, checkout bool, c Continuity) ([]byte, []byte, error) {
-	if t.Agent == nil || !validComments(t) || chatTask(t) && !validChat(t) {
+	if t.Agent == nil || !validComments(t) || chatTask(t) && !validChat(t) || !validProject(t) {
 		return nil, nil, ErrDenied
 	}
 	sources, err := repositories(t)
@@ -119,7 +120,11 @@ func Prompt(t multica.Task, upstream, checkout bool, c Continuity) ([]byte, []by
 		}
 		brief = upstreamBrief(t, sources, checkout)
 	} else {
-		sections := []string{t.Agent.Instructions, t.WorkspaceContext, "Assigned issue: " + t.IssueID, t.ProjectTitle, t.ProjectDescription, t.TriggerCommentContent}
+		sections := []string{t.Agent.Instructions, t.WorkspaceContext, "Assigned issue: " + t.IssueID, t.ProjectTitle, t.ProjectDescription}
+		for _, r := range t.ProjectResources {
+			sections = append(sections, "Project resource: "+projectResource(r))
+		}
+		sections = append(sections, t.TriggerCommentContent)
 		for _, comment := range t.CoalescedComments {
 			sections = append(sections, comment.Content)
 		}
@@ -133,7 +138,7 @@ func Prompt(t multica.Task, upstream, checkout bool, c Continuity) ([]byte, []by
 		// Upstream appends the notice to the per-turn message, never the brief.
 		prompt = strings.TrimRight(prompt, "\n") + "\n\n" + strings.TrimRight(notice, "\n")
 	}
-	if len(prompt) > 65536 || len(brief) > 65536 {
+	if _, err := projectFile(t); err != nil || len(prompt) > 65536 || len(brief) > 65536 {
 		return nil, nil, ErrDenied
 	}
 	if brief == "" {
@@ -142,14 +147,19 @@ func Prompt(t multica.Task, upstream, checkout bool, c Continuity) ([]byte, []by
 	return []byte(prompt), []byte(brief), nil
 }
 
+// maxRepositories bounds claim repositories; upstream sets no limit.
+const maxRepositories = 256
+
 func repositories(t multica.Task) (string, error) {
-	if len(t.Repos) > 32 {
+	if len(t.Repos) > maxRepositories {
 		return "", ErrDenied
 	}
 	sources := []string{}
 	for _, repo := range t.Repos {
+		// Upstream URL forms the Git relay serves, or any credential-free HTTPS reference.
 		u, err := url.Parse(repo.URL)
-		if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || strings.ContainsAny(repo.URL, "\r\n\x00") {
+		https := err == nil && u.Scheme == "https" && u.Hostname() != "" && u.User == nil && u.RawQuery == "" && u.Fragment == ""
+		if !https && !gitrepo.ValidURL(repo.URL) || strings.ContainsAny(repo.URL, "\r\n\x00") {
 			return "", ErrDenied
 		}
 		encoded, err := json.Marshal(repo)

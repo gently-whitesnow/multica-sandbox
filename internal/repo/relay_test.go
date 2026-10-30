@@ -72,11 +72,11 @@ func TestGitRelayServesOnlyClaimRepositories(t *testing.T) {
 	server := httptest.NewServer(handler)
 	defer server.Close()
 	g.URL = server.URL
-	env, err := g.Issue("attempt", workspace, []string{"https://git.example.test/fixture.git", "https://other.example.test/other.git", "ssh://git.example.test/x"})
+	env, err := g.Issue("attempt", workspace, []string{"https://git.example.test/fixture.git", "https://other.example.test/other.git", "ssh://deploy@git.example.test:2222/fixture.git", "http://git.example.test/fixture.git"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(strings.Join(values(env), " "), "host-secret") || env["GIT_CONFIG_COUNT"] != "5" {
+	if strings.Contains(strings.Join(values(env), " "), "host-secret") || env["GIT_CONFIG_COUNT"] != "6" {
 		t.Fatalf("unexpected attempt Git environment: %v", env)
 	}
 	work := filepath.Join(t.TempDir(), "c")
@@ -102,7 +102,7 @@ func TestGitRelayServesOnlyClaimRepositories(t *testing.T) {
 		t.Fatal("claim repository clone failed:", err)
 	}
 	// SSH remote forms of claim repositories go through the relay as well.
-	for _, url := range []string{"git@git.example.test:fixture.git", "ssh://git@git.example.test/fixture.git"} {
+	for _, url := range []string{"git@git.example.test:fixture.git", "ssh://git@git.example.test/fixture.git", "ssh://deploy@git.example.test:2222/fixture.git", "http://git.example.test/fixture.git"} {
 		if err := clone(url); err != nil {
 			t.Fatalf("%s not rewritten to the relay: %v", url, err)
 		}
@@ -159,9 +159,55 @@ func TestGitRelayServesOnlyClaimRepositories(t *testing.T) {
 			t.Errorf("%s: %d", name, w.Code)
 		}
 	}
+	// A workspace repository joins the live grant on checkout; other hosts and attempts do not.
+	if _, _, ok := g.Allow("other-attempt", "https://git.example.test/other.git"); ok {
+		t.Fatal("unknown attempt extended")
+	}
+	if _, _, ok := g.Allow("attempt", "https://other.example.test/other.git"); ok {
+		t.Fatal("grant extended to another workspace's host")
+	}
+	if alias, prefix, ok := g.Allow("attempt", "git@git.example.test:other.git"); !ok || alias != "http://git.example.test/" || prefix != "" {
+		t.Fatalf("workspace repository grant: %q %q %v", alias, prefix, ok)
+	}
+	if err := clone("https://git.example.test/other.git"); err != nil {
+		t.Fatal("granted workspace repository clone failed:", err)
+	}
+	if _, prefix, _ := g.Allow("attempt", "ssh://ops@git.example.test:2200/other.git"); prefix != "ssh://ops@git.example.test:2200/" {
+		t.Fatalf("unrewritten prefix not returned: %q", prefix)
+	}
 	g.Revoke("attempt")
 	if clone("https://git.example.test/fixture.git") == nil || attempt("-C", work, "push", "-q", "origin", "HEAD:refs/heads/late") == nil {
 		t.Fatal("revoked grant still clones or pushes")
+	}
+	if _, _, ok := g.Allow("attempt", "https://git.example.test/other.git"); ok {
+		t.Fatal("revoked attempt extended")
+	}
+}
+
+func TestClaimURLFormsMatchUpstream(t *testing.T) {
+	for raw, key := range map[string]string{
+		"https://Git.Example.test/Team/Repo.git/":    "git.example.test/Team/Repo",
+		"https://git.example.test:8443/team/repo":    "git.example.test:8443/team/repo",
+		"http://git.example.test/team/repo.git":      "git.example.test/team/repo",
+		"ssh://git@git.example.test/team/repo.git":   "git.example.test/team/repo",
+		"ssh://deploy@git.example.test:22/team/repo": "git.example.test/team/repo",
+		"git://git.example.test/team/repo.git":       "git.example.test/team/repo",
+		"git@git.example.test:team/repo.git":         "git.example.test/team/repo",
+		"git.example.test:team/repo":                 "git.example.test/team/repo",
+	} {
+		if _, got, _, ok := repoKey(raw); !ok || got != key {
+			t.Errorf("%s: key %q, %v; want %q", raw, got, ok, key)
+		}
+	}
+	for _, raw := range []string{
+		"https://user@git.example.test/team/repo", "ssh://git:secret@git.example.test/team/repo", "https://git.example.test/team/repo?token=x",
+		"https://git.example.test/team/repo#x", "file:///srv/repo", "ftp://git.example.test/team/repo", "git@git.example.test:/srv/repo",
+		"git@git.example.test:../repo", "https://git.example.test/team/../repo", "https://git.example.test/re\npo", "git@git.example.test:team/re\npo",
+		"git@:team/repo", "a@b@git.example.test:team/repo", "C:\\repo", "repo",
+	} {
+		if ValidURL(raw) {
+			t.Errorf("%q accepted", raw)
+		}
 	}
 }
 

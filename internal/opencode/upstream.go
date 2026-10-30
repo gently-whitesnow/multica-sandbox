@@ -291,9 +291,7 @@ func upstreamBrief(t multica.Task, repositories string, checkout bool) string {
 		b.WriteString("For final-result comments, use `--output table` to confirm success without echoing the body. Use `--output json` instead when you need the returned comment ID. Gate the cleanup on the post succeeding (`&&`): a cleanup command run unconditionally succeeds after a failed post and makes the whole shell call exit 0.\n\n")
 	}
 	b.WriteString(repositories)
-	if t.ProjectTitle != "" || t.ProjectDescription != "" {
-		b.WriteString("## Project Context\n\n" + strings.TrimSpace(t.ProjectTitle+"\n\n"+t.ProjectDescription) + "\n\n")
-	}
+	b.WriteString(projectContext(t, checkout))
 	b.WriteString("### Workflow\n\n")
 	if chat {
 		chatWorkflow(&b)

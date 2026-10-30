@@ -126,6 +126,9 @@ func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, 
 	if len(connections) != 0 && a.MCPRelay == nil {
 		return nil, &execution.RejectedError{Err: fmt.Errorf("MCP connections require mcp_relay: %w", ErrDenied)}
 	}
+	if PinnedHere(task, a.Controller) {
+		return nil, &execution.RejectedError{Err: fmt.Errorf("project local_directory is pinned to this sandbox runtime; attempts never mount host paths: %w", ErrDenied)}
+	}
 	continuity := Fresh
 	if task.PriorSessionID != "" {
 		continuity = Lost
@@ -206,7 +209,8 @@ func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, 
 	if err != nil {
 		return nil, r.reject(err)
 	}
-	if err = r.initialize(runCtx, brief); err != nil {
+	project, _ := projectFile(task)
+	if err = r.initialize(runCtx, brief, project); err != nil {
 		return nil, r.reject(err)
 	}
 	if a.Checkout != nil {
@@ -225,16 +229,16 @@ func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, 
 	return r, nil
 }
 
-func (r *running) initialize(ctx context.Context, brief []byte) error {
-	// The global config directory is sealed after skills are laid down in it.
-	script, seal := `set -eu; mkdir -p /workspace/config/opencode; printf "{}" > /workspace/config/opencode/opencode.json; printf "*\n" > /workspace/config/opencode/.gitignore`, "chmod 555 /workspace/config/opencode"
+func (r *running) initialize(ctx context.Context, brief, project []byte) error {
+	// The global config directory is sealed after skills are laid down in it; a stale project file goes.
+	script, seal := `set -eu; mkdir -p /workspace/config/opencode; printf "{}" > /workspace/config/opencode/opencode.json; printf "*\n" > /workspace/config/opencode/.gitignore; rm -rf "$1" || true`, "chmod 555 /workspace/config/opencode"
 	if len(r.skills) == 0 {
 		script += "; " + seal
 	}
 	if r.workDir != "" {
 		script += `; mkdir -p -m 700 "${0%/*}"`
 	}
-	if err := r.workload.Execute(ctx, []string{"/bin/sh", "-c", script, SessionDB}); err != nil {
+	if err := r.workload.Execute(ctx, []string{"/bin/sh", "-c", script, SessionDB, ProjectPath}); err != nil {
 		return fmt.Errorf("OpenCode config directory: %w", ErrDenied)
 	}
 	if len(r.skills) > 0 {
@@ -265,6 +269,10 @@ func (r *running) initialize(ctx context.Context, brief []byte) error {
 		if err := r.workload.Write(ctx, path, data); err != nil {
 			return err
 		}
+	}
+	// As upstream, an unwritable project file degrades to the brief, which lists the resources.
+	if brief != nil && project != nil {
+		_ = r.workload.Write(ctx, ProjectPath, project)
 	}
 	return nil
 }

@@ -3,11 +3,11 @@
 # Git relay instead of a bare cache; coauthor.sh precedes it. Runs as the attempt user;
 # it prints result lines, or "error <kind> <message>" ("forbidden" carries no reason,
 # as upstream's refusal). Arguments: url ref branch fresh
-# workdir name root commit-name commit-email co-author hook.
+# workdir name root commit-name commit-email co-author hook [alias prefix].
 set -u
 fail() { printf 'error %s %s\n' "$1" "$(printf '%s' "$2" | tr '\r\n' '  ' | cut -c1-600)"; exit 1; }
 run() { out=$("$@" 2>&1) || fail failed "$(printf '%s\n' "$out" | tail -n 3)"; }
-url=$1 ref=$2 branch=$3 fresh=$4 name=$6 root=$7 author=$8 email=$9 coauthor=${10} hooktext=${11}
+url=$1 ref=$2 branch=$3 fresh=$4 name=$6 root=$7 author=$8 email=$9 coauthor=${10} hooktext=${11} alias=${12:-} prefix=${13:-}
 dir=$(cd -P -- "$5" 2>/dev/null && pwd -P) || fail forbidden workdir
 case "$dir" in "$root" | "$root"/*) ;; *) fail forbidden workdir ;; esac
 path=$dir/$name
@@ -36,6 +36,9 @@ configure() {
 	run git -C "$path" config user.name "$author"
 	run git -C "$path" config user.email "$email"
 	hook "$(git -C "$path" rev-parse --absolute-git-dir)/hooks" "$coauthor" 1 || fail failed "install prepare-commit-msg hook"
+	# A workspace repository's remote form the attempt environment does not rewrite.
+	[ -z "$prefix" ] || git -C "$path" config --get-all "url.$alias.insteadOf" | grep -qxF -- "$prefix" ||
+		run git -C "$path" config --add "url.$alias.insteadOf" "$prefix"
 }
 start() {
 	if git -C "$path" show-ref --verify --quiet "refs/heads/$branch"; then branch=$branch-$(date +%s); fi

@@ -27,7 +27,8 @@ import (
 var networkPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
 var envPattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,63}$`)
 var hostPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$`)
-var projectionPaths = map[string]bool{"/workspace/opencode.json": true, "/workspace/AGENTS.md": true, repo.CAPath: true}
+var projectionPaths = map[string]bool{"/workspace/opencode.json": true, "/workspace/AGENTS.md": true, repo.CAPath: true,
+	repo.WorkDir + "/.multica/project/resources.json": true}
 
 type Projected struct {
 	Backend

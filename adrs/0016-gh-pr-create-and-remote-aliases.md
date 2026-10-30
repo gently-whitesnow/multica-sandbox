@@ -82,6 +82,14 @@ or personal token with that token alone, so nothing is refused there. Configurab
 REST deny rules were dropped: GraphQL mutations bypass them, and the token's role
 is the real bound.
 
+Refinement (#81, 2026-10-30). Claim URLs take every form upstream accepts: `https`,
+`http`, `ssh`, `git` and scp-like `[user@]host:path`, for workspace and project
+repositories alike. The grant key stays host and path, so no form widens access. Each
+non-default prefix, such as `ssh://deploy@<host>:2222/`, gets its own `insteadOf` to
+the alias; the relay still fetches over HTTPS from the bound upstream. URLs with a
+password, query or fragment reject the claim. Aliases cover every host the workspace
+binds, so workspace repositories admitted during an attempt need no new environment.
+
 ## Consequences
 
 The unchanged `gh pr create` works against the fixture for github.com and Enterprise

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gently-whitesnow/multica-sandbox/internal/execution"
+	"github.com/gently-whitesnow/multica-sandbox/internal/opencode"
 )
 
 func TestProjectedAttemptIsolation(t *testing.T) {
@@ -94,6 +95,13 @@ cp "$TMPDIR/run" /tmp/run; ! /tmp/run; df -k /workspace | awk 'NR==2 { exit !($2
 	}
 	if err := b.Write(ctx, "/workspace/AGENTS.md", []byte("other-workspace-private")); err != nil {
 		t.Fatal(err)
+	}
+	// The project file lands in the agent working directory, readable by the agent.
+	if err := b.Write(ctx, opencode.ProjectPath, []byte(`{"resources":[]}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Execute(ctx, []string{"/bin/sh", "-c", `cd /workspace/work && test "$(cat .multica/project/resources.json)" = '{"resources":[]}'`}); err != nil {
+		t.Fatal("project file not in the agent working directory:", err)
 	}
 	if err := b.Execute(ctx, []string{"/bin/sh", "-c", `(while true; do printf "HTTP/1.1 200 OK\r\nContent-Length: 7\r\n\r\nprivate" | nc -l -p 8080 -w 1; done) > /tmp/server.log 2>&1 < /dev/null &`}); err != nil {
 		t.Fatal(err)

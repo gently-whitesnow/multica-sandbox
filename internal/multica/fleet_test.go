@@ -22,6 +22,23 @@ func TestBatchRejectsCrossWorkspaceAndOverclaim(t *testing.T) {
 	}
 }
 
+func TestWorkspaceRepositoriesListURLs(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/daemon/workspaces/"+testID+"/repos" {
+			http.NotFound(w, r)
+		}
+		fmt.Fprint(w, `{"workspace_id":"`+testID+`","repos":[{"url":"https://git.example.invalid/team/a.git","ref":"main"},{"url":""},{"url":"git@git.example.invalid:team/b.git"}],"settings":{}}`)
+	}))
+	defer server.Close()
+	api, _ := NewAllowHTTP(server.URL, "token")
+	if got, err := api.WorkspaceRepositories(context.Background(), testID); err != nil || len(got) != 2 || got[0] != "https://git.example.invalid/team/a.git" || got[1] != "git@git.example.invalid:team/b.git" {
+		t.Fatalf("workspace repositories: %v %v", got, err)
+	}
+	if _, err := api.WorkspaceRepositories(context.Background(), "../x"); err == nil {
+		t.Fatal("invalid workspace accepted")
+	}
+}
+
 func TestCoAuthoredByFollowsWorkspaceSettings(t *testing.T) {
 	for body, want := range map[string]bool{
 		`{"settings":{}}`: true,
