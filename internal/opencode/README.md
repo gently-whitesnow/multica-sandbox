@@ -115,7 +115,7 @@ Engine 29.2.1 (runc, cgroup v2, `linux/arm64`; `amd64` is unverified). Reproduce
 | Session resume: a comment follow-up resumes the retained native session in the same workdir with upstream warm hints (comment count, changed issue fields, multi-thread replies); every hint branch, continuity gate and malformed delta; a missing session is retired and replaced fresh; other agents, issues and workspaces get other volumes; concurrent writers, forged `prior_work_dir` and unlabelled volumes are refused; session cap and TTL; the periodic sweep removes sessions of done or cancelled issues per workspace and keeps unknown, failed, recent and busy ones; restart keeps only labelled session volumes; no credential in the volume | `session_test.go`; `projection_test.go`; `sessions_gc_test.go`; `internal/multica/issues_test.go`; `sessions_test.go` (CONTAINERS); `integration/issue_gc_test.go` (UPSTREAM); `integration/multica_relay_test.go` (SERVICE, OPENCODE) |
 | Skills: upstream slugs, frontmatter and visibility (differential fuzz against upstream); escaping, duplicate and oversized skill files rejected; tree extracted under the fixed root as the attempt user; brief Skills and Sub-issue sections; chat selection; every `images.txt` image discovers the global root (1.x lists the skill; 2.x loads the root, and the spike saw the skill in its system prompt) | `skills_test.go`; `resources_test.go`; `projected_test.go`, `skills_containers_test.go` (CONTAINERS) |
 | Web chat: upstream chat prompt, brief and transcript continuity notice byte for byte; a second web chat message resumes the first message's session in the chat's retained workdir after a transcript read; channel chats keep the legacy prompt; malformed chat claims rejected; other chats and an issue with the same ID get other volumes; forged `prior_work_dir` refused | `chat_test.go`; `sessions_test.go` (CONTAINERS); `integration/multica_relay_test.go` (SERVICE, OPENCODE) |
-| Hostile workload: no capabilities/sockets/secrets/metadata, limits, no route, external DNS, IPv6 or other attempt | `internal/docker/backend_test.go`, `projected_test.go` (CONTAINERS) |
+| Hostile workload: no capabilities/sockets/secrets/metadata, limits, no route, external DNS through the embedded or a direct resolver (checked against a resolving control), no host address on the attempt network, IPv6 or other attempt | `internal/docker/backend_test.go`, `projected_test.go` (CONTAINERS) |
 
 Deployment-owned, verified only as integration contracts: production egress policy,
 attempt-network TLS, host and kernel hardening (gVisor/Kata/Sysbox); workload
@@ -133,7 +133,7 @@ evidence; LiteLLM does not record auth-stage refusals per end user. The Multica 
 credential keeps upstream agent authority for the attempt minus denied routes. Tests
 seed tasks in the database, not the UI. Local digest-pinned images need the containerd
 image store. Image mounts are experimental in Docker and lack `nosuid`/`nodev` (host
-policy covers both); they and external DNS denial on internal networks are engine
+policy covers both); they and external DNS denial on internal networks (Docker Engine 26+, CVE-2024-29018) are engine
 behavior: re-run `VERIFY_CONTAINERS=1` after Docker upgrades. Do not fill gaps with a
 sandbox Git service, session store, IAM, tools or policy engine.
 

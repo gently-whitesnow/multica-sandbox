@@ -24,6 +24,7 @@ func testBackend(t *testing.T, script string) *Backend {
 }
 func TestOfflineBoundary(t *testing.T) {
 	t.Setenv("MULTICA_PROBE_TOKEN", "host-secret-sentinel")
+	// `! cmd` is exempt from set -e, so denials are written `cmd && exit 1`.
 	b := testBackend(t, `set -eu
  test "$(id -u)" = 65532
  test "${MULTICA_PROBE_TOKEN-unset}" = unset
@@ -31,18 +32,19 @@ func TestOfflineBoundary(t *testing.T) {
  test ! -e /run/secrets
  test ! -e /var/run/secrets/kubernetes.io/serviceaccount/token
  test "$(ip -o link show up | wc -l)" = 1
- ! ip route | grep default
- ! ip -6 route | grep default
- ! wget -T 1 -q -O /tmp/leak http://169.254.169.254/
- ! wget -T 1 -q -O /tmp/leak http://1.1.1.1/
- ! timeout 2 nslookup example.com
- ! wget -T 1 -q -O /tmp/leak http://[2606:4700:4700::1111]/
- ! touch /forbidden
- ! mount -t tmpfs tmpfs /workspace
+ ip route | grep default && exit 1
+ ip -6 route | grep default && exit 1
+ wget -T 1 -q -O /tmp/leak http://169.254.169.254/ && exit 1
+ wget -T 1 -q -O /tmp/leak http://1.1.1.1/ && exit 1
+ timeout 2 nslookup example.com && exit 1
+ wget -T 1 -q -O /tmp/leak http://[2606:4700:4700::1111]/ && exit 1
+ touch /forbidden && exit 1
+ mount -t tmpfs tmpfs /workspace && exit 1
  test ! -e /workspace/other-attempt
  echo private > /workspace/other-attempt
  cp /bin/busybox /workspace/busybox && /workspace/busybox true
- cp /bin/busybox /tmp/busybox && ! /tmp/busybox true
+ cp /bin/busybox /tmp/busybox
+ /tmp/busybox true && exit 1
  grep -q '^NoNewPrivs:[[:space:]]*1' /proc/self/status
  grep -q '^CapEff:[[:space:]]*0000000000000000' /proc/self/status
  grep -q '^Seccomp:[[:space:]]*2' /proc/self/status
@@ -50,7 +52,7 @@ func TestOfflineBoundary(t *testing.T) {
  test "$(cat /sys/fs/cgroup/memory.max)" = 134217728
  test "$(cat /sys/fs/cgroup/memory.swap.max)" = 0
  test "$(cat /sys/fs/cgroup/cpu.max)" = '50000 100000'
- ! dd if=/dev/zero of=/workspace/full bs=1M count=70
+ dd if=/dev/zero of=/workspace/full bs=1M count=70 && exit 1
  `)
 	lines := strings.Split(b.Command[2], "\n")
 	var diagnostic strings.Builder

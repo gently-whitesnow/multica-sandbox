@@ -105,12 +105,12 @@ test "$(id -u)" = 65532
 test "$(stat -c %a /workspace)" = 1777
 test "$TESTCONTAINERS_RYUK_DISABLED" = true
 test -z "${DOCKER_HOST:-}"
-! touch /etc/forbidden 2>/dev/null
+touch /etc/forbidden 2>/dev/null && exit 1
 docker info --format '{{.ID}}'
 docker pull -q hello-world >/dev/null
 docker run --rm hello-world | grep -c 'Hello from Docker!'
 docker run --rm --privileged alpine:3.22 cat /proc/self/uid_map | awk '{print $1, ($2 == 0 ? "identity" : "mapped")}'
-! docker run --rm --privileged -v /:/attempt alpine:3.22 touch /attempt/etc/forbidden 2>/dev/null
+docker run --rm --privileged -v /:/attempt alpine:3.22 touch /attempt/etc/forbidden 2>/dev/null && exit 1
 echo done`}, nil)
 	// The agent's engine is the attempt's own, never the host engine behind the controller.
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")

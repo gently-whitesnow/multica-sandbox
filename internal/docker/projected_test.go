@@ -52,11 +52,30 @@ func TestProjectedAttemptIsolation(t *testing.T) {
 	if err := b.Execute(ctx, []string{"/bin/sh", "-c", `set -e; test "$(command -v multica)" = /opt/multica-sandbox/multica/bin/multica; multica >/dev/null; ! touch /opt/multica-sandbox/multica/bin/x`}); err != nil {
 		t.Fatal("controller CLI is not the read-only PATH entry:", err)
 	}
-	if err := b.Execute(ctx, []string{"/bin/sh", "-c", `test ! -e /workspace/opencode.json; test ! -e /var/run/docker.sock; test ! -e /run/secrets; ! wget -T 1 -q -O /tmp/leak http://169.254.169.254/; ! wget -T 1 -q -O /tmp/leak http://1.1.1.1/`}); err != nil {
+	// `! cmd` is exempt from set -e, so denials are written `cmd && exit 1`.
+	if err := b.Execute(ctx, []string{"/bin/sh", "-c", `set -e; test ! -e /workspace/opencode.json; test ! -e /var/run/docker.sock; test ! -e /run/secrets
+wget -T 1 -q -O /tmp/leak http://169.254.169.254/ && exit 1; wget -T 1 -q -O /tmp/leak http://1.1.1.1/ && exit 1; :`}); err != nil {
 		t.Fatal(err)
 	}
-	// A hostile attempt resolves only approved peer aliases: no route, external DNS or IPv6 egress.
-	if err := b.Execute(ctx, []string{"/bin/sh", "-c", `set -e; nslookup gateway >/dev/null; ! ip route | grep -q default; ! ip -6 route | grep -q default; ! timeout 2 nslookup example.com; ! wget -T 1 -q -O /tmp/leak http://[2606:4700:4700::1111]/`}); err != nil {
+	// Controls: the daemon resolves external names and the host listener answers through
+	// an ordinary bridge gateway, so the denials below are not vacuous.
+	listener := "sandbox-host-listener-" + owner
+	t.Cleanup(func() { _, _ = command(context.Background(), "rm", "-f", listener) })
+	invoke("run", "-d", "--name", listener, "--network", "host", testImage, "/bin/sh", "-c", `while true; do echo reached | nc -l -p 15353; done`)
+	if _, err := command(ctx, "run", "--rm", testImage, "/bin/sh", "-c", `set -e; timeout 3 nslookup example.com >/dev/null
+gw=$(ip route | awk '/default/ {print $3}'); for i in 1 2 3 4 5; do nc -w 2 "$gw" 15353 </dev/null | grep -q reached && exit 0; sleep 1; done; exit 1`); err != nil {
+		t.Fatal("control container cannot resolve example.com or reach the host listener:", err)
+	}
+	// A hostile attempt resolves only approved peer aliases: no route, external DNS through
+	// the embedded or a direct resolver, host address or IPv6.
+	if err := b.Execute(ctx, []string{"/bin/sh", "-c", `set -e; nslookup gateway >/dev/null
+test "$(grep '^nameserver' /etc/resolv.conf)" = "nameserver 127.0.0.11"
+ip route | grep -q default && exit 1; ip -6 route | grep -q default && exit 1; test -z "$(ip -6 addr show scope global)"
+timeout 3 nslookup example.com && exit 1; timeout 3 nslookup -type=TXT probe.example.com && exit 1
+for dns in 1.1.1.1 8.8.8.8 2606:4700:4700::1111; do timeout 3 nslookup example.com "$dns" && exit 1; nc -w 2 "$dns" 53 </dev/null && exit 1; done
+net=$(ip -4 -o addr show eth0 | awk '{print $4}' | cut -d/ -f1 | cut -d. -f1-3)
+for host in "$net.1" "$net.254"; do nc -w 2 "$host" 15353 </dev/null | grep -q reached && exit 1; done
+wget -T 1 -q -O /tmp/leak http://[2606:4700:4700::1111]/ && exit 1; :`}); err != nil {
 		t.Fatal("attempt network allows egress beyond approved peers:", err)
 	}
 	// Configured limits apply; TMPDIR is executable while /tmp stays noexec.
@@ -69,6 +88,9 @@ cp "$TMPDIR/run" /tmp/run; ! /tmp/run; df -k /workspace | awk 'NR==2 { exit !($2
 	rA, rB := a.(*projectedRun), b.(*projectedRun)
 	if rA.network == rB.network {
 		t.Fatal("shared attempt network")
+	}
+	if got := invoke("network", "inspect", "--format", "{{.Internal}} {{.EnableIPv6}} {{json .IPAM.Config}}", rB.network); !strings.HasPrefix(got, "true false ") || strings.Contains(got, "Gateway") {
+		t.Fatalf("attempt network gives the host an address or IPv6: %s", got)
 	}
 	if err := b.Write(ctx, "/workspace/AGENTS.md", []byte("other-workspace-private")); err != nil {
 		t.Fatal(err)
