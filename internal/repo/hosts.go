@@ -187,6 +187,18 @@ func (h *Hosts) api(workspace, name string) (upstreamAPI, bool) {
 	return upstreamAPI{}, false
 }
 
+// gitHosts lists the workspace's bound Git hosts, sorted.
+func (h *Hosts) gitHosts(workspace string) []string {
+	hosts := []string{}
+	for key := range h.bindings {
+		if key[0] == workspace {
+			hosts = append(hosts, key[1])
+		}
+	}
+	slices.Sort(hosts)
+	return hosts
+}
+
 // Has reports whether the workspace has a binding for host.
 func (h *Hosts) Has(workspace, host string) bool {
 	_, ok := h.bindings[[2]string{workspace, host}]

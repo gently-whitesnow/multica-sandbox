@@ -229,7 +229,7 @@ func newOpenCodeAdapter(ctx context.Context, c Config, stateDir string, api *mul
 				return nil, nil, err
 			}
 			// The upstream CLI authenticates checkout with its Multica relay credential.
-			adapter.Checkout = &repo.Checkout{Auth: grants, Hosts: hosts, Settings: api}
+			adapter.Checkout = &repo.Checkout{Auth: grants, Hosts: hosts, Settings: api, Git: adapter.GitRelay}
 			routes = map[string]http.Handler{"/repo/checkout": adapter.Checkout}
 		}
 		if err = c.serveRelay(ctx, "Multica", grants, *c.OpenCode.MulticaRelay, relay.Policy{Allow: multica.RelayPath}, routes, nil); err != nil {

@@ -45,6 +45,27 @@ func (c *Client) CoAuthoredBy(ctx context.Context, workspace string) (bool, erro
 	return (out.Settings.GitHub == nil || *out.Settings.GitHub) && (out.Settings.CoAuthor == nil || *out.Settings.CoAuthor), nil
 }
 
+// WorkspaceRepositories lists the workspace repository URLs (upstream GetWorkspaceRepos);
+// project repositories reach the agent only through claims.
+func (c *Client) WorkspaceRepositories(ctx context.Context, workspace string) ([]string, error) {
+	var out struct {
+		Repos []Repository `json:"repos"`
+	}
+	if !validID(workspace) {
+		return nil, fmt.Errorf("invalid workspace")
+	}
+	if err := c.call(ctx, http.MethodGet, "/api/daemon/workspaces/"+workspace+"/repos", nil, &out); err != nil {
+		return nil, err
+	}
+	urls := make([]string, 0, len(out.Repos))
+	for _, repo := range out.Repos {
+		if repo.URL != "" {
+			urls = append(urls, repo.URL)
+		}
+	}
+	return urls, nil
+}
+
 func (c *Client) ClaimBatch(ctx context.Context, daemon string, scopes map[string]string, limit int) ([]Task, error) {
 	if !validID(daemon) || limit < 1 || limit > 32 {
 		return nil, fmt.Errorf("invalid batch capacity or daemon")

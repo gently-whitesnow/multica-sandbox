@@ -60,7 +60,7 @@ image-mounted at `/opt/multica-sandbox/helper`, listens on
 each request by:
 - the attempt's opaque Multica relay credential;
 - the claim's task and workspace;
-- the claim's repositories;
+- the claim's or, refreshed, the workspace's repositories;
 - a workdir inside `/workspace/work`.
 
 It then runs `git` through `docker exec` as uid 65532 with the image's `git`,
@@ -74,7 +74,7 @@ opaque credential. The attempt receives it only through `GIT_CONFIG_*`
 environment entries that route HTTPS and scp-style remotes to the relay (ADR 0016).
 
 `origin` keeps the real URL. The relay attaches controller-only, workspace-scoped
-credentials per Git host and serves only the claim's repositories. Pushes follow
+credentials per Git host and serves only the attempt's granted repositories. Pushes follow
 the native runtime: any ref the deployment credential may update. Grants end at
 cleanup and on controller restart. Credential issuance and rotation, for example GitHub App tokens, stay
 external, as files the controller rereads.
@@ -93,23 +93,21 @@ Rejected alternatives:
 Refinement (#50, 2026-10-08). The helper is a separate digest-pinned image (Dockerfile
 target `helper`, config `helper`); it also runs the volume init. Attempts get
 the workdir volume only with the helper. The checkout route shares the Multica relay
-listener. Checkout follows upstream isolated mode with a fresh clone and serves only
-the claim's repositories.
+listener. Checkout follows upstream isolated mode with a fresh clone.
 
 Refinement (#52, 2026-10-08). Push follows the native runtime, which pushes with
 host credentials: the relay adds no `agent/<agent>/*` ref checks. Checkouts set a per-host commit identity (default: agent
 name) and upstream's Co-authored-by hook, following the setting polled every 10 s (#61).
 
-Refinement (#55, 2026-10-08). Pull requests use the unchanged `gh`, as native.
-Attempts resolve forge API names to loopback, and the helper forwards 443 to a
-controller TLS relay. A per-process CA, name-constrained to those names and
+Refinement (#55, 2026-10-08). Pull requests use the unchanged `gh`. Attempts
+resolve forge API names to loopback; the helper forwards 443 to a controller TLS relay. A per-process CA, name-constrained to those names and
 trusted via `SSL_CERT_DIR`, signs its certificates. The relay swaps the Git
 relay credential, sent as the `gh` token, for the workspace token.
 
-Refinement (#81, 2026-10-30). Project resources follow upstream: the brief's Project
-Context and `.multica/project/resources.json` in the workdir, replaced on reuse.
-`github_repo` resources must be claim repositories. A
-`local_directory` pinned to this controller rejects the claim: no host paths.
+Refinement (#81, 2026-10-30). Project resources follow upstream: Project Context
+and `.multica/project/resources.json`. As upstream `ensureRepoReady`, checkout outside
+the claim rereads workspace repositories and extends the grant; aliases cover all bound
+hosts. A `local_directory` pinned here rejects the claim.
 
 ## Consequences
 
@@ -118,7 +116,7 @@ the attempt. Retained volumes are part of the trust boundary. They are reused
 only for the same workspace, agent and issue, and must not be returned to any
 clean pool (ADR 0004). Each session pays for its first clone. Git credential
 issuance and forge-side branch protection remain deployment-owned. The
-relay bounds pushes to the claim's repositories; credential scope and branch
+relay bounds pushes to granted repositories; credential scope and branch
 protection bound refs.
 
 Implementation follows #47. Kubernetes (#6) needs equivalent volumes and a

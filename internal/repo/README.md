@@ -42,7 +42,7 @@ The agent image must contain `git`; startup checks it. Official-base users add i
 
 ## Behavior
 
-Attempts receive `GIT_CONFIG_*` entries per claim host, around the alias
+Attempts receive `GIT_CONFIG_*` entries per host the workspace binds, around the alias
 `http://<host>/` (ADR 0016):
 - `url.http://<host>/.insteadOf` maps `https://<host>/`, `git@<host>:`, `ssh://git@<host>/`
   and the prefix of each claim URL in another upstream form (`ssh://user@<host>:port/`,
@@ -53,7 +53,7 @@ Attempts receive `GIT_CONFIG_*` entries per claim host, around the alias
 `origin` keeps the real URL, and `git remote -v` shows the alias on the forge host,
 so `gh` resolves the repository as natively. The relay accepts only proxy requests
 and serves only smart HTTP fetch and push (`git-upload-pack`, `git-receive-pack`) for
-the claim's repositories on bound hosts. It replaces the credential and refuses
+granted repositories on bound hosts (the claim's and those checkout admits). It replaces the credential and refuses
 redirects. Packs may reach 2 GiB, and the upstream gets 5 minutes to answer. Grants
 end at cleanup and on restart.
 
@@ -84,7 +84,7 @@ end at cleanup and on restart.
 Deployment-owned bounds, as under the native runtime:
 - **Credential scope.** Pushes and `gh` may do anything the host's deployment
   credential may do, on any repository it reaches; the relay limits only Git
-  transport to the claim's repositories. Use a GitHub App installation token or a
+  transport to granted repositories. Use a GitHub App installation token or a
   fine-grained token restricted to the intended repositories, with
   `contents: write` and `pull_requests: write`, and no administration rights. On
   GitLab, use a group or project access token with the Developer role and `api` scope.
@@ -137,7 +137,8 @@ The controller publishes that setting to live hooks like the native daemon:
   a control.
 
 Differences from upstream:
-- only the claim's repositories, not the whole workspace registry;
+- checkout outside the claim admits workspace repositories after a refresh, from their
+  default branch, as upstream, but not other tasks' project repositories (`taskRepoURLs`);
 - every retained workdir pays for its own clone;
 - setting changes reach live hooks within 10 s rather than on a websocket hint, and a
   failed settings read keeps the last value instead of failing the checkout;

@@ -159,9 +159,28 @@ func TestGitRelayServesOnlyClaimRepositories(t *testing.T) {
 			t.Errorf("%s: %d", name, w.Code)
 		}
 	}
+	// A workspace repository joins the live grant on checkout; other hosts and attempts do not.
+	if _, _, ok := g.Allow("other-attempt", "https://git.example.test/other.git"); ok {
+		t.Fatal("unknown attempt extended")
+	}
+	if _, _, ok := g.Allow("attempt", "https://other.example.test/other.git"); ok {
+		t.Fatal("grant extended to another workspace's host")
+	}
+	if alias, prefix, ok := g.Allow("attempt", "git@git.example.test:other.git"); !ok || alias != "http://git.example.test/" || prefix != "" {
+		t.Fatalf("workspace repository grant: %q %q %v", alias, prefix, ok)
+	}
+	if err := clone("https://git.example.test/other.git"); err != nil {
+		t.Fatal("granted workspace repository clone failed:", err)
+	}
+	if _, prefix, _ := g.Allow("attempt", "ssh://ops@git.example.test:2200/other.git"); prefix != "ssh://ops@git.example.test:2200/" {
+		t.Fatalf("unrewritten prefix not returned: %q", prefix)
+	}
 	g.Revoke("attempt")
 	if clone("https://git.example.test/fixture.git") == nil || attempt("-C", work, "push", "-q", "origin", "HEAD:refs/heads/late") == nil {
 		t.Fatal("revoked grant still clones or pushes")
+	}
+	if _, _, ok := g.Allow("attempt", "https://git.example.test/other.git"); ok {
+		t.Fatal("revoked attempt extended")
 	}
 }
 

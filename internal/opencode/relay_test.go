@@ -180,6 +180,10 @@ func TestForgeAttemptGetsGhTokenAndCA(t *testing.T) {
 
 type countSettings struct{ reads atomic.Int32 }
 
+func (c *countSettings) WorkspaceRepositories(context.Context, string) ([]string, error) {
+	return nil, nil
+}
+
 func (c *countSettings) CoAuthoredBy(context.Context, string) (bool, error) {
 	c.reads.Add(1)
 	return true, nil

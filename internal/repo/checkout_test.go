@@ -3,6 +3,7 @@ package repo
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -52,6 +53,26 @@ func checkout(t *testing.T, root, url, ref, branch string, fresh bool, workdir s
 	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0")
 	out, _ := cmd.Output()
 	return parse(out)
+}
+
+func TestCheckoutKeepsWorkspaceRemotePrefix(t *testing.T) {
+	bare := origin(t)
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const key, prefix = "url.http://git.example.test/.insteadOf", "ssh://ops@git.example.test:2200/"
+	for range 2 {
+		cmd := exec.Command("/bin/sh", "-c", script, "checkout", bare, "", "agent/a/1", "0", root, Name(bare), root, "Fixture Agent", DefaultEmail, "1", hookText, "http://git.example.test/", prefix)
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0")
+		out, _ := cmd.Output()
+		if result, kind, message := parse(out); result.Path == "" {
+			t.Fatalf("checkout: %s %s", kind, message)
+		}
+	}
+	if got := git(t, filepath.Join(root, "fixture"), "config", "--get-all", key); got != prefix {
+		t.Fatalf("checkout remote prefix: %q", got)
+	}
 }
 
 func TestCheckoutScriptFollowsUpstream(t *testing.T) {
@@ -187,6 +208,59 @@ func (a fakeAuth) Authorize(r *http.Request) (relay.Lease, bool) {
 		return relay.Lease{}, false
 	}
 	return relay.Lease{Attempt: "attempt", Context: context.Background(), Release: func() {}}, true
+}
+
+type fakeGranter struct{ allowed []string }
+
+func (g *fakeGranter) Allow(attempt, url string) (string, string, bool) {
+	if attempt != "attempt" || !strings.Contains(url, "git.example.test") {
+		return "", "", false
+	}
+	g.allowed = append(g.allowed, url)
+	if strings.HasPrefix(url, "ssh://deploy@") {
+		return "http://git.example.test/", "ssh://deploy@git.example.test:2222/", true
+	}
+	return "http://git.example.test/", "", true
+}
+
+// A project claim lists only project repositories; like upstream ensureRepoReady, other
+// workspace repositories are admitted after a refresh, from their default branch.
+func TestCheckoutAdmitsWorkspaceRepositories(t *testing.T) {
+	const ws, task = "10000000-0000-4000-8000-000000000001", "a3000000-0000-4000-8000-000000000042"
+	const project, plain, ssh = "https://git.example.test/team/project.git", "https://git.example.test/team/workspace.git", "ssh://deploy@git.example.test:2222/team/ops.git"
+	target := &fakeTarget{out: "path /workspace/work/x\nbranch agent/a/000000000042\n"}
+	settings, granter := &fakeSettings{enabled: true, repos: []string{plain, ssh}}, &fakeGranter{}
+	c := &Checkout{Auth: fakeAuth("opaque"), Settings: settings, Git: granter}
+	base := map[string]string{"GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "http.http://git.example.test/.proxy", "GIT_CONFIG_VALUE_0": "http://git-relay"}
+	c.Register("attempt", Task{Workspace: ws, ID: task, AgentName: "A", Repos: map[string]string{project: "release"}, Target: target, Env: base})
+	call := func(url string) *httptest.ResponseRecorder {
+		data, _ := json.Marshal(map[string]any{"url": url, "workspace_id": ws, "task_id": task, "workdir": WorkDir})
+		r := httptest.NewRequest(http.MethodPost, "/repo/checkout", strings.NewReader(string(data)))
+		r.Header.Set("Authorization", "Bearer opaque")
+		w := httptest.NewRecorder()
+		c.ServeHTTP(w, r)
+		return w
+	}
+	if w := call(plain); w.Code != 200 || target.args[5] != "" || len(target.args) != 15 || target.env["GIT_CONFIG_COUNT"] != "1" {
+		t.Fatalf("workspace repository: %d %q %v", w.Code, target.args, target.env)
+	}
+	if w := call(ssh); w.Code != 200 || strings.Join(target.args[15:], "|") != "http://git.example.test/|ssh://deploy@git.example.test:2222/" ||
+		target.env["GIT_CONFIG_COUNT"] != "2" || target.env["GIT_CONFIG_KEY_1"] != "url.http://git.example.test/.insteadOf" || target.env["GIT_CONFIG_VALUE_1"] != "ssh://deploy@git.example.test:2222/" || base["GIT_CONFIG_COUNT"] != "1" {
+		t.Fatalf("workspace repository with its own remote prefix: %d %q %v", w.Code, target.args, target.env)
+	}
+	if w := call(project); w.Code != 200 || target.args[5] != "release" || strings.Join(granter.allowed, " ") != plain+" "+ssh {
+		t.Fatalf("claim repository: %d %q %v", w.Code, target.args, granter.allowed)
+	}
+	if w := call("https://git.example.test/team/unlisted.git"); w.Code != 400 || w.Body.String() != "repo is not configured for this workspace\n" {
+		t.Fatalf("unlisted repository: %d %s", w.Code, w.Body)
+	}
+	settings.reposErr = errors.New("unavailable")
+	if w := call(plain); w.Code != 500 || !strings.HasPrefix(w.Body.String(), "refresh workspace repos: ") {
+		t.Fatalf("failed refresh: %d %s", w.Code, w.Body)
+	}
+	if w := call(project); w.Code != 200 {
+		t.Fatalf("claim repository needs no refresh: %d", w.Code)
+	}
 }
 
 func TestCheckoutHandler(t *testing.T) {

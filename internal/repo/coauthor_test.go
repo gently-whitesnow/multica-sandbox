@@ -29,6 +29,15 @@ type fakeSettings struct {
 	mu      sync.Mutex
 	enabled bool
 	err     error
+	// repos are the workspace repositories; reposErr fails their refresh.
+	repos    []string
+	reposErr error
+}
+
+func (f *fakeSettings) WorkspaceRepositories(context.Context, string) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.repos, f.reposErr
 }
 
 func (f *fakeSettings) CoAuthoredBy(context.Context, string) (bool, error) {

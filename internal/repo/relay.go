@@ -37,7 +37,9 @@ type Relay struct {
 
 type access struct {
 	workspace string
-	repos     map[string]bool
+	// repos are granted repository keys; rewrites are the remote prefixes the attempt
+	// environment maps to host aliases.
+	repos, rewrites map[string]bool
 }
 
 func NewRelay(relayURL string, hosts *Hosts) *Relay {
@@ -45,17 +47,17 @@ func NewRelay(relayURL string, hosts *Hosts) *Relay {
 }
 
 // Issue grants the attempt its claim repositories and returns the Git environment that
-// proxies their hosts through the relay. origin keeps the real URL. With the forge
-// relay, the same credential is the gh token for the workspace's forge APIs.
+// proxies every host the workspace binds through the relay, so workspace repositories
+// granted later by Allow need no new environment. origin keeps the real URL. With the
+// forge relay, the same credential is the gh token for the workspace's forge APIs.
 func (g *Relay) Issue(attempt, workspace string, urls []string) (map[string]string, error) {
-	a := access{workspace: workspace, repos: map[string]bool{}}
-	hosts, prefixes := []string{}, map[string][]string{}
+	a := access{workspace: workspace, repos: map[string]bool{}, rewrites: map[string]bool{}}
+	prefixes := map[string][]string{}
 	for _, raw := range urls {
 		host, key, prefix, ok := repoKey(raw)
 		if !ok || !g.hosts.Has(workspace, host) {
 			continue
 		}
-		hosts = append(hosts, host)
 		prefixes[host] = append(prefixes[host], prefix)
 		a.repos[key] = true
 	}
@@ -63,25 +65,22 @@ func (g *Relay) Issue(attempt, workspace string, urls []string) (map[string]stri
 	if err != nil {
 		return nil, err
 	}
-	g.mu.Lock()
-	g.access[attempt] = a
-	g.mu.Unlock()
 	env := map[string]string{"GIT_TERMINAL_PROMPT": "0"}
 	config := [][2]string{}
-	for _, host := range unique(hosts) {
+	for _, host := range g.hosts.gitHosts(workspace) {
 		alias := "http://" + host + "/"
 		config = append(config, [2]string{"http." + alias + ".extraHeader", "Authorization: Bearer " + opaque},
 			[2]string{"http." + alias + ".proxy", g.URL})
-		rewrites := []string{"https://" + host + "/"}
-		if !strings.Contains(host, ":") {
-			rewrites = append(rewrites, "git@"+host+":", "ssh://git@"+host+"/")
-		}
-		for _, prefix := range unique(append(rewrites, prefixes[host]...)) {
+		for _, prefix := range unique(append(rewrites(host), prefixes[host]...)) {
 			if prefix != alias {
 				config = append(config, [2]string{"url." + alias + ".insteadOf", prefix})
 			}
+			a.rewrites[prefix] = true
 		}
 	}
+	g.mu.Lock()
+	g.access[attempt] = a
+	g.mu.Unlock()
 	if g.ca != nil {
 		forgeEnv(env, opaque, g.hosts.apiHosts(workspace, GitHub), g.hosts.apiHosts(workspace, GitLab))
 	}
@@ -90,6 +89,32 @@ func (g *Relay) Issue(attempt, workspace string, urls []string) (map[string]stri
 		env["GIT_CONFIG_KEY_"+strconv.Itoa(i)], env["GIT_CONFIG_VALUE_"+strconv.Itoa(i)] = entry[0], entry[1]
 	}
 	return env, nil
+}
+
+// rewrites are the default remote prefixes of a host alias.
+func rewrites(host string) []string {
+	if strings.Contains(host, ":") {
+		return []string{"https://" + host + "/", "http://" + host + "/"}
+	}
+	return []string{"https://" + host + "/", "http://" + host + "/", "git@" + host + ":", "ssh://git@" + host + "/"}
+}
+
+// Allow grants a live attempt a workspace repository its claim did not list, as upstream
+// admits workspace repositories on checkout. It returns the host alias and, when the
+// attempt environment does not rewrite the URL's remote prefix, that prefix.
+func (g *Relay) Allow(attempt, raw string) (string, string, bool) {
+	host, key, prefix, valid := repoKey(raw)
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	a, granted := g.access[attempt]
+	if !valid || !granted || !g.hosts.Has(a.workspace, host) {
+		return "", "", false
+	}
+	a.repos[key] = true
+	if a.rewrites[prefix] {
+		prefix = ""
+	}
+	return "http://" + host + "/", prefix, true
 }
 
 // forgeEnv points the unchanged gh and glab at the forge relay with the opaque credential,
