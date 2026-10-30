@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/gently-whitesnow/multica-sandbox/internal/baseurl"
 )
@@ -41,6 +42,8 @@ type grant struct {
 	ctx        context.Context
 	cancel     context.CancelFunc
 	slots      chan struct{}
+	// status is the attempt's last upstream response status.
+	status atomic.Int32
 }
 
 // NewGrants issues credentials of the form prefix + 64 hex characters.
@@ -102,6 +105,30 @@ func (g *Grants) Revoke(attempt string) {
 	g.byHash[hash].cancel()
 	delete(g.byHash, hash)
 	delete(g.byAttempt, attempt)
+}
+
+// Responded records an upstream response status for the attempt.
+func (g *Grants) Responded(attempt string, status int) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if hash, ok := g.byAttempt[attempt]; ok {
+		g.byHash[hash].status.Store(int32(status))
+	}
+}
+
+// Refusal reports the attempt's last upstream status when it was a refusal, else 0: an
+// agent that reports a provider error without its status is classified by it.
+func (g *Grants) Refusal(attempt string) int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	hash, ok := g.byAttempt[attempt]
+	if !ok {
+		return 0
+	}
+	if status := int(g.byHash[hash].status.Load()); status >= 400 {
+		return status
+	}
+	return 0
 }
 
 // Authorize accepts the opaque credential as a bearer token or, as Anthropic clients

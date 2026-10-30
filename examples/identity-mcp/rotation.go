@@ -1,10 +1,12 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"sync"
@@ -16,10 +18,12 @@ import (
 	"github.com/gently-whitesnow/multica-sandbox/internal/identity"
 	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
 	"github.com/gently-whitesnow/multica-sandbox/internal/opencode"
+	"github.com/gently-whitesnow/multica-sandbox/internal/relay"
 )
 
-// opencodeImage is the newest verified official OpenCode image.
-var opencodeImage = opencode.Images[len(opencode.Images)-1]
+// opencodeImage is the newest verified official OpenCode image unless OPENCODE_IMAGE
+// names another release.
+var opencodeImage = cmp.Or(os.Getenv("OPENCODE_IMAGE"), opencode.Images[len(opencode.Images)-1])
 
 type rotationStatus struct {
 	sync.Mutex
@@ -70,7 +74,7 @@ func (p fixtureProjection) Write(ctx context.Context, path string, data []byte) 
 		}
 		config["model"] = "fixture/fixture"
 		config["enabled_providers"] = []string{"fixture"}
-		config["provider"] = map[string]any{"fixture": map[string]any{"npm": "@ai-sdk/openai-compatible", "name": "Credential-free deterministic fixture", "options": map[string]any{"baseURL": "http://gateway:8080/v1"}, "models": map[string]any{"fixture": map[string]any{"name": "Fixture", "limit": map[string]int{"context": 64000, "output": 4096}}}}}
+		config["provider"] = map[string]any{"fixture": map[string]any{"npm": "@ai-sdk/openai-compatible", "name": "Credential-free deterministic fixture", "options": map[string]any{"baseURL": "http://provider:8080/v1"}, "models": map[string]any{"fixture": map[string]any{"name": "Fixture", "limit": map[string]int{"context": 64000, "output": 4096}}}}}
 		data, _ = json.Marshal(config)
 	}
 	return p.ProjectedRun.Write(ctx, path, data)
@@ -94,7 +98,16 @@ func rotation() error {
 	}
 	owner := sha256.Sum256([]byte(os.Getenv("EXECUTION_NETWORK")))
 	controller := fmt.Sprintf("90000000-0000-4000-8000-%x", owner[:6])
-	peers := []string{os.Getenv("MCP_PEER")}
+	// Attempts reach the mock model and MCP only through this process's relay.
+	peers := []string{os.Getenv("PROVIDER_PEER"), os.Getenv("RELAY_PEER")}
+	mcpRelay := opencode.NewMCPRelay()
+	handler, err := relay.New(mcpRelay, relay.Policy{Allow: opencode.MCPRelayPath, Limit: 32 << 20, Reserved: opencode.MCPReservedHeaders, HeaderTimeout: opencode.MCPHeaderTimeout})
+	if err != nil {
+		return err
+	}
+	server := &http.Server{Addr: ":8095", Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+	go func() { _ = server.ListenAndServe() }()
+	defer server.Close()
 	backend := &docker.Projected{Backend: docker.Backend{Image: opencodeImage, Owner: controller, Command: []string{"/bin/sh"}}, Network: os.Getenv("EXECUTION_NETWORK"), Peers: peers}
 	if err := backend.Reconcile(ctx); err != nil {
 		return err
@@ -104,7 +117,7 @@ func rotation() error {
 		return err
 	}
 	states := &rotationStatus{states: map[string]string{}}
-	adapter := &opencode.Adapter{Server: fixtureServer, Controller: controller, Issuer: issuer, Authority: authority, Status: states, Workloads: fixtureWorkloads{backend}}
+	adapter := &opencode.Adapter{Server: fixtureServer, Controller: controller, Issuer: issuer, Authority: authority, Status: states, Workloads: fixtureWorkloads{backend}, MCPRelay: mcpRelay, MCPRelayURL: "http://mcp-relay:8095"}
 	tasks := []multica.Task{}
 	for i, binding := range config.Bindings {
 		task := multica.Task{StartClaimSupported: true, WorkspaceID: binding.WorkspaceID, AgentID: binding.AgentID, ID: fmt.Sprintf("40000000-0000-4000-8000-%012d", i+1), RuntimeID: fmt.Sprintf("50000000-0000-4000-8000-%012d", i+1), DispatchedAt: time.Now().UTC().Format(time.RFC3339Nano), Agent: &multica.Agent{ID: binding.AgentID, Instructions: "Read document repeatedly using fixture MCP.", MCPConfig: json.RawMessage(`{"mcpServers":{"fixture":{"url":"http://gateway:8080/mcp"}}}`)}}
@@ -172,7 +185,7 @@ func rotation() error {
 	if err := rotationLease(ctx, adapter, tasks[0]); err != nil {
 		return err
 	}
-	fmt.Println("PASS two same-process OpenCode tasks crossed multiple real JWT expiries; native OAuth rotation, workspace isolation, revocation and cleanup")
+	fmt.Println("PASS two same-process OpenCode tasks crossed multiple real JWT expiries through the MCP relay; workspace isolation, revocation and cleanup")
 	return nil
 }
 func errorsJoin(a, b error) error {
@@ -189,7 +202,7 @@ func checkEvidence(ctx context.Context, tasks []multica.Task) error {
 	}
 	status, data, err := doRequest(ctx, "GET", "http://gateway:8080/evidence", nil, string(secret))
 	if err != nil || status != 200 {
-		return fmt.Errorf("evidence unavailable")
+		return fmt.Errorf("evidence unavailable: status %d, %v, %v", status, err, ctx.Err())
 	}
 	var evidence map[string][2]int
 	if json.Unmarshal(data, &evidence) != nil {

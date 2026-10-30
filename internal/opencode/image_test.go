@@ -22,6 +22,9 @@ func TestCheckImage(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if err := CheckImage([]byte("version opencode v2.2.2\n"), false, false); err != nil {
+		t.Fatalf("2.x version line rejected: %v", err)
+	}
 	if err := CheckImage([]byte("cli /usr/local/bin/multica\ncli-version multica 0.1\nversion 1.18.35\ngit \n"), false, false); err != nil {
 		t.Fatalf("CLI and git are ignored without the relays: %v", err)
 	}
@@ -32,7 +35,9 @@ func TestCheckImage(t *testing.T) {
 		t.Fatalf("missing tar accepted for skills: %v", err)
 	}
 	for name, test := range map[string]struct{ output, want string }{
-		"unsupported": {"version 1.18.33\n", `OpenCode "1.18.33" is not verified (supported: 1.18.34, 1.18.35)`},
+		"unsupported": {"version 1.18.33\n", `OpenCode "1.18.33" is not verified (supported: 1.18.34, 1.18.35, 2.2.2)`},
+		"v2 prefix":   {"version opencode v2.2.3\n", `OpenCode "2.2.3" is not verified`},
+		"v2 garbage":  {"version opencode v2.2.2 extra\n", `"opencode v2.2.2 extra" is not verified`},
 		"major":       {"version 2.0.24\n", `"2.0.24" is not verified`},
 		"missing":     {"", `OpenCode "" is not verified`},
 		"suffix":      {"version 1.18.35-dirty\n", `"1.18.35-dirty" is not verified`},

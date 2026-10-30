@@ -196,6 +196,14 @@ func newOpenCodeAdapter(ctx context.Context, c Config, stateDir string, api *mul
 		return nil, nil, err
 	}
 	adapter := &opencode.Adapter{Server: strings.TrimRight(c.Server, "/"), Controller: c.Daemon, Issuer: issuer, Authority: authority, Status: api, Reporter: api, Workloads: workloads, Command: c.Command, EnvAllow: c.OpenCode.EnvAllow, IdleWatchdog: watchdog}
+	if issuer != nil {
+		adapter.MCPRelay = opencode.NewMCPRelay()
+		policy := relay.Policy{Allow: opencode.MCPRelayPath, Reserved: opencode.MCPReservedHeaders, HeaderTimeout: opencode.MCPHeaderTimeout}
+		if err = serveRelay(ctx, "MCP", adapter.MCPRelay, *c.OpenCode.MCPRelay, policy, nil, nil); err != nil {
+			return nil, nil, err
+		}
+		adapter.MCPRelayURL = strings.TrimRight(c.OpenCode.MCPRelay.URL, "/")
+	}
 	if c.OpenCode.MulticaRelay != nil {
 		grants := relay.NewGrants(multica.RelayPrefix)
 		var routes map[string]http.Handler
@@ -309,11 +317,14 @@ func cliRevision(c *OpenCodeConfig) (string, error) {
 }
 
 // attemptIdentity builds the MCP issuer and the attempt authority. Both are optional:
-// without identity_file attempts get no MCP credentials and agents selecting MCP are
-// refused; without authority MCP tokens are not registered and end only at expiry.
+// without identity_file (and its mcp_relay) attempts get no MCP access and agents
+// selecting MCP are refused; without authority MCP tokens are not registered and end only at expiry.
 func attemptIdentity(ctx context.Context, c Config) (opencode.Issuer, opencode.Authority, error) {
 	var issuer opencode.Issuer
 	var authority opencode.Authority
+	if (c.OpenCode.IdentityFile == "") != (c.OpenCode.MCPRelay == nil) {
+		return nil, nil, fmt.Errorf("identity_file and mcp_relay must be configured together")
+	}
 	if c.OpenCode.IdentityFile != "" {
 		config, err := agentidentity.ReadConfig(c.OpenCode.IdentityFile)
 		if err != nil {

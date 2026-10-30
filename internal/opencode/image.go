@@ -33,6 +33,8 @@ func verified(list string) (images, versions []string) {
 	return images, versions
 }
 
+var printedVersion = regexp.MustCompile(`^opencode v([0-9]+\.[0-9]+\.[0-9]+)$`)
+
 // ImageProbe reports image facts the adapter relies on. Its output is image-controlled data.
 // OpenCode merges the probed paths over the projected configuration (managed and parent-directory config).
 var ImageProbe = []string{"/bin/sh", "-c", `for p in /etc/opencode /opencode.json /opencode.jsonc /.opencode; do if [ -e "$p" ]; then echo "override $p"; fi; done
@@ -95,7 +97,11 @@ func CheckImageRevision(output []byte, revision string, git bool) error {
 		case "env":
 			problems = append(problems, fmt.Sprintf("image ENV sets reserved %.64q", value))
 		case "version":
+			// 2.x prints "opencode vX.Y.Z"; 1.x prints the bare version.
 			version = value
+			if m := printedVersion.FindStringSubmatch(value); m != nil {
+				version = m[1]
+			}
 		case "cli":
 			path = value
 		case "cli-version":

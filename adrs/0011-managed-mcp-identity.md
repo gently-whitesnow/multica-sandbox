@@ -47,11 +47,11 @@ its effective remote `mcpServers` claim selection. It rejects unsupported broker
 connections, local commands, supplied headers/OAuth credentials and mismatched
 agent identity. Arbitrary claim environment and host paths are excluded.
 
-The controller uses `docker exec` stdin to atomically replace the store in each
-container's tmpfs; no host token directory or credential mount is needed. It renews
-inside the running attempt, checks Multica status every second, and stops on any
-issuer, resolver, authority or projection failure. A separate external attempt
-integration registers fingerprints before projection and enforces a 15-second lease;
+Tokens stay in the controller: its MCP relay forwards each attempt's requests to the
+exact approved URL with the current token (ADR 0023, replacing the native auth store
+projection). It renews during the attempt, checks Multica status every second, and
+stops on any issuer, resolver or authority failure. A separate external attempt
+integration registers fingerprints before the relay uses them and enforces a 15-second lease;
 cleanup revokes all fingerprints for that attempt. See ADR 0009.
 
 The Docker path creates an internal network per attempt and attaches only operator

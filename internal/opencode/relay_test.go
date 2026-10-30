@@ -47,7 +47,7 @@ func authorized(grants *relay.Grants, bearer string) bool {
 func TestRelayAttemptDeliversOnlyOpaqueCredential(t *testing.T) {
 	grants := relay.NewGrants(multica.RelayPrefix)
 	workload := &stubWorkload{files: map[string][]byte{}, envs: make(chan map[string]string, 1)}
-	a := Adapter{Server: "https://multica.example.invalid", Issuer: &stubIssuer{}, Authority: &stubAuthority{}, Workloads: workload, Status: stubStatus{}, Relay: grants, RelayURL: "http://multica-relay:8091"}
+	a := Adapter{Server: "https://multica.example.invalid", Issuer: &stubIssuer{}, MCPRelay: NewMCPRelay(), Authority: &stubAuthority{}, Workloads: workload, Status: stubStatus{}, Relay: grants, RelayURL: "http://multica-relay:8091"}
 	run, err := a.Start(context.Background(), relayTask(t))
 	if err != nil {
 		t.Fatal(err)
@@ -67,7 +67,7 @@ func TestRelayAttemptDeliversOnlyOpaqueCredential(t *testing.T) {
 			t.Fatalf("credential projected into %s", path)
 		}
 	}
-	prompt, brief := string(workload.files["/workspace/prompt.txt"]), string(workload.files[BriefPath])
+	prompt, brief := string(workload.files[sentPrompt]), string(workload.files[BriefPath])
 	if !strings.Contains(prompt, "multica issue comment add 60000000-0000-4000-8000-000000000001 --parent 70000000-0000-4000-8000-000000000001 --content-file ./reply.md") || !strings.Contains(brief, "Always Use the `multica` CLI") {
 		t.Fatal("upstream instructions missing")
 	}
@@ -91,7 +91,7 @@ func TestRelayRequiresTaskToken(t *testing.T) {
 			_ = json.Unmarshal([]byte(token), &task.AuthToken)
 		}
 		workload := &stubWorkload{}
-		a := Adapter{Server: "https://multica.example.invalid", Issuer: &stubIssuer{}, Authority: &stubAuthority{}, Workloads: workload, Status: stubStatus{}, Relay: relay.NewGrants(multica.RelayPrefix), RelayURL: "http://multica-relay:8091"}
+		a := Adapter{Server: "https://multica.example.invalid", Issuer: &stubIssuer{}, MCPRelay: NewMCPRelay(), Authority: &stubAuthority{}, Workloads: workload, Status: stubStatus{}, Relay: relay.NewGrants(multica.RelayPrefix), RelayURL: "http://multica-relay:8091"}
 		_, err := a.Start(context.Background(), task)
 		var rejected *execution.RejectedError
 		if !errors.As(err, &rejected) || workload.writes != 0 || workload.runs != 0 {
@@ -109,7 +109,7 @@ func TestRepositoryAttemptGetsCheckoutAndGitRelay(t *testing.T) {
 	}
 	settings := &countSettings{}
 	checkout := &repo.Checkout{Auth: grants, Settings: settings}
-	a := Adapter{Server: "https://multica.example.invalid", Issuer: &stubIssuer{}, Authority: &stubAuthority{}, Workloads: workload, Status: stubStatus{}, Relay: grants, RelayURL: "http://multica-relay:8091",
+	a := Adapter{Server: "https://multica.example.invalid", Issuer: &stubIssuer{}, MCPRelay: NewMCPRelay(), Authority: &stubAuthority{}, Workloads: workload, Status: stubStatus{}, Relay: grants, RelayURL: "http://multica-relay:8091",
 		GitRelay: repo.NewRelay("http://git-relay:8093", hosts), Checkout: checkout}
 	task := relayTask(t)
 	task.Repos = []multica.Repository{{URL: "https://git.example.invalid/team/fixture.git", Ref: "release", Description: "Fixture"}}
@@ -162,7 +162,7 @@ func TestForgeAttemptGetsGhTokenAndCA(t *testing.T) {
 	}
 	grants := relay.NewGrants(multica.RelayPrefix)
 	workload := &stubWorkload{files: map[string][]byte{}, envs: make(chan map[string]string, 1)}
-	a := Adapter{Server: "https://multica.example.invalid", Issuer: &stubIssuer{}, Authority: &stubAuthority{}, Workloads: workload, Status: stubStatus{}, Relay: grants, RelayURL: "http://multica-relay:8091",
+	a := Adapter{Server: "https://multica.example.invalid", Issuer: &stubIssuer{}, MCPRelay: NewMCPRelay(), Authority: &stubAuthority{}, Workloads: workload, Status: stubStatus{}, Relay: grants, RelayURL: "http://multica-relay:8091",
 		GitRelay: git, Checkout: &repo.Checkout{Auth: grants}}
 	run, err := a.Start(context.Background(), relayTask(t))
 	if err != nil {
@@ -202,7 +202,7 @@ func TestAllowedCustomEnvReachesAttempt(t *testing.T) {
 		t.Fatal("custom_env value formatted")
 	}
 	workload := &stubWorkload{files: map[string][]byte{}, envs: make(chan map[string]string, 1)}
-	a := Adapter{Server: "https://multica.example.invalid", Issuer: &stubIssuer{}, Authority: &stubAuthority{}, Workloads: workload, Status: stubStatus{}, Relay: relay.NewGrants(multica.RelayPrefix), RelayURL: "http://multica-relay:8091",
+	a := Adapter{Server: "https://multica.example.invalid", Issuer: &stubIssuer{}, MCPRelay: NewMCPRelay(), Authority: &stubAuthority{}, Workloads: workload, Status: stubStatus{}, Relay: relay.NewGrants(multica.RelayPrefix), RelayURL: "http://multica-relay:8091",
 		EnvAllow: []string{"FEED_URL", "BAD_VALUE", "UNSET"}}
 	run, err := a.Start(context.Background(), task)
 	if err != nil {

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -51,6 +52,15 @@ func TestOfficialImagesDiscoverProjectedSkills(t *testing.T) {
 			}
 			if err := run.WriteTree(ctx, opencode.SkillsDir, tree); err != nil {
 				t.Fatal(err)
+			}
+			if strings.HasPrefix(opencode.Supported[i], "2.") {
+				// 2.x lists no skills on the CLI; it loads them from its config roots, and the
+				// ACP spike observed the projected skill in the system prompt.
+				out, err := run.Capture(ctx, []string{"opencode", "debug", "config"}, nil)
+				if err != nil || !strings.Contains(string(out), `"path": "/workspace/config/opencode"`) {
+					t.Fatalf("projected config root not loaded: %v %.512s", err, out)
+				}
+				return
 			}
 			out, err := run.Capture(ctx, []string{"opencode", "debug", "skill"}, nil)
 			var skills []struct{ Name, Description, Location string }
