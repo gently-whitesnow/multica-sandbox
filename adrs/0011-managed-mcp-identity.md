@@ -56,7 +56,9 @@ cleanup revokes all fingerprints for that attempt. See ADR 0009.
 
 The Docker path creates an internal network per attempt and attaches only operator
 approved MCP/gateway peers from a validated template. Issuers, resolvers and Multica
-stay outside those networks. OpenCode uses its native MCP transport and OAuth store.
+stay outside those networks. Refinement (2026-10-30): attempt networks give the host
+no address (`inhibit_ipv4`) and disable IPv6, so host listeners and resolvers on the
+bridge gateway are unreachable; Docker's embedded resolver answers only peer aliases. OpenCode uses its native MCP transport and OAuth store.
 External deployment policy remains required. The global config directory
 is read-only to avoid startup package installation; images may provide their own tools.
 

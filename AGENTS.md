@@ -18,7 +18,7 @@ from verified behavior.
   web chat tasks (0017), agent skills (0018), nested Docker under sysbox-runc (0019),
   shared attempt memory pool (0020), daemon WebSocket wakeups (0021),
   inference connection and agent identity from Multica env (0022),
-  OpenCode over ACP and the MCP relay (0023).
+  OpenCode over ACP and the MCP relay (0023), the in-house credential relay (0024).
 - `examples/end-to-end/`: opt-in real Multica/OpenCode/inference lab.
 - `examples/identity-mcp/`: disposable identity and MCP contract fixture.
 - `internal/inference/`: workspace gateway bindings, relay policy and advisory model catalogs.

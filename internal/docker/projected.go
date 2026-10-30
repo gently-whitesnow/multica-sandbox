@@ -483,14 +483,17 @@ func (b *Projected) isolate(ctx context.Context, name string) (string, error) {
 	return name, nil
 }
 
-// createNetwork creates an attempt network. When the daemon refuses it, the task is
+// createNetwork creates an attempt network. The host gets no address on it, so host
+// listeners and resolvers stay unreachable, and IPv6 stays off whatever the daemon
+// defaults. When the daemon refuses it, the task is
 // rejected instead of stopping the controller, after a best-effort removal in case a
 // partial network exists (Reconcile removes what remains); exhausted address pools are
 // named for the operator. Timeouts stay uncertain and fatal.
 func createNetwork(ctx context.Context, owner, name string) error {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "docker", "network", "create", "--internal", "--label", ownerLabel+"="+owner, name)
+	cmd := exec.CommandContext(ctx, "docker", "network", "create", "--internal", "--ipv6=false",
+		"-o", "com.docker.network.bridge.inhibit_ipv4=true", "--label", ownerLabel+"="+owner, name)
 	var stderr cappedOutput
 	cmd.Stderr = &stderr
 	err := cmd.Run()
