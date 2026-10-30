@@ -61,7 +61,11 @@ The CLI follows the controller's pinned Multica revision, not the image. Refinem
 (#41, 2026-10-07): the controller mounts a digest-pinned CLI artifact (`multica_cli`,
 `deploy/multica-cli.Dockerfile`) read-only at `/opt/multica-sandbox/multica`, first
 on `PATH` (ADR 0002); the relay requires it. Images need no `multica`, and a copy in
-the image cannot shadow it.
+the image cannot shadow it. Refinement (2026-10-30): under ACP a denied permission is
+a refusal, and a short list blocked `/tmp`, `/sys`, web research and subagents. With
+the relay every tool is now allowed, as in native OpenCode; the disposable container,
+its network and the relays are the boundary between attempts. Only `question` and
+`doom_loop`, which would wait for a person, are denied.
 
 ## Consequences
 

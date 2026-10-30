@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -16,10 +17,13 @@ import (
 )
 
 type stubIssuer struct {
-	calls  int
-	denyAt int
-	env    identity.Env
+	calls     int
+	denyAt    int
+	env       identity.Env
+	anonymous string
 }
+
+func (s *stubIssuer) AnonymousMCP(url string) bool { return url == s.anonymous }
 
 func (s *stubIssuer) AcquireForMCP(_ context.Context, _ identity.Ref, env identity.Env, _ string) (identity.AccessToken, error) {
 	s.calls++
@@ -268,6 +272,21 @@ func TestIssuerReceivesClaimAgentEnv(t *testing.T) {
 	defer run.Remove(context.Background())
 	if issuer.env == nil || issuer.env.Allowed([]string{identity.EnvClientID})[identity.EnvClientID] != "client-env" {
 		t.Fatal("issuer did not receive the claim's agent env")
+	}
+}
+
+func TestAnonymousMCPIssuesNoToken(t *testing.T) {
+	issuer, workload, authority := &stubIssuer{anonymous: "https://tools.example.invalid/mcp"}, &stubWorkload{}, &stubAuthority{}
+	a := Adapter{Server: "https://multica.example.invalid", Controller: "controller", Issuer: issuer, Authority: authority, MCPRelay: NewMCPRelay(), Workloads: workload, Status: stubStatus{}}
+	run, err := a.Start(context.Background(), safeTask())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer run.Remove(context.Background())
+	authority.Lock()
+	defer authority.Unlock()
+	if issuer.calls != 0 || slices.Contains(authority.actions, "renew") {
+		t.Fatalf("anonymous MCP issued %d tokens, authority %v", issuer.calls, authority.actions)
 	}
 }
 

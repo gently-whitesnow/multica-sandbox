@@ -100,8 +100,11 @@ Agents get a private Docker engine per attempt that disappears with the attempt.
 The trust boundary becomes the user namespace: root inside the attempt, including
 inner `--privileged`, is unprivileged on the host, but kernel exposure is larger
 than under runc. Disk use per attempt is unbounded by Sysbox and must be bounded
-by the host. Tests: unit tests of `createArgs`, the policy and the runtime check for
-both runtimes; `VERIFY_SYSBOX=1` integration on a Sysbox host covering the canary,
+by the host. Refinement (2026-10-30): before Linux 5.19 Sysbox shifts image mounts
+with shiftfs, whose mappings name host paths; tools locating themselves through
+`dladdr` (.NET testhost) fail. `SYSBOX_SKIP_UID_SHIFT` covers every read-only
+image mount; files show as `nobody`. Tests: unit tests of `createArgs`, the policy
+and the runtime check for both runtimes; `VERIFY_SYSBOX=1` integration on a Sysbox host covering the canary,
 readiness (about 1 s per attempt), mirror pulls, inner runs, read-only root, cleanup,
 a refused engine and adversarial cases (inner `--privileged`, rootfs writes through
 an inner bind mount, the engine being the attempt's own).

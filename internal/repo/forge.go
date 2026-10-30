@@ -22,8 +22,11 @@ import (
 const (
 	// ForgePort is where attempts call forge APIs: the helper forwards loopback 443.
 	ForgePort = "443"
-	// CertDir holds the forge relay CA inside attempts (SSL_CERT_DIR).
+	// CertDir holds the forge relay CA inside attempts.
 	CertDir = "/workspace/certs"
+	// CertDirs is the attempts' SSL_CERT_DIR: the forge CA and the system roots. Clients that
+	// read only SSL_CERT_DIR (rustls-native-certs, as in uv) would otherwise trust the relay alone.
+	CertDirs = CertDir + ":/etc/ssl/certs"
 	// CAPath is the projected CA certificate.
 	CAPath = CertDir + "/multica-sandbox-forge.pem"
 )

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -160,7 +161,11 @@ func (b *Backend) createArgs(name string, limits Resources, extra ...string) []s
 	args := []string{"create", "--name", name, "--label", ownerLabel + "=" + b.Owner,
 		"--pull=never", "--runtime=" + runtime, "--network=none", "--read-only", "--user=" + user,
 		"--cap-drop=ALL", "--security-opt=no-new-privileges=true", "--cgroupns=private", "--ipc=private",
-		"--restart=no", "--no-healthcheck", "--log-driver=none", "--workdir=/workspace", "--env=HOME=/workspace"}
+		"--restart=no", "--no-healthcheck", "--log-driver=none", "--workdir=/workspace"}
+	// HOME is the tmpfs unless the caller places it elsewhere; one value avoids getenv ambiguity.
+	if !slices.ContainsFunc(extra, func(arg string) bool { return strings.HasPrefix(arg, "--env=HOME=") }) {
+		args = append(args, "--env=HOME=/workspace")
+	}
 	args = append(append(append(args, limits.args()...), extra...), "--entrypoint", b.Command[0], b.Image)
 	return append(args, b.Command[1:]...)
 }

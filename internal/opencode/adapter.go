@@ -22,6 +22,8 @@ type Issuer interface {
 	// AcquireForMCP issues the agent's token for a selected MCP URL; env is the claim's
 	// agent custom_env, which may carry the agent's credentials (ADR 0022).
 	AcquireForMCP(context.Context, identity.Ref, identity.Env, string) (identity.AccessToken, error)
+	// AnonymousMCP approves a selected MCP URL that the relay reaches without a token.
+	AnonymousMCP(string) bool
 }
 type Authority interface {
 	Apply(context.Context, attempt.Grant) error
@@ -75,7 +77,9 @@ type running struct {
 	adapter     *Adapter
 	task        multica.Task
 	connections map[string]Remote
-	workload    execution.ProjectedRun
+	// anonymous names selected connections approved without the agent's token.
+	anonymous map[string]bool
+	workload  execution.ProjectedRun
 	// mu guards tokens, which the MCP relay reads while the renewal loop replaces them.
 	mu         sync.Mutex
 	tokens     map[string]identity.AccessToken
@@ -135,7 +139,11 @@ func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, 
 			return nil, &execution.RejectedError{Err: err}
 		}
 	}
-	r := &running{adapter: a, task: task, connections: connections, tokens: map[string]identity.AccessToken{}, done: make(chan error, 1), exited: make(chan struct{}), skills: skills}
+	anonymous := map[string]bool{}
+	for name, connection := range connections {
+		anonymous[name] = a.Issuer.AnonymousMCP(connection.URL)
+	}
+	r := &running{adapter: a, task: task, connections: connections, anonymous: anonymous, tokens: map[string]identity.AccessToken{}, done: make(chan error, 1), exited: make(chan struct{}), skills: skills}
 	runCtx, cancel := context.WithCancel(ctx)
 	r.cancel = cancel
 	if a.Relay != nil {
@@ -272,6 +280,9 @@ func (r *running) refresh(ctx context.Context) error {
 	}
 	ref := identity.Ref{Server: r.adapter.Server, WorkspaceID: r.task.WorkspaceID, AgentID: r.task.AgentID}
 	for name, connection := range r.connections {
+		if r.anonymous[name] {
+			continue
+		}
 		r.mu.Lock()
 		token := r.tokens[name]
 		r.mu.Unlock()
