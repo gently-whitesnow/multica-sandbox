@@ -64,7 +64,7 @@ type stubWorkload struct {
 	reused   bool
 	// agent answers the adapter's ACP turn; nil waits for cancellation.
 	agent *fakeAgent
-	// capture answers Capture, which records its argv in captured.
+	// capture answers bounded Capture and streamed exports; captured records their argv.
 	capture  []byte
 	captured []string
 	// refuse fails Start like a backend that created nothing.
@@ -194,7 +194,11 @@ func (s *stubWorkload) loaded() bool {
 }
 
 // Stream runs the fake agent; envs receives the environment once the prompt arrived.
-func (s *stubWorkload) Stream(ctx context.Context, _ []string, env map[string]string, converse func(io.Writer, io.Reader) error) error {
+func (s *stubWorkload) Stream(ctx context.Context, args []string, env map[string]string, converse func(io.Writer, io.Reader) error) error {
+	if len(args) > 1 && args[0] == "opencode" && args[1] == "export" {
+		s.captured = args
+		return converse(io.Discard, strings.NewReader(string(s.capture)))
+	}
 	if s.agent == nil {
 		s.agent = &fakeAgent{version: "2.2.2"}
 	}
@@ -228,7 +232,7 @@ const sentPrompt = "acp:session/prompt"
 
 func (s *stubWorkload) Capture(_ context.Context, args []string, _ map[string]string) ([]byte, error) {
 	s.captured = args
-	return s.capture, nil
+	return s.capture[:min(len(s.capture), 65536)], nil
 }
 func (s *stubWorkload) Result() execution.Result { return execution.Result{} }
 

@@ -57,6 +57,8 @@ type ProjectedRun interface {
 	// Stream runs the agent with stdin and stdout connected to the adapter; env passes
 	// through the exec client environment, never through argv. Stdin is closed once the
 	// callback returns; the agent then has a short grace period to exit.
+	// On cancellation the transport stays open briefly so the callback can cancel
+	// the agent through its protocol before the exec client is stopped.
 	Stream(context.Context, []string, map[string]string, func(io.Writer, io.Reader) error) error
 	// Capture runs a controller-owned command as the attempt user and returns its bounded stdout.
 	Capture(context.Context, []string, map[string]string) ([]byte, error)

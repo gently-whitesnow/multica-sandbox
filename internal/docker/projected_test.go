@@ -113,6 +113,28 @@ cp "$TMPDIR/run" /tmp/run; ! /tmp/run; df -k /workspace | awk 'NR==2 { exit !($2
 	if err := a.Stream(ctx, []string{"true"}, map[string]string{"BAD=NAME": "x"}, func(io.Writer, io.Reader) error { return nil }); err == nil {
 		t.Fatal("invalid environment name accepted")
 	}
+	// Cancelling the attempt leaves stdin open for the protocol's cancellation handshake.
+	turn, cancelTurn := context.WithCancel(ctx)
+	defer cancelTurn()
+	if err := a.Stream(turn, []string{"/bin/sh", "-c", `echo ready; read message; echo "$message"`}, nil, func(w io.Writer, r io.Reader) error {
+		reader := bufio.NewReader(r)
+		if _, err := reader.ReadString('\n'); err != nil {
+			return err
+		}
+		cancelTurn()
+		// Let CommandContext observe cancellation before the protocol writes to stdin.
+		time.Sleep(250 * time.Millisecond)
+		if _, err := io.WriteString(w, "session/cancel\n"); err != nil {
+			return err
+		}
+		line, err := reader.ReadString('\n')
+		if err == nil && line != "session/cancel\n" {
+			return fmt.Errorf("cancellation was not acknowledged")
+		}
+		return err
+	}); err != nil {
+		t.Fatalf("transport ended before cancellation handshake: %v", err)
+	}
 	if err := a.Write(ctx, "/etc/forbidden", []byte("secret")); err == nil {
 		t.Fatal("unapproved projection path")
 	}

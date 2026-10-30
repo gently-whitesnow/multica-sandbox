@@ -29,6 +29,8 @@ type Lease struct {
 	// request path, and RawPath, when set, is its escaped form (encoded slashes).
 	Authorization, Path, RawPath string
 	Header                       http.Header
+	// DropQuery discards caller query parameters for an exact upstream endpoint.
+	DropQuery bool
 	// Context ends when the grant is revoked, cancelling in-flight requests.
 	Context context.Context
 	Release func()
@@ -99,6 +101,9 @@ func New(auth Authorizer, p Policy) (*Relay, error) {
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			lease := pr.In.Context().Value(leaseKey{}).(Lease)
 			pr.SetURL(lease.Origin)
+			if lease.DropQuery {
+				pr.Out.URL.RawQuery, pr.Out.URL.ForceQuery = "", false
+			}
 			if lease.Path != "" {
 				pr.Out.URL.Path, pr.Out.URL.RawPath = lease.Origin.Path+lease.Path, ""
 				if lease.RawPath != "" {
