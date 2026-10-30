@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/gently-whitesnow/multica-sandbox/internal/baseurl"
+	"github.com/gently-whitesnow/multica-sandbox/internal/metrics"
 )
 
 // UpstreamRevision is Multica v0.5.2, the release self-hosted deployments run (ADR 0005).
@@ -25,6 +27,9 @@ type Client struct {
 	token  string
 	http   *http.Client
 	outbox *Outbox
+	// metrics and log, when set, record each request (Instrument).
+	metrics *metrics.Metrics
+	log     *slog.Logger
 }
 
 type HTTPError struct{ Status int }
@@ -80,7 +85,25 @@ func (c *Client) callLimit(ctx context.Context, method, path string, body, out a
 }
 
 // send returns a response body of at most read bytes; 0 discards it.
-func (c *Client) send(ctx context.Context, method, path string, body any, read int) ([]byte, error) {
+func (c *Client) send(ctx context.Context, method, path string, body any, read int) (data []byte, err error) {
+	start, route := time.Now(), Route(path)
+	if ctx.Value(resentKey{}) != nil {
+		c.metrics.Retry(Target, method, route)
+	}
+	status, cause := 0, error(nil)
+	defer func() {
+		errorType := ""
+		if status == 0 {
+			if cause == nil {
+				return
+			}
+			errorType = metrics.ErrorType(ctx, cause)
+		}
+		c.metrics.Client(Target, method, route, status, errorType, time.Since(start))
+		if c.log != nil && (errorType != "" || status >= 400) {
+			c.log.Debug("multica request failed", "method", method, "path", route, "status", status, "error_type", errorType, "seconds", time.Since(start).Seconds())
+		}
+	}()
 	var reader io.Reader
 	if body != nil {
 		data, err := json.Marshal(body)
@@ -101,11 +124,14 @@ func (c *Client) send(ctx context.Context, method, path string, body any, read i
 	req.Header.Set("X-Client-Capabilities", "coalesced-comments-v1,platform-skill-v1")
 	resp, err := c.http.Do(req)
 	if err != nil {
+		// The cause names the failure for metrics; callers see only errTransport.
+		cause = err
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
 		return nil, errTransport
 	}
+	status = resp.StatusCode
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, &HTTPError{resp.StatusCode}
@@ -113,7 +139,7 @@ func (c *Client) send(ctx context.Context, method, path string, body any, read i
 	if read == 0 {
 		return nil, nil
 	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, int64(read)+1))
+	data, err = io.ReadAll(io.LimitReader(resp.Body, int64(read)+1))
 	if err != nil {
 		return nil, fmt.Errorf("read Multica response")
 	}
@@ -183,8 +209,9 @@ var (
 	}
 )
 
-func retry(ctx context.Context, schedule []time.Duration, call func() error) error {
-	err := call()
+// retry hands call a context that marks resent requests after the first.
+func retry(ctx context.Context, schedule []time.Duration, call func(context.Context) error) error {
+	err := call(ctx)
 	for _, delay := range schedule {
 		if !Transient(err) {
 			return err
@@ -192,7 +219,36 @@ func retry(ctx context.Context, schedule []time.Duration, call func() error) err
 		if waitErr := retrySleep(ctx, delay); waitErr != nil {
 			return waitErr
 		}
-		err = call()
+		err = call(resent(ctx))
 	}
 	return err
+}
+
+type resentKey struct{}
+
+func resent(ctx context.Context) context.Context { return context.WithValue(ctx, resentKey{}, true) }
+
+// Target names Multica in client metrics.
+const Target = "multica"
+
+// Instrument records each request in m and logs failed ones at debug level.
+func (c *Client) Instrument(m *metrics.Metrics, log *slog.Logger) { c.metrics, c.log = m, log }
+
+// routeWords are the literal segments of controller requests; any other segment is an
+// identifier and becomes {id}, so the path label stays bounded.
+var routeWords = map[string]bool{"api": true, "daemon": true, "workspaces": true, "repos": true, "tasks": true, "claim": true,
+	"issues": true, "gc-check": true, "runtimes": true, "status": true, "register": true, "heartbeat": true, "env": true,
+	"recover-orphans": true, "prepare-lease": true, "start": true, "messages": true, "cancel-ack": true, "complete": true,
+	"fail": true, "usage": true, "session": true, "models": true, "update": true, "local-skills": true, "import": true, "result": true}
+
+// Route is the request path template: no query and identifiers as {id}.
+func Route(path string) string {
+	path, _, _ = strings.Cut(path, "?")
+	segments := strings.Split(path, "/")
+	for i, s := range segments {
+		if s != "" && !routeWords[s] {
+			segments[i] = "{id}"
+		}
+	}
+	return strings.Join(segments, "/")
 }

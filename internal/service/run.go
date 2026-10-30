@@ -17,6 +17,7 @@ import (
 	"github.com/gently-whitesnow/multica-sandbox/internal/docker"
 	agentidentity "github.com/gently-whitesnow/multica-sandbox/internal/identity"
 	"github.com/gently-whitesnow/multica-sandbox/internal/instance"
+	"github.com/gently-whitesnow/multica-sandbox/internal/metrics"
 	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
 	"github.com/gently-whitesnow/multica-sandbox/internal/opencode"
 	"github.com/gently-whitesnow/multica-sandbox/internal/pool"
@@ -25,7 +26,7 @@ import (
 )
 
 func Run(ctx context.Context, c Config, stateDir, tokenPath string, out io.Writer) error {
-	c.log = out
+	c.log = newLogger(out, c.Debug)
 	if c.Concurrency == 0 {
 		c.Concurrency = DefaultConcurrency
 	}
@@ -55,6 +56,15 @@ func Run(ctx context.Context, c Config, stateDir, tokenPath string, out io.Write
 	if err != nil {
 		return err
 	}
+	if c.MetricsListen != "" {
+		if c.metrics, err = metrics.New(); err != nil {
+			return err
+		}
+		if err = c.metrics.Serve(ctx, c.MetricsListen); err != nil {
+			return err
+		}
+	}
+	api.Instrument(c.metrics, c.log)
 	engine, err := docker.EngineID(ctx)
 	if err != nil {
 		return err
@@ -74,9 +84,7 @@ func Run(ctx context.Context, c Config, stateDir, tokenPath string, out io.Write
 	if err != nil || duration <= 0 {
 		return fmt.Errorf("positive timeout required")
 	}
-	p := controller.Probe{API: api, Backend: backend, Duration: duration, Interval: time.Second,
-		Observe:  func(event, id string) { fmt.Fprintf(out, "%s task=%s\n", event, id) },
-		Finished: func(f controller.Finish) { fmt.Fprintln(out, finished(f)) }}
+	p := controller.Probe{API: api, Backend: backend, Duration: duration, Interval: time.Second, Observe: c.attemptEvent, Finished: c.finished}
 	// Reconcile before validation so a missing image cannot strand old executions.
 	if err = backend.Reconcile(ctx); err != nil {
 		return err
@@ -86,28 +94,29 @@ func Run(ctx context.Context, c Config, stateDir, tokenPath string, out io.Write
 	}
 	if c.OpenCode != nil {
 		c.Command = command
-		launch, attempts, err := openCodeAdapter(ctx, c, stateDir, api, backend, out)
+		launch, attempts, err := openCodeAdapter(ctx, c, stateDir, api, backend)
 		if err != nil {
 			return err
 		}
 		p.Launch = launch.Start
 		agentAPI := &agentFleetAPI{Client: api, inference: launch.Inference, server: strings.TrimRight(c.Server, "/")}
 		p.API = agentAPI
-		return serveFleet(ctx, c, stateDir, agentAPI, &p, out, admission(attempts))
+		return serveFleet(ctx, c, stateDir, agentAPI, &p, admission(attempts, c.metrics))
 	}
-	return serveFleet(ctx, c, stateDir, api, &p, out, nil)
+	return serveFleet(ctx, c, stateDir, api, &p, nil)
 }
 
 // openCodeAdapter also returns the attempt pool, nil without one.
-func openCodeAdapter(ctx context.Context, c Config, stateDir string, api *multica.Client, backend *docker.Backend, out io.Writer) (*opencode.Adapter, *pool.Pool, error) {
-	adapter, workloads, err := newOpenCodeAdapter(ctx, c, stateDir, api, backend, out)
+func openCodeAdapter(ctx context.Context, c Config, stateDir string, api *multica.Client, backend *docker.Backend) (*opencode.Adapter, *pool.Pool, error) {
+	adapter, workloads, err := newOpenCodeAdapter(ctx, c, stateDir, api, backend)
 	if err != nil {
 		return nil, nil, err
 	}
 	return adapter, workloads.Pool, nil
 }
 
-func newOpenCodeAdapter(ctx context.Context, c Config, stateDir string, api *multica.Client, backend *docker.Backend, out io.Writer) (*opencode.Adapter, *docker.Projected, error) {
+func newOpenCodeAdapter(ctx context.Context, c Config, stateDir string, api *multica.Client, backend *docker.Backend) (*opencode.Adapter, *docker.Projected, error) {
+	log := c.logger()
 	watchdog, err := optionalDuration(c.OpenCode.IdleWatchdog, 10*time.Minute)
 	if err != nil {
 		return nil, nil, fmt.Errorf("idle_watchdog must be a positive duration")
@@ -131,7 +140,7 @@ func newOpenCodeAdapter(ctx context.Context, c Config, stateDir string, api *mul
 				// A failed check keeps the volumes (fail safe), as upstream GC skips them.
 				closed, err := api.ClosedIssues(ctx, workspace, issues)
 				if err != nil && ctx.Err() == nil {
-					fmt.Fprintf(out, "session issue check deferred workspace=%s: %v\n", workspace, err)
+					log.Warn("session issue check deferred", "workspace", workspace, "error", err.Error())
 				}
 				return closed
 			}}
@@ -199,7 +208,7 @@ func newOpenCodeAdapter(ctx context.Context, c Config, stateDir string, api *mul
 	if issuer != nil {
 		adapter.MCPRelay = opencode.NewMCPRelay()
 		policy := relay.Policy{Allow: opencode.MCPRelayPath, Reserved: opencode.MCPReservedHeaders, HeaderTimeout: opencode.MCPHeaderTimeout}
-		if err = serveRelay(ctx, "MCP", adapter.MCPRelay, *c.OpenCode.MCPRelay, policy, nil, nil); err != nil {
+		if err = c.serveRelay(ctx, "MCP", adapter.MCPRelay, *c.OpenCode.MCPRelay, policy, nil, nil); err != nil {
 			return nil, nil, err
 		}
 		adapter.MCPRelayURL = strings.TrimRight(c.OpenCode.MCPRelay.URL, "/")
@@ -213,17 +222,17 @@ func newOpenCodeAdapter(ctx context.Context, c Config, stateDir string, api *mul
 				return nil, nil, err
 			}
 			adapter.GitRelay = repo.NewRelay(c.OpenCode.GitRelay.URL, hosts)
-			if err = serveRelay(ctx, "Git", adapter.GitRelay, *c.OpenCode.GitRelay, relay.Policy{Allow: repo.GitPath, Limit: repo.PushLimit, HeaderTimeout: repo.PushTimeout, Proxy: true}, nil, nil); err != nil {
+			if err = c.serveRelay(ctx, "Git", adapter.GitRelay, *c.OpenCode.GitRelay, relay.Policy{Allow: repo.GitPath, Limit: repo.PushLimit, HeaderTimeout: repo.PushTimeout, Proxy: true}, nil, nil); err != nil {
 				return nil, nil, err
 			}
-			if err = serveForge(ctx, c.OpenCode.ForgeRelay, adapter.GitRelay, hosts, workloads); err != nil {
+			if err = serveForge(ctx, c, adapter.GitRelay, hosts, workloads); err != nil {
 				return nil, nil, err
 			}
 			// The upstream CLI authenticates checkout with its Multica relay credential.
 			adapter.Checkout = &repo.Checkout{Auth: grants, Hosts: hosts, Settings: api}
 			routes = map[string]http.Handler{"/repo/checkout": adapter.Checkout}
 		}
-		if err = serveRelay(ctx, "Multica", grants, *c.OpenCode.MulticaRelay, relay.Policy{Allow: multica.RelayPath}, routes, nil); err != nil {
+		if err = c.serveRelay(ctx, "Multica", grants, *c.OpenCode.MulticaRelay, relay.Policy{Allow: multica.RelayPath}, routes, nil); err != nil {
 			return nil, nil, err
 		}
 		adapter.Relay = grants
@@ -238,7 +247,7 @@ func newOpenCodeAdapter(ctx context.Context, c Config, stateDir string, api *mul
 		adapter.InferenceRelayURL = strings.TrimRight(c.OpenCode.InferenceRelay.URL, "/")
 	}
 	if workloads.Sessions != nil {
-		go workloads.Sessions.Sweep(ctx, c.Daemon, func(err error) { fmt.Fprintf(out, "session sweep failed: %v\n", err) })
+		go workloads.Sessions.Sweep(ctx, c.Daemon, func(err error) { log.Warn("session sweep failed", "error", err.Error()) })
 	}
 	return adapter, workloads, nil
 }
@@ -276,7 +285,8 @@ func optionalDuration(value string, fallback time.Duration) (time.Duration, erro
 
 // serveForge serves gh and glab calls for the API names of Git hosts on TLS (ADR 0015); attempts
 // resolve those names to loopback, where the helper forwards to the forge relay.
-func serveForge(ctx context.Context, c *RelayConfig, git *repo.Relay, hosts *repo.Hosts, workloads *docker.Projected) error {
+func serveForge(ctx context.Context, config Config, git *repo.Relay, hosts *repo.Hosts, workloads *docker.Projected) error {
+	c := config.OpenCode.ForgeRelay
 	if c == nil {
 		return nil
 	}
@@ -291,7 +301,7 @@ func serveForge(ctx context.Context, c *RelayConfig, git *repo.Relay, hosts *rep
 		return err
 	}
 	workloads.ForgeHosts = hosts.APINames()
-	return serveRelay(ctx, "forge", forge, *c, relay.Policy{Allow: repo.ForgePath, EncodedSlash: true}, nil, forge.TLSConfig())
+	return config.serveRelay(ctx, "forge", forge, *c, relay.Policy{Allow: repo.ForgePath, EncodedSlash: true}, nil, forge.TLSConfig())
 }
 
 func (a *agentFleetAPI) Message(ctx context.Context, id string) error { return a.AgentMessage(ctx, id) }

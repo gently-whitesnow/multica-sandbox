@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gently-whitesnow/multica-sandbox/internal/docker"
+	"github.com/gently-whitesnow/multica-sandbox/internal/metrics"
 )
 
 func TestAttemptRuntimeConfiguration(t *testing.T) {
@@ -105,7 +106,8 @@ func TestClaimsWaitWhilePoolIsUnderPressure(t *testing.T) {
 	a := &fleetFake{queued: map[string]int{"a": 3}}
 	f := newFleet(t, a)
 	var log bytes.Buffer
-	f.out, f.admit, f.ready = &log, admission(p), map[string]string{"a": "a"}
+	m, _ := metrics.New()
+	f.log, f.admit, f.metrics, f.ready = newLogger(&log, false), admission(p, m), m, map[string]string{"a": "a"}
 	execute, _, release := track()
 	defer close(release)
 	for range 3 {
@@ -113,8 +115,11 @@ func TestClaimsWaitWhilePoolIsUnderPressure(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if a.claims != 0 || len(f.active) != 0 || strings.Count(log.String(), "claims paused: memory pressure some avg10=42.00%") != 1 {
+	if a.claims != 0 || len(f.active) != 0 || strings.Count(log.String(), `"msg":"claims paused","pool":"memory pressure some avg10=42.00%`) != 1 {
 		t.Fatalf("claimed under pressure: claims=%d log=%q", a.claims, log.String())
+	}
+	if text := exposition(m); !strings.Contains(text, "sandbox_claims_paused 1") || !strings.Contains(text, "sandbox_pool_memory_pressure_ratio 0.42") {
+		t.Fatalf("pause not exported:\n%s", text)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "memory.pressure"), []byte("some avg10=1.00 avg60=0 avg300=0 total=0\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -129,8 +134,11 @@ func TestClaimsWaitWhilePoolIsUnderPressure(t *testing.T) {
 	if err := f.claim(context.Background(), 10, execute); err != nil {
 		t.Fatal(err)
 	}
-	if len(f.active) != 3 || strings.Count(log.String(), "claims resumed") != 1 || strings.Count(log.String(), "claims paused") != 1 {
+	if len(f.active) != 3 || strings.Count(log.String(), `"msg":"claims resumed"`) != 1 || strings.Count(log.String(), `"msg":"claims paused"`) != 1 {
 		t.Fatalf("claims did not resume: %d active, log %q", len(f.active), log.String())
+	}
+	if text := exposition(m); !strings.Contains(text, "sandbox_claims_paused 0") || !strings.Contains(text, "sandbox_attempt_active 3") {
+		t.Fatalf("resume not exported:\n%s", text)
 	}
 	if err := os.Remove(filepath.Join(dir, "memory.pressure")); err != nil {
 		t.Fatal(err)

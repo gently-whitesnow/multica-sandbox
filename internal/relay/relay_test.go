@@ -3,12 +3,14 @@ package relay
 import (
 	"bufio"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -397,5 +399,49 @@ func TestAPIKeyHeaderCarriesOpaqueCredential(t *testing.T) {
 	}
 	if len(f.seen) != 0 {
 		t.Fatal("denied request forwarded")
+	}
+}
+
+// Record sees each request once: the upstream status, or the refusal the relay answered.
+func TestRecordsEachOutcomeOnce(t *testing.T) {
+	type outcome struct {
+		status int
+		err    error
+	}
+	var mu sync.Mutex
+	var seen []outcome
+	record := func(_ *http.Request, status int, err error, elapsed time.Duration) {
+		if elapsed < 0 {
+			t.Error("negative elapsed time")
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		seen = append(seen, outcome{status, err})
+	}
+	var target string
+	upstream := func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/redirect") {
+			http.Redirect(w, r, target, http.StatusTemporaryRedirect)
+			return
+		}
+		w.WriteHeader(http.StatusTooManyRequests)
+	}
+	f := newFixture(t, upstream, Policy{Allow: multica.RelayPath, Limit: 1024, Record: record})
+	target = f.target
+	a := f.issue(t, "attempt-a", upstreamA)
+	f.do(t, http.MethodGet, "/api/issues/x", a, nil, nil)
+	f.do(t, http.MethodGet, "/api/issues/redirect", a, nil, nil)
+	f.do(t, http.MethodGet, "/api/issues/x", "mat_unknown", nil, nil)
+	f.do(t, http.MethodGet, "/api/tokens", a, nil, nil)
+	mu.Lock()
+	defer mu.Unlock()
+	want := []outcome{{http.StatusTooManyRequests, nil}, {0, ErrRedirect}, {0, ErrCredential}, {0, ErrPolicy}}
+	if len(seen) != len(want) {
+		t.Fatalf("recorded %v, want %v", seen, want)
+	}
+	for i, o := range want {
+		if seen[i].status != o.status || !errors.Is(seen[i].err, o.err) {
+			t.Fatalf("outcome %d: %v, want %v", i, seen[i], o)
+		}
 	}
 }

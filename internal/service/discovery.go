@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sort"
 
 	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
@@ -57,7 +56,7 @@ func (f *fleet) sync(ctx context.Context) error {
 			return err
 		}
 		f.ready[ws.ID] = rt.ID
-		fmt.Fprintf(f.out, "registered workspace=%s runtime=%s orphaned=%d\n", ws.ID, rt.ID, recovered.Orphaned)
+		f.log.Info("workspace registered", "workspace", ws.ID, "runtime", rt.ID, "orphaned", recovered.Orphaned)
 	}
 	return nil
 }
@@ -71,7 +70,7 @@ func (f *fleet) remove(ws, rt string) {
 			attempt.cancel()
 		}
 	}
-	fmt.Fprintf(f.out, "removed workspace=%s runtime=%s\n", ws, rt)
+	f.log.Info("workspace removed", "workspace", ws, "runtime", rt)
 }
 
 // beat is the only heartbeat of fleet runtimes and answers their pending requests;
@@ -91,7 +90,7 @@ func (f *fleet) beatRuntime(ctx context.Context, ws, rt string) error {
 	var unanswered *multica.UnansweredError
 	switch {
 	case errors.As(err, &unanswered):
-		fmt.Fprintf(f.out, "runtime=%s %v\n", rt, err)
+		f.log.Warn("runtime request unanswered", "runtime", rt, "error", err.Error())
 		return nil
 	case inaccessible(err):
 		f.remove(ws, rt)

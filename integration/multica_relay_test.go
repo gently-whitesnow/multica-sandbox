@@ -132,7 +132,7 @@ func multicaRelayService(t *testing.T, api *multica.Client, agentImage string, n
 		}
 	})
 	f.compose("up", "-d", "--no-build")
-	eventually(t, "relay controller registration", func() bool { return strings.Contains(dockerTest(t, "logs", controllerName), "ready workspaces=") })
+	eventually(t, "relay controller registration", func() bool { return strings.Contains(dockerTest(t, "logs", controllerName), readyEvent) })
 	runtime := sql(t, fmt.Sprintf("SELECT id FROM agent_runtime WHERE daemon_id='%s' AND workspace_id='%s' AND provider='opencode';", controller, workspace))
 	if runtime == "" {
 		t.Fatal("relay runtime absent")

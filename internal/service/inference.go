@@ -36,6 +36,6 @@ func openCodeInference(ctx context.Context, c Config, api *multica.Client) (*inf
 	}
 	policy := relay.Policy{Allow: inference.RelayPath, Reserved: inference.ReservedHeaders, Withhold: true, HeaderTimeout: inference.HeaderTimeout}
 	grants := relay.NewGrants(inference.RelayPrefix)
-	err = serveRelay(ctx, "inference", grants, *c.OpenCode.InferenceRelay, policy, nil, nil)
+	err = c.serveRelay(ctx, "inference", grants, *c.OpenCode.InferenceRelay, policy, nil, nil)
 	return source, grants, err
 }

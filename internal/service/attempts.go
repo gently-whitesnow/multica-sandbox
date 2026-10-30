@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gently-whitesnow/multica-sandbox/internal/docker"
+	"github.com/gently-whitesnow/multica-sandbox/internal/metrics"
 	"github.com/gently-whitesnow/multica-sandbox/internal/pool"
 )
 
@@ -121,9 +122,9 @@ func attemptPool(c *OpenCodeConfig, resources docker.Resources) (*pool.Pool, doc
 	return attempts, resources.InPool(p.CgroupParent, ceiling), nil
 }
 
-// admission defers claims while the pool is under memory pressure; without a pool
-// every claim is admitted.
-func admission(p *pool.Pool) func() (bool, string) {
+// admission defers claims while the pool is under memory pressure and records each
+// reading in m; without a pool every claim is admitted.
+func admission(p *pool.Pool, m *metrics.Metrics) func() (bool, string) {
 	if p == nil {
 		return nil
 	}
@@ -132,6 +133,7 @@ func admission(p *pool.Pool) func() (bool, string) {
 		if err != nil {
 			return false, "attempt pool unreadable: " + err.Error()
 		}
+		m.Pool(metrics.PoolReading{Pressure: status.SomeAvg10 / 100, Usage: status.WorkingSet, Limit: status.High})
 		return ok, status.String()
 	}
 }

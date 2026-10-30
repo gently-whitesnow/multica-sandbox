@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/gently-whitesnow/multica-sandbox/internal/controller"
-	"io"
+	"log/slog"
 	"maps"
 	"slices"
 	"sync"
@@ -55,7 +55,7 @@ func (a *fleetFake) ClaimBatch(_ context.Context, _ string, scopes map[string]st
 	return nil, nil
 }
 func newFleet(t *testing.T, a *fleetFake) *fleet {
-	return newFleetState(a, "test", t.TempDir(), io.Discard, map[string]string{}, 16, 0)
+	return newFleetState(a, "test", t.TempDir(), slog.New(slog.DiscardHandler), map[string]string{}, 16, 0)
 }
 
 // track starts attempts that block until released and reports what is running.
@@ -315,7 +315,7 @@ func (a *wakeFake) Wakeups(ctx context.Context, _ []string, connected func(), de
 func TestPendingWorkHintHeartbeatsItsRuntimeNow(t *testing.T) {
 	a := &wakeFake{fleetFake: &fleetFake{workspaces: []multica.Workspace{{ID: "ws-a"}, {ID: "ws-b"}}, queued: map[string]int{}},
 		hints: make(chan multica.Wakeup, 1), beat: make(chan string, 16)}
-	f := newFleetState(a, "test", t.TempDir(), io.Discard, map[string]string{}, 1, 0)
+	f := newFleetState(a, "test", t.TempDir(), slog.New(slog.DiscardHandler), map[string]string{}, 1, 0)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	execute, _, _ := track()

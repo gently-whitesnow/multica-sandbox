@@ -12,8 +12,8 @@ import (
 
 func fleetMembershipChange(t *testing.T, api *multica.Client, logs *fleetLog, first, second string) {
 	sql(t, fmt.Sprintf("DELETE FROM member WHERE workspace_id='%s' AND user_id='%s'; INSERT INTO member(workspace_id,user_id,role) VALUES('%s','%s','owner');", fleetWorkspace(1), user, fleetWorkspace(100), user))
-	eventually(t, "membership removal observed", func() bool { return logs.contains("removed workspace=" + fleetWorkspace(1)) })
-	eventually(t, "new workspace registered", func() bool { return logs.contains("registered workspace=" + fleetWorkspace(100)) })
+	eventually(t, "membership removal observed", func() bool { return logs.contains(`"msg":"workspace removed","workspace":"` + fleetWorkspace(1)) })
+	eventually(t, "new workspace registered", func() bool { return logs.contains(`"msg":"workspace registered","workspace":"` + fleetWorkspace(100)) })
 	waitTask(t, api, second, "completed")
 	if strings.Contains(sql(t, fmt.Sprintf("SELECT status FROM agent_task_queue WHERE id='%s';", first)), "completed") {
 		t.Fatal("removed workspace attempt continued")

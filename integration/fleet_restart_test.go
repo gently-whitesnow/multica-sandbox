@@ -19,13 +19,13 @@ func fleetRestart(t *testing.T) {
 	c := service.Config{Server: "http://127.0.0.1:8080", Concurrency: 2, Daemon: daemon, Image: image, Command: []string{"/bin/sh", "-c", "sleep 12"}, Timeout: "30s"}
 	f := prepareServiceConfig(t, c)
 	cid := f.compose("ps", "-q", "controller")
-	eventually(t, "fleet ready", func() bool { return strings.Contains(dockerTest(t, "logs", cid), "ready workspaces=") })
+	eventually(t, "fleet ready", func() bool { return strings.Contains(dockerTest(t, "logs", cid), readyEvent) })
 	rt := multica.Runtime{ID: sql(t, fmt.Sprintf("SELECT id FROM agent_runtime WHERE workspace_id='%s' AND daemon_id='%s';", fleetWorkspace(2), daemon))}
 	task := enqueueWorkspace(t, rt, 201, fleetWorkspace(2))
 	old := waitServiceExecution(t, cid, task)
 	sql(t, fmt.Sprintf("DELETE FROM member WHERE workspace_id='%s' AND user_id='%s';", fleetWorkspace(2), user))
 	dockerTest(t, "exec", cid, "/bin/kill", "-QUIT", "1")
-	eventually(t, "fleet restarted", func() bool { return strings.Count(dockerTest(t, "logs", cid), "ready workspaces=") >= 2 })
+	eventually(t, "fleet restarted", func() bool { return strings.Count(dockerTest(t, "logs", cid), readyEvent) >= 2 })
 	if strings.Contains(ownedContainers(t), old) {
 		t.Fatal("removed workspace orphan survived restart")
 	}

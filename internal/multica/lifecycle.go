@@ -128,7 +128,7 @@ func (c *Client) RenewPreparation(ctx context.Context, t Task) error {
 
 // Start is fenced by dispatched_at, so the upstream daemon replays it on transient failure.
 func (c *Client) Start(ctx context.Context, t Task) error {
-	return retry(ctx, startRetry, func() error {
+	return retry(ctx, startRetry, func(ctx context.Context) error {
 		return c.taskPost(ctx, t.ID, "start", map[string]any{"runtime_id": t.RuntimeID, "dispatched_at": t.DispatchedAt, "capabilities": []string{}})
 	})
 }
@@ -157,7 +157,7 @@ func (c *Client) Fail(ctx context.Context, id string, cause error, _ execution.R
 	return c.Deliver(ctx, t)
 }
 func (c *Client) CancelAck(ctx context.Context, id string) error {
-	return retry(ctx, terminalRetry, func() error { return c.taskPost(ctx, id, "cancel-ack", map[string]any{}) })
+	return retry(ctx, terminalRetry, func(ctx context.Context) error { return c.taskPost(ctx, id, "cancel-ack", map[string]any{}) })
 }
 func (c *Client) runtimePost(ctx context.Context, id, suffix string, out any) error {
 	if !validID(id) {

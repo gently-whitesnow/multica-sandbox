@@ -4,12 +4,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
+	"net"
 	"os"
 	"regexp"
 	"time"
 
 	"github.com/gently-whitesnow/multica-sandbox/internal/attempt"
 	"github.com/gently-whitesnow/multica-sandbox/internal/docker"
+	"github.com/gently-whitesnow/multica-sandbox/internal/metrics"
 )
 
 type Config struct {
@@ -24,14 +27,32 @@ type Config struct {
 	Command              []string        `json:"command"`
 	Timeout              string          `json:"timeout"`
 	Debug                bool            `json:"debug,omitempty"`
-	log                  io.Writer
+	// MetricsListen, when set, serves metrics.Path on this host:port (ADR 0025).
+	MetricsListen string `json:"metrics_listen,omitempty"`
+	log           *slog.Logger
+	metrics       *metrics.Metrics
+}
+
+func newLogger(out io.Writer, debug bool) *slog.Logger {
+	level := slog.LevelInfo
+	if debug {
+		level = slog.LevelDebug
+	}
+	return slog.New(slog.NewJSONHandler(out, &slog.HandlerOptions{Level: level}))
+}
+
+func (c Config) logger() *slog.Logger {
+	if c.log == nil {
+		return slog.New(slog.DiscardHandler)
+	}
+	return c.log
 }
 
 func (c Config) debugf() func(string, ...any) {
 	if !c.Debug || c.log == nil {
 		return nil
 	}
-	return func(format string, args ...any) { fmt.Fprintf(c.log, "debug "+format+"\n", args...) }
+	return func(format string, args ...any) { c.log.Debug(fmt.Sprintf(format, args...)) }
 }
 
 var uuid = regexp.MustCompile(`^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`)
@@ -62,6 +83,9 @@ func ReadConfig(path string) (Config, error) {
 	duration, err := time.ParseDuration(c.Timeout)
 	if err != nil || duration <= 0 || !uuid.MatchString(c.Daemon) || c.Concurrency < 0 || c.Concurrency > MaxConcurrency || c.WorkspaceConcurrency < 0 || c.WorkspaceConcurrency > MaxConcurrency || c.Image == "" || (len(c.Command) == 0 && c.OpenCode == nil) {
 		return c, fmt.Errorf("daemon UUID, concurrency and workspace_concurrency 0-64, image, command and positive timeout required")
+	}
+	if _, _, err := net.SplitHostPort(c.MetricsListen); c.MetricsListen != "" && err != nil {
+		return c, fmt.Errorf("metrics_listen must be host:port")
 	}
 	if len(c.Tools) > 0 && c.OpenCode == nil {
 		return c, fmt.Errorf("tools require the opencode adapter")

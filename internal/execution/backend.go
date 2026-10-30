@@ -14,9 +14,10 @@ type Result struct {
 }
 
 // Telemetry describes an attempt for controller logs; it never reaches Multica.
-// PeakMemory is in bytes, 0 when not measured.
+// PeakMemory is in bytes, 0 when not measured. Continuity is fresh, resumed or lost
+// for a started run, else empty.
 type Telemetry struct {
-	Model, Effort                           string
+	Model, Effort, Continuity               string
 	InputTokens, OutputTokens, CachedTokens int64
 	PeakMemory                              int64
 }

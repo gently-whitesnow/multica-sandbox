@@ -18,7 +18,8 @@ from verified behavior.
   web chat tasks (0017), agent skills (0018), nested Docker under sysbox-runc (0019),
   shared attempt memory pool (0020), daemon WebSocket wakeups (0021),
   inference connection and agent identity from Multica env (0022),
-  OpenCode over ACP and the MCP relay (0023), the in-house credential relay (0024).
+  OpenCode over ACP and the MCP relay (0023), the in-house credential relay (0024),
+  quality metrics and structured logs (0025).
 - `examples/end-to-end/`: opt-in real Multica/OpenCode/inference lab.
 - `examples/identity-mcp/`: disposable identity and MCP contract fixture.
 - `internal/inference/`: workspace gateway bindings, relay policy and advisory model catalogs.
@@ -34,6 +35,7 @@ from verified behavior.
 - `examples/acp-spike/`: `opencode acp` capability spike with fixtures (ADR 0023).
 - `examples/sysbox-host/`: Lima/Linux Sysbox host recipe, attempt pool slice and engine test image (ADR 0019, 0020).
 - `internal/pool/`: attempt pool slice limits, PSI admission and attempt memory events (ADR 0020).
+- `internal/metrics/`: controller metrics on `/metrics-text` (ADR 0025).
 - `internal/opencode/`: OpenCode ACP adapter, MCP relay, native reporting, conformance
   (verified behavior, deployment-owned boundaries, limitations) and the verified
   official base images (`images.txt`).

@@ -70,7 +70,9 @@ func (c *Client) Deliver(ctx context.Context, t Terminal) error {
 	if !validID(t.Task) {
 		return fmt.Errorf("invalid task ID")
 	}
-	send := func() error { return retry(ctx, terminalRetry, func() error { return c.sendTerminal(ctx, t) }) }
+	send := func() error {
+		return retry(ctx, terminalRetry, func(ctx context.Context) error { return c.sendTerminal(ctx, t) })
+	}
 	o := c.outbox
 	if o == nil {
 		return send()
@@ -123,7 +125,8 @@ func (c *Client) Replay(ctx context.Context) (int, error) {
 		if record.NextAt.After(o.now()) || !o.begin(record.Terminal.Task) {
 			continue
 		}
-		err = c.sendTerminal(ctx, record.Terminal)
+		// A replay resends a report whose earlier delivery failed.
+		err = c.sendTerminal(resent(ctx), record.Terminal)
 		if err == nil {
 			err = o.remove(record.Terminal.Task)
 			if err == nil {

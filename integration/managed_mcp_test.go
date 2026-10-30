@@ -54,7 +54,7 @@ func managedMCPService(t *testing.T, api *multica.Client) {
 	c := service.Config{Server: "http://" + os.Getenv("MULTICA_TEST_SERVER_CONTAINER") + ":8080", AllowHTTP: true, Daemon: controller, Image: officialImage, Command: []string{"/bin/sh", "-c", command}, Timeout: "180s", OpenCode: &service.OpenCodeConfig{IdentityFile: "/etc/multica-sandbox/identity.json", MCPRelay: mcpRelay, Authority: attempt.Config{URL: "http://gateway:8080/attempts", BearerFile: "/identity-secrets/admin", AllowHTTP: true}, Network: project + "_execution", Peers: []string{project + "-provider-1", f.project + "-controller-1"}}}
 	prepareManagedService(t, f, dir, c, project, network)
 	cid := f.compose("ps", "-q", "controller")
-	eventually(t, "OpenCode runtime registration", func() bool { return strings.Contains(dockerTest(t, "logs", cid), "ready workspaces=") })
+	eventually(t, "OpenCode runtime registration", func() bool { return strings.Contains(dockerTest(t, "logs", cid), readyEvent) })
 	runtime := sql(t, fmt.Sprintf("SELECT id FROM agent_runtime WHERE daemon_id='%s' AND workspace_id='%s' AND provider='opencode';", controller, workspace))
 	if runtime == "" {
 		t.Fatal("OpenCode runtime absent")
