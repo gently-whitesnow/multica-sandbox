@@ -558,8 +558,18 @@ const exitGrace = 10 * time.Second
 
 // Stream keeps native stdout out of diagnostics and bounds it in the adapter.
 func (r *projectedRun) Stream(ctx context.Context, args []string, env map[string]string, converse func(io.Writer, io.Reader) error) error {
-	execCtx, cancel := context.WithCancel(ctx)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// The conversation handles cancellation before its transport is torn down.
+	// Still bound an unresponsive callback after cancellation.
+	execCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancel()
+	stop := context.AfterFunc(ctx, func() {
+		timer := time.AfterFunc(exitGrace, cancel)
+		context.AfterFunc(execCtx, func() { timer.Stop() })
+	})
+	defer stop()
 	cmd, err := r.exec(execCtx, args, env, "--interactive")
 	if err != nil {
 		return err

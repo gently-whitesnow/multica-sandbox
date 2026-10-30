@@ -23,7 +23,7 @@ type mcpUpstream struct {
 
 func (u *mcpUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	u.mu.Lock()
-	u.seen = append(u.seen, r.Method+" "+r.URL.Path+" "+r.Header.Get("Authorization")+" "+r.Header.Get("Mcp-Session-Id"))
+	u.seen = append(u.seen, r.Method+" "+r.URL.RequestURI()+" "+r.Header.Get("Authorization")+" "+r.Header.Get("Mcp-Session-Id"))
 	u.mu.Unlock()
 	w.Header().Set("Mcp-Session-Id", "mcp-session")
 	w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="https://idp.example.invalid"`)
@@ -91,6 +91,17 @@ func TestMCPRelayForwardsCurrentTokenToExactURL(t *testing.T) {
 	resp.Body.Close()
 	if upstream.last() != "POST /mcp Bearer jwt-two mcp-session" {
 		t.Fatalf("rotated token not used: %q", upstream.last())
+	}
+}
+
+func TestMCPRelayDiscardsCallerQuery(t *testing.T) {
+	_, _, opaque, upstream, front := mcpRelayFixture(t)
+	for _, query := range []string{"?tenant=other", "?codemode=false", "?"} {
+		resp := mcpRequest(t, http.MethodPost, front.URL+"/docs"+query, opaque)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK || upstream.last() != "POST /mcp Bearer jwt-one mcp-session" {
+			t.Fatalf("query changed the approved URL: %q status %d", upstream.last(), resp.StatusCode)
+		}
 	}
 }
 

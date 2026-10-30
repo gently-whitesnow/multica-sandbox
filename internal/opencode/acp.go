@@ -1,7 +1,6 @@
 package opencode
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -250,44 +249,16 @@ func (r *running) turnUsage(ctx context.Context, id acp.SessionId, since time.Ti
 	}
 	exportCtx, cancel := context.WithTimeout(ctx, exportTimeout)
 	defer cancel()
-	data, err := r.workload.Capture(exportCtx, []string{"opencode", "export", string(id)}, r.environment())
-	if exported, ok := exportUsage(data, since.UnixMilli()); err == nil && ok {
+	var exported multica.Usage
+	err := r.workload.Stream(exportCtx, []string{"opencode", "export", string(id)}, r.environment(), func(_ io.Writer, stdout io.Reader) error {
+		var err error
+		exported, err = exportUsage(stdout, since.UnixMilli())
+		return err
+	})
+	if err == nil {
 		return exported
 	}
 	return u
-}
-
-// exportUsage sums assistant messages created since the turn started; `opencode
-// export` may print a banner before its JSON. Reasoning counts as output, as Multica does.
-func exportUsage(data []byte, since int64) (multica.Usage, bool) {
-	var export struct {
-		Messages []struct {
-			Info struct {
-				Role string `json:"role"`
-				Time struct {
-					Created int64 `json:"created"`
-				} `json:"time"`
-				Tokens *struct {
-					Input, Output, Reasoning int64
-					Cache                    struct{ Read, Write int64 }
-				} `json:"tokens"`
-			} `json:"info"`
-		} `json:"messages"`
-	}
-	start := bytes.IndexByte(data, '{')
-	if start < 0 || json.Unmarshal(data[start:], &export) != nil {
-		return multica.Usage{}, false
-	}
-	var u multica.Usage
-	for _, m := range export.Messages {
-		if t := m.Info.Tokens; m.Info.Role == "assistant" && m.Info.Time.Created >= since && t != nil {
-			u.Input += max(t.Input, 0)
-			u.Output += max(t.Output, 0) + max(t.Reasoning, 0)
-			u.CacheRead += max(t.Cache.Read, 0)
-			u.CacheWrite += max(t.Cache.Write, 0)
-		}
-	}
-	return u, true
 }
 
 // sessionMCP names each selected connection by its relay alias with the attempt's

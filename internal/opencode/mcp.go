@@ -76,6 +76,8 @@ func (m *MCPRelay) Authorize(req *http.Request) (relay.Lease, bool) {
 		return relay.Lease{}, false
 	}
 	lease.Origin, lease.Path, lease.Credential = origin, path, bearer
+	// OpenCode adds codemode=false; no caller query may change the approved URL.
+	lease.DropQuery = true
 	return lease, true
 }
 

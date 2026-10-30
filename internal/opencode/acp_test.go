@@ -237,8 +237,9 @@ func TestACPVersionOneUsageComesFromExport(t *testing.T) {
 		export string
 		want   multica.Usage
 	}{
-		"export":    {export, multica.Usage{Input: 30, Output: 12, CacheRead: 4, CacheWrite: 5}},
-		"truncated": {export[:40], multica.Usage{Input: 20, Output: 7}},
+		"export":        {export, multica.Usage{Input: 30, Output: 12, CacheRead: 4, CacheWrite: 5}},
+		"large history": {strings.Replace(export, `"role":"assistant"`, `"parts":[{"text":"`+strings.Repeat("x", 70000)+`"}],"role":"assistant"`, 1), multica.Usage{Input: 30, Output: 12, CacheRead: 4, CacheWrite: 5}},
+		"truncated":     {export[:40], multica.Usage{Input: 20, Output: 7}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			workload := &stubWorkload{capture: []byte(c.export)}

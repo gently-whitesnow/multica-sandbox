@@ -71,7 +71,8 @@ and the MCP rotation conformance, and appends the release for review.
 - On 2.x with MCP, the prompt waits 2 s after `session/new` for tool registration.
 - Cancellation sends `session/cancel` before the exec is torn down.
 - Usage comes from `PromptResponse.usage` where a version is verified to report
-  the whole turn, else from the session export through `Capture`.
+  the whole turn, else from the streamed session export, decoded one message at
+  a time without `Capture`'s output truncation.
 
 **MCP relay.** MCP moves to a controller relay grant, as ADR 0012 and 0014 do for
 inference and the Multica API. `session/new` names each selected connection with
@@ -80,7 +81,8 @@ forwards to the exact approved URL with the attempt's current access token from
 the existing renewal loop, registered with the attempt authority before use
 (ADR 0009, 0011). It carries streamable HTTP (POST, SSE responses, the GET
 stream, `Mcp-Session-Id`), refuses redirects, and revocation at cleanup cancels
-open streams. Access tokens no longer enter the attempt; the auth-store
+open streams. Caller query parameters (including OpenCode's `codemode=false`)
+are dropped so the endpoint stays exact. Access tokens no longer enter the attempt; the auth-store
 projection and its file go. The projected permissions allow each connection's tools.
 Upstreams the controller calls must not share a name with an attempt peer: a
 pooled connection through a removed attempt network hangs.

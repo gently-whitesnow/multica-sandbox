@@ -96,7 +96,7 @@ func managedMCPService(t *testing.T, api *multica.Client) {
 		}
 	}
 	if !successful {
-		t.Fatal("real controller did not complete successful MCP calls across rotations")
+		t.Fatalf("real controller did not complete successful MCP calls across rotations: %v", evidence)
 	}
 	if dockerTest(t, "inspect", "--format", "{{.State.StartedAt}}", cid) != started {
 		t.Fatal("controller restarted during task")
