@@ -38,6 +38,7 @@ type noMCP struct{}
 func (noMCP) AcquireForMCP(context.Context, identity.Ref, identity.Env, string) (identity.AccessToken, error) {
 	return identity.AccessToken{}, identity.ErrDenied
 }
+func (noMCP) AnonymousMCP(string) bool { return false }
 
 type inferenceFixture struct {
 	adapter *opencode.Adapter

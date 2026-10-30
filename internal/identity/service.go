@@ -17,6 +17,7 @@ type Service struct {
 	resolver Resolver
 	issuer   *issuer
 	mcp      map[string]bool
+	anon     map[string]bool
 	debug    Debug
 }
 
@@ -42,7 +43,7 @@ func New(c Config, server string) (*Service, error) {
 			return nil, err
 		}
 	}
-	if err := s.configureMCP(c.MCP, c.AllowHTTP); err != nil {
+	if err := s.configureMCP(c.MCP, c.MCPAnonymous, c.AllowHTTP); err != nil {
 		return nil, err
 	}
 	return s, nil

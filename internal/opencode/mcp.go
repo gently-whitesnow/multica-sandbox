@@ -81,14 +81,15 @@ func (m *MCPRelay) Authorize(req *http.Request) (relay.Lease, bool) {
 	return lease, true
 }
 
-// mcpUpstream resolves a selected connection and its registered, unexpired token.
+// mcpUpstream resolves a selected connection and its registered, unexpired token; an
+// anonymous connection gets none, and the relay still drops the caller's credentials.
 func (r *running) mcpUpstream(name string) (*url.URL, string, string, bool) {
 	connection, ok := r.connections[name]
 	r.mu.Lock()
 	token := r.tokens[name]
 	r.mu.Unlock()
 	u, err := url.Parse(connection.URL)
-	if !ok || err != nil || time.Until(token.ExpiresAt) <= time.Second {
+	if !ok || err != nil || !r.anonymous[name] && time.Until(token.ExpiresAt) <= time.Second {
 		return nil, "", "", false
 	}
 	path := u.Path

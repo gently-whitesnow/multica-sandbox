@@ -2,16 +2,25 @@ package identity
 
 import "context"
 
-func (s *Service) configureMCP(urls []string, allowHTTP bool) error {
-	s.mcp = map[string]bool{}
-	for _, u := range urls {
-		if !endpoint(u, allowHTTP) || s.mcp[u] {
-			return ErrDenied
+// configureMCP approves each URL once, either for the agent's token or anonymous.
+func (s *Service) configureMCP(urls, anonymous []string, allowHTTP bool) error {
+	s.mcp, s.anon = map[string]bool{}, map[string]bool{}
+	for _, list := range []struct {
+		urls []string
+		into map[string]bool
+	}{{urls, s.mcp}, {anonymous, s.anon}} {
+		for _, u := range list.urls {
+			if !endpoint(u, allowHTTP) || s.mcp[u] || s.anon[u] {
+				return ErrDenied
+			}
+			list.into[u] = true
 		}
-		s.mcp[u] = true
 	}
 	return nil
 }
+
+// AnonymousMCP reports whether a selected URL is approved without the agent's token.
+func (s *Service) AnonymousMCP(selectedURL string) bool { return s.anon[selectedURL] }
 
 // AcquireForMCP is called only for a connection selected by trusted Multica data.
 // It approves a delivery target; it neither connects to MCP nor checks tool roles.
