@@ -12,7 +12,7 @@ import (
 
 func main() {
 	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: identity-example init|gateway|git|scenario|health")
+		fmt.Fprintln(os.Stderr, "usage: identity-example init|gateway|provider|git|scenario|health")
 		os.Exit(2)
 	}
 	var err error
@@ -31,6 +31,8 @@ func main() {
 		err = initialize()
 	case "gateway":
 		err = gateway()
+	case "provider":
+		err = mockProvider()
 	case "git":
 		err = gitFixture()
 	case "evidence":

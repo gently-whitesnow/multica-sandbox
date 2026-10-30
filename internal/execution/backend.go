@@ -54,8 +54,10 @@ type ProjectedRun interface {
 	// WriteTree lays down files (relative path to content) under an approved empty root.
 	WriteTree(context.Context, string, map[string][]byte) error
 	Execute(context.Context, []string) error
-	// Stream passes env through the exec client environment, never through argv.
-	Stream(context.Context, []string, map[string]string, func(io.Reader) error) error
+	// Stream runs the agent with stdin and stdout connected to the adapter; env passes
+	// through the exec client environment, never through argv. Stdin is closed once the
+	// callback returns; the agent then has a short grace period to exit.
+	Stream(context.Context, []string, map[string]string, func(io.Writer, io.Reader) error) error
 	// Capture runs a controller-owned command as the attempt user and returns its bounded stdout.
 	Capture(context.Context, []string, map[string]string) ([]byte, error)
 	// Workdir names the retained workdir, empty when none, and whether it already existed.

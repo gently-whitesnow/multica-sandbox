@@ -79,6 +79,7 @@ const (
 
 type OpenCodeConfig struct {
 	IdentityFile string         `json:"identity_file,omitempty"`
+	MCPRelay     *RelayConfig   `json:"mcp_relay,omitempty"`
 	Authority    attempt.Config `json:"authority"`
 	Network      string         `json:"network"`
 	Peers        []string       `json:"peers"`
@@ -119,7 +120,7 @@ type SessionsConfig struct {
 	Grace    string `json:"grace,omitempty"`
 }
 
-// RelayConfig enables an embedded relay: Multica API (ADR 0014) or inference (ADR 0012).
+// RelayConfig enables an embedded relay: Multica API, inference, MCP (ADR 0014, 0012, 0023).
 // URL is what agents receive; the controller must be an approved peer answering it.
 type RelayConfig struct {
 	Listen string `json:"listen"`

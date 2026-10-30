@@ -18,7 +18,7 @@ from verified behavior.
   web chat tasks (0017), agent skills (0018), nested Docker under sysbox-runc (0019),
   shared attempt memory pool (0020), daemon WebSocket wakeups (0021),
   inference connection and agent identity from Multica env (0022),
-  OpenCode over ACP (0023, proposed).
+  OpenCode over ACP and the MCP relay (0023).
 - `examples/end-to-end/`: opt-in real Multica/OpenCode/inference lab.
 - `examples/identity-mcp/`: disposable identity and MCP contract fixture.
 - `internal/inference/`: workspace gateway bindings, relay policy and advisory model catalogs.
@@ -34,7 +34,7 @@ from verified behavior.
 - `examples/acp-spike/`: `opencode acp` capability spike with fixtures (ADR 0023).
 - `examples/sysbox-host/`: Lima/Linux Sysbox host recipe, attempt pool slice and engine test image (ADR 0019, 0020).
 - `internal/pool/`: attempt pool slice limits, PSI admission and attempt memory events (ADR 0020).
-- `internal/opencode/`: OpenCode adapter, native reporting, conformance
+- `internal/opencode/`: OpenCode ACP adapter, MCP relay, native reporting, conformance
   (verified behavior, deployment-owned boundaries, limitations) and the verified
   official base images (`images.txt`).
 - `cmd/sandbox-controller`, `internal/service/`: persistent controller service.
@@ -45,7 +45,8 @@ from verified behavior.
 - [GitHub Project](https://github.com/users/gently-whitesnow/projects/2): delivery;
   issues hold acceptance and handoff state, ADRs hold durable decisions.
 - `.harness.json`: pinned repository quality contract.
-- `scripts/install-harness.sh`, `verify.sh`: setup and verification.
+- `scripts/install-harness.sh`, `verify.sh`: setup and verification;
+  `scripts/opencode-release.sh` admits an OpenCode release (ADR 0023).
 
 ## Rules
 

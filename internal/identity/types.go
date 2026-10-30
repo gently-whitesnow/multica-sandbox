@@ -46,6 +46,11 @@ type AccessToken struct {
 	value     string
 }
 
+// NewAccessToken wraps a bearer verified elsewhere, such as a test fixture's.
+func NewAccessToken(bearer string, expiresAt time.Time) AccessToken {
+	return AccessToken{expiresAt, bearer}
+}
+
 func (t AccessToken) Bearer() string             { return t.value }
 func (AccessToken) Format(s fmt.State, _ rune)   { fmt.Fprint(s, "<access token>") }
 func (AccessToken) MarshalJSON() ([]byte, error) { return nil, ErrDenied }

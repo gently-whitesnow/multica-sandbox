@@ -79,17 +79,17 @@ func multicaRelayService(t *testing.T, api *multica.Client, agentImage string, n
 	network := strings.TrimSuffix(server, "-server")
 	fixture := filepath.Join(dir, "fixture.json")
 	withInference := full && os.Getenv("VERIFY_INFERENCE") == "1"
-	services := map[string]any{"seed": map[string]any{"environment": map[string]string{"ROTATION_FIXTURE": "1"}}, "gateway": map[string]any{"networks": []string{"fixture", "execution"}}}
-	target := "gateway"
+	services := map[string]any{"seed": map[string]any{"environment": map[string]string{"ROTATION_FIXTURE": "1"}}, "provider": providerService()}
+	targets := []string{"gateway", "provider"}
 	if withInference {
 		// Agents reach inference only through the controller relay; the mock provider stays behind LiteLLM.
 		inferenceServices(services)
-		target = "litellm"
+		delete(services, "provider")
+		targets = []string{"litellm"}
 		dockerTest(t, "network", "create", "--internal", project+"_execution")
 		t.Cleanup(func() { dockerTest(t, "network", "rm", project+"_execution") })
 	}
 	writeJSON(t, fixture, map[string]any{"services": services, "networks": map[string]any{"fixture": map[string]any{"external": true, "name": network, "internal": nil}, "execution": map[string]any{"internal": true}}})
-	targets := []string{target}
 	if full {
 		targets = append(targets, "git")
 	}
@@ -101,10 +101,10 @@ func multicaRelayService(t *testing.T, api *multica.Client, agentImage string, n
 	id := fmt.Sprintf("a3000000-0000-4000-8000-%012d", n)
 	issuer := "http://keycloak:8080/realms/sandbox-example"
 	writeJSON(t, filepath.Join(dir, "identity.json"), identity.Config{Version: 1, AllowHTTP: true, Issuer: identity.IssuerConfig{URL: issuer, TokenURL: issuer + "/protocol/openid-connect/token", JWKSURL: issuer + "/protocol/openid-connect/certs", MaxTTLSeconds: 30}, Bindings: []identity.Binding{{WorkspaceID: workspace, AgentID: agent, ClientID: "example-agent", SecretFile: "/identity-secrets/client"}}, MCP: []string{"http://gateway:8080/mcp"}})
-	command := `OPENCODE_CONFIG_CONTENT='{"model":"fixture/fixture","enabled_providers":["fixture"],"provider":{"fixture":{"npm":"@ai-sdk/openai-compatible","name":"Fixture","options":{"baseURL":"http://gateway:8080/v1"},"models":{"fixture":{"name":"Fixture","limit":{"context":64000,"output":4096}}}}}}' exec opencode run --format json ${MULTICA_SANDBOX_RESUME:+--session "$MULTICA_SANDBOX_RESUME"} "$(cat /workspace/prompt.txt)"`
+	command := `OPENCODE_CONFIG_CONTENT='{"model":"fixture/fixture","enabled_providers":["fixture"],"provider":{"fixture":{"npm":"@ai-sdk/openai-compatible","name":"Fixture","options":{"baseURL":"http://provider:8080/v1"},"models":{"fixture":{"name":"Fixture","limit":{"context":64000,"output":4096}}}}}}' exec opencode acp`
 	f := serviceFixture{fmt.Sprintf("sandbox-relay-controller-%d", stamp), filepath.Join(dir, "controller.json"), t}
 	controllerName := f.project + "-controller-1"
-	c := service.Config{Server: "http://" + server + ":8080", AllowHTTP: true, Daemon: controller, Image: agentImage, Command: []string{"/bin/sh", "-c", command}, Timeout: "180s", OpenCode: &service.OpenCodeConfig{IdentityFile: "/etc/multica-sandbox/identity.json", Authority: attempt.Config{URL: "http://gateway:8080/attempts", BearerFile: "/identity-secrets/admin", AllowHTTP: true}, Network: project + "_execution", Peers: []string{project + "-gateway-1", controllerName}, MulticaRelay: &service.RelayConfig{Listen: ":8091", URL: "http://multica-relay:8091"}, MulticaCLI: cli}}
+	c := service.Config{Server: "http://" + server + ":8080", AllowHTTP: true, Daemon: controller, Image: agentImage, Command: []string{"/bin/sh", "-c", command}, Timeout: "180s", OpenCode: &service.OpenCodeConfig{IdentityFile: "/etc/multica-sandbox/identity.json", MCPRelay: &service.RelayConfig{Listen: ":8095", URL: "http://mcp-relay:8095"}, Authority: attempt.Config{URL: "http://gateway:8080/attempts", BearerFile: "/identity-secrets/admin", AllowHTTP: true}, Network: project + "_execution", Peers: []string{project + "-provider-1", controllerName}, MulticaRelay: &service.RelayConfig{Listen: ":8091", URL: "http://multica-relay:8091"}, MulticaCLI: cli}}
 	tool := os.Getenv("MULTICA_TEST_TOOL_IMAGE")
 	if full && tool != "" {
 		c.Tools = []service.Tool{{Name: "jq", Image: tool, Check: []string{"bin/jq", "--version"}}}
@@ -124,7 +124,7 @@ func multicaRelayService(t *testing.T, api *multica.Client, agentImage string, n
 		t.Fatal(err)
 	}
 	// The controller has its own namespace: Multica on the control network, relay aliases on the template.
-	writeJSON(t, f.override, map[string]any{"services": map[string]any{"controller": map[string]any{"networks": map[string]any{"control": map[string]any{}, "execution": map[string]any{"aliases": []string{"multica-relay", "inference-relay", "git-relay"}}}, "volumes": managedVolumes(dir, c)}}, "networks": map[string]any{"control": map[string]any{"external": true, "name": network}, "execution": map[string]any{"external": true, "name": project + "_execution"}}, "volumes": map[string]any{"identity-secrets": map[string]any{"external": true, "name": project + "_credentials"}}, "secrets": map[string]any{"multica_token": map[string]string{"file": filepath.Join(dir, "token")}}})
+	writeJSON(t, f.override, map[string]any{"services": map[string]any{"controller": map[string]any{"networks": map[string]any{"control": map[string]any{}, "execution": map[string]any{"aliases": []string{"multica-relay", "inference-relay", "git-relay", "mcp-relay"}}}, "volumes": managedVolumes(dir, c)}}, "networks": map[string]any{"control": map[string]any{"external": true, "name": network}, "execution": map[string]any{"external": true, "name": project + "_execution"}}, "volumes": map[string]any{"identity-secrets": map[string]any{"external": true, "name": project + "_credentials"}}, "secrets": map[string]any{"multica_token": map[string]string{"file": filepath.Join(dir, "token")}}})
 	t.Cleanup(func() {
 		f.compose("down", "-v")
 		if err := (&docker.Backend{Owner: controller}).Reconcile(context.Background()); err != nil {

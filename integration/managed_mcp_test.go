@@ -31,14 +31,14 @@ func managedMCPService(t *testing.T, api *multica.Client) {
 	project := fmt.Sprintf("sandbox-managed-%d", time.Now().UnixNano())
 	network := strings.TrimSuffix(os.Getenv("MULTICA_TEST_SERVER_CONTAINER"), "-server")
 	fixture := filepath.Join(dir, "fixture.json")
-	services := map[string]any{"seed": map[string]any{"environment": map[string]string{"ROTATION_FIXTURE": "1"}}, "gateway": map[string]any{"networks": []string{"fixture", "execution"}}}
+	services := map[string]any{"seed": map[string]any{"environment": map[string]string{"ROTATION_FIXTURE": "1"}}, "provider": providerService()}
 	writeJSON(t, fixture, map[string]any{"services": services, "networks": map[string]any{"fixture": map[string]any{"external": true, "name": network, "internal": nil}, "execution": map[string]any{"internal": true}}})
 	compose := func(args ...string) string {
 		return dockerTest(t, append([]string{"compose", "-p", project, "-f", "../examples/identity-mcp/compose.yaml", "-f", fixture}, args...)...)
 	}
 	t.Cleanup(func() { compose("down", "-v", "--remove-orphans", "--rmi", "local") })
-	compose("build", "seed", "gateway")
-	compose("up", "-d", "--wait", "--wait-timeout", "180", "gateway")
+	compose("build", "seed", "gateway", "provider")
+	compose("up", "-d", "--wait", "--wait-timeout", "180", "gateway", "provider")
 	controller := "90000000-0000-4000-8000-000000000029"
 	agent := "20000000-0000-4000-8000-000000000001"
 	id := "70000000-0000-4000-8000-000000000001"
@@ -47,9 +47,12 @@ func managedMCPService(t *testing.T, api *multica.Client) {
 	binding := identity.Config{Version: 1, AllowHTTP: true, Issuer: identity.IssuerConfig{URL: issuer, TokenURL: issuer + "/protocol/openid-connect/token", JWKSURL: issuer + "/protocol/openid-connect/certs", MaxTTLSeconds: 30}, Bindings: []identity.Binding{{WorkspaceID: workspace, AgentID: agent, ClientID: "example-agent", SecretFile: "/identity-secrets/client"}}, MCP: []string{"http://gateway:8080/mcp"}}
 	writeJSON(t, filepath.Join(dir, "identity.json"), binding)
 	// This credential-free mock model is trusted fixture configuration, outside claim data.
-	command := `OPENCODE_CONFIG_CONTENT='{"model":"fixture/fixture","enabled_providers":["fixture"],"provider":{"fixture":{"npm":"@ai-sdk/openai-compatible","name":"Fixture","options":{"baseURL":"http://gateway:8080/v1"},"models":{"fixture":{"name":"Fixture","limit":{"context":64000,"output":4096}}}}}}' exec opencode run --format json "$(cat /workspace/prompt.txt)"`
-	c := service.Config{Server: "http://127.0.0.1:8080", Daemon: controller, Image: officialImage, Command: []string{"/bin/sh", "-c", command}, Timeout: "180s", OpenCode: &service.OpenCodeConfig{IdentityFile: "/etc/multica-sandbox/identity.json", Authority: attempt.Config{URL: "http://gateway:8080/attempts", BearerFile: "/identity-secrets/admin", AllowHTTP: true}, Network: project + "_execution", Peers: []string{project + "-gateway-1"}}}
-	f := prepareManagedService(t, dir, c, project+"_credentials")
+	command := `OPENCODE_CONFIG_CONTENT='{"model":"fixture/fixture","enabled_providers":["fixture"],"provider":{"fixture":{"npm":"@ai-sdk/openai-compatible","name":"Fixture","options":{"baseURL":"http://provider:8080/v1"},"models":{"fixture":{"name":"Fixture","limit":{"context":64000,"output":4096}}}}}}' exec opencode acp`
+	f := serviceFixture{fmt.Sprintf("sandbox-agent-service-%d", time.Now().UnixNano()), filepath.Join(dir, "controller.json"), t}
+	// Attempts reach the mock model on the provider and MCP only through the controller relay.
+	mcpRelay := &service.RelayConfig{Listen: ":8095", URL: "http://mcp-relay:8095"}
+	c := service.Config{Server: "http://" + os.Getenv("MULTICA_TEST_SERVER_CONTAINER") + ":8080", AllowHTTP: true, Daemon: controller, Image: officialImage, Command: []string{"/bin/sh", "-c", command}, Timeout: "180s", OpenCode: &service.OpenCodeConfig{IdentityFile: "/etc/multica-sandbox/identity.json", MCPRelay: mcpRelay, Authority: attempt.Config{URL: "http://gateway:8080/attempts", BearerFile: "/identity-secrets/admin", AllowHTTP: true}, Network: project + "_execution", Peers: []string{project + "-provider-1", f.project + "-controller-1"}}}
+	prepareManagedService(t, f, dir, c, project, network)
 	cid := f.compose("ps", "-q", "controller")
 	eventually(t, "OpenCode runtime registration", func() bool { return strings.Contains(dockerTest(t, "logs", cid), "ready workspaces=") })
 	runtime := sql(t, fmt.Sprintf("SELECT id FROM agent_runtime WHERE daemon_id='%s' AND workspace_id='%s' AND provider='opencode';", controller, workspace))
@@ -107,13 +110,24 @@ func managedMCPService(t *testing.T, api *multica.Client) {
 	t.Log("real Multica claim -> persistent Compose controller -> native OpenCode task -> real Keycloak/MCP rotations -> cleanup; inference is a deterministic mock")
 }
 
-func prepareManagedService(t *testing.T, dir string, c service.Config, credentials string) serviceFixture {
+// providerService serves the mock model alone on the attempt template: the controller
+// resolves the gateway (MCP, authority) on the control network, never through a peer alias.
+func providerService() map[string]any {
+	build := map[string]string{"context": "../..", "dockerfile": "examples/identity-mcp/Dockerfile", "target": "fixture"}
+	health := map[string]any{"test": []string{"CMD", "/identity-example", "health"}, "interval": "2s", "timeout": "2s", "retries": 60}
+	return map[string]any{"build": build, "command": []string{"provider"}, "networks": []string{"execution"}, "healthcheck": health}
+}
+
+// prepareManagedService starts the controller on the control network with the MCP relay
+// alias on the fixture project's attempt template.
+func prepareManagedService(t *testing.T, f serviceFixture, dir string, c service.Config, project, control string) {
 	writeJSON(t, filepath.Join(dir, "config.json"), c)
 	if err := os.WriteFile(filepath.Join(dir, "token"), []byte(token(t)), 0600); err != nil {
 		t.Fatal(err)
 	}
-	f := serviceFixture{fmt.Sprintf("sandbox-agent-service-%d", time.Now().UnixNano()), filepath.Join(dir, "controller.json"), t}
-	writeJSON(t, f.override, map[string]any{"services": map[string]any{"controller": map[string]any{"network_mode": "container:" + os.Getenv("MULTICA_TEST_SERVER_CONTAINER"), "volumes": managedVolumes(dir, c)}}, "volumes": map[string]any{"identity-secrets": map[string]any{"external": true, "name": credentials}}, "secrets": map[string]any{"multica_token": map[string]string{"file": filepath.Join(dir, "token")}}})
+	networks := map[string]any{"control": map[string]any{"external": true, "name": control}, "execution": map[string]any{"external": true, "name": project + "_execution"}}
+	controller := map[string]any{"networks": map[string]any{"control": map[string]any{}, "execution": map[string]any{"aliases": []string{"mcp-relay"}}}, "volumes": managedVolumes(dir, c)}
+	writeJSON(t, f.override, map[string]any{"services": map[string]any{"controller": controller}, "networks": networks, "volumes": map[string]any{"identity-secrets": map[string]any{"external": true, "name": project + "_credentials"}}, "secrets": map[string]any{"multica_token": map[string]string{"file": filepath.Join(dir, "token")}}})
 	t.Cleanup(func() {
 		f.compose("down", "-v")
 		if err := (&docker.Backend{Owner: c.Daemon}).Reconcile(context.Background()); err != nil {
@@ -121,5 +135,4 @@ func prepareManagedService(t *testing.T, dir string, c service.Config, credentia
 		}
 	})
 	f.compose("up", "-d", "--no-build")
-	return f
 }

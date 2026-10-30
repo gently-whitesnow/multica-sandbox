@@ -46,8 +46,8 @@ time: a second run waits 15 s, as upstream waits for its workdir lock, then gets
 a per-attempt volume. Reports carry the native `session_id` and a `work_dir`
 naming the volume. `prior_session_id` is honoured only when `prior_work_dir`
 names that volume and it already existed with matching labels. Otherwise the run
-starts fresh with the upstream continuity notice. A resume that yields no session
-and no tool use is retried fresh once and reports `retired_session_id`.
+starts fresh with the upstream continuity notice. A refused resume runs fresh
+once (ADR 0023) and reports `retired_session_id`.
 `session_rollout_missing` is reported only when no session is retained. Done or
 cancelled issues (upstream GC), an idle TTL and a session cap bound retention,
 swept periodically. Disk quotas are deployment-owned: the Docker `local` driver

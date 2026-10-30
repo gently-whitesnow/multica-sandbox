@@ -1,12 +1,15 @@
 {
   "identity_file": "/etc/multica-sandbox/identity.json",
+  "mcp_relay": {
+    "listen": ":8095",
+    "url": "http://mcp-relay:8095"
+  },
   "authority": {
     "url": "https://attempts.example.com/v1/attempts",
     "bearer_file": "/run/secrets/attempt-authority"
   },
-  "network": "approved-mcp-template",
+  "network": "attempt-template",
   "peers": [
-    "corporate-mcp",
     "multica-sandbox-controller"
   ],
   "multica_relay": {

@@ -228,6 +228,14 @@ func TestRefusesRedirectsAndWithholdsErrors(t *testing.T) {
 	if resp.StatusCode != 422 || strings.Contains(body, "K7QQ") || !strings.Contains(body, `"code":"422"`) || resp.Header.Get("X-Litellm-Key-Spend") != "" {
 		t.Fatalf("gateway error not withheld: %d %s %v", resp.StatusCode, body, resp.Header)
 	}
+	// The withheld status stays known to the controller for the attempt, until a success.
+	if withheld.grants.Refusal("attempt-w") != 422 || withheld.grants.Refusal("attempt-other") != 0 {
+		t.Fatal("refusal status not recorded per attempt")
+	}
+	withheld.do(t, http.MethodPost, "/v1/redirected", w, strings.NewReader("{}"), nil)
+	if withheld.grants.Refusal("attempt-w") != 0 {
+		t.Fatal("refusal outlived a later response")
+	}
 	f.grants.Revoke("attempt-a")
 	broken, _ := f.grants.Issue("attempt-a", Upstream{Origin: "http://127.0.0.1:1", Credential: upstreamA})
 	handler, _ := New(f.grants, Policy{Allow: multica.RelayPath, Limit: 1024})

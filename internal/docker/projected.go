@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/gently-whitesnow/multica-sandbox/internal/execution"
@@ -26,7 +27,7 @@ import (
 var networkPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
 var envPattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,63}$`)
 var hostPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$`)
-var projectionPaths = map[string]bool{"/workspace/opencode.json": true, "/workspace/prompt.txt": true, "/workspace/AGENTS.md": true, "/workspace/data/opencode/mcp-auth.json": true, repo.CAPath: true}
+var projectionPaths = map[string]bool{"/workspace/opencode.json": true, "/workspace/AGENTS.md": true, repo.CAPath: true}
 
 type Projected struct {
 	Backend
@@ -182,8 +183,9 @@ func (b *Projected) Start(ctx context.Context, attempt string, w execution.Workd
 		}
 		return nil, errors.Join(err, cleanErr)
 	}
-	// Like the upstream task directory, TMPDIR allows executables (go test, build caches).
-	if _, err := command(ctx, "exec", "--user", AttemptUser, r.name, "mkdir", "-p", "-m", "700", TmpDir); err != nil {
+	// Like the upstream task directory, TMPDIR allows executables (go test, build caches);
+	// the agent works in repo.WorkDir, a tmpfs directory unless the workdir volume is mounted.
+	if _, err := command(ctx, "exec", "--user", AttemptUser, r.name, "mkdir", "-p", "-m", "700", TmpDir, repo.WorkDir); err != nil {
 		return nil, errors.Join(err, cleanup())
 	}
 	if b.Helper != "" {
@@ -551,13 +553,20 @@ func reconcileNetworks(ctx context.Context, owner string) error {
 	return nil
 }
 
+// exitGrace bounds the agent's exit after its stdin closes.
+const exitGrace = 10 * time.Second
+
 // Stream keeps native stdout out of diagnostics and bounds it in the adapter.
-func (r *projectedRun) Stream(ctx context.Context, args []string, env map[string]string, consume func(io.Reader) error) error {
+func (r *projectedRun) Stream(ctx context.Context, args []string, env map[string]string, converse func(io.Writer, io.Reader) error) error {
 	execCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	cmd, err := r.exec(execCtx, args, env)
+	cmd, err := r.exec(execCtx, args, env, "--interactive")
 	if err != nil {
 		return err
+	}
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return fmt.Errorf("agent input pipe failed")
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -566,11 +575,20 @@ func (r *projectedRun) Stream(ctx context.Context, args []string, env map[string
 	if err = cmd.Start(); err != nil {
 		return fmt.Errorf("agent execution failed")
 	}
-	readErr := consume(stdout)
+	readErr := converse(stdin, stdout)
+	_ = stdin.Close()
+	// After a completed conversation, an agent slow to exit is stopped, not failed.
+	var lingered atomic.Bool
 	if readErr != nil {
 		cancel()
+	} else {
+		timer := time.AfterFunc(exitGrace, func() { lingered.Store(true); cancel() })
+		defer timer.Stop()
 	}
 	waitErr := cmd.Wait()
+	if lingered.Load() {
+		waitErr = nil
+	}
 	m, memErr := r.memory()
 	if memErr == nil && m.Peak > 0 {
 		r.peak = m.Peak
@@ -637,11 +655,8 @@ func (r *projectedRun) outOfMemory(m pool.Memory, err error) *execution.OOMError
 
 // exec builds a docker exec in the agent working directory. Env values reach the docker
 // client environment only; argv and diagnostics carry names.
-func (r *projectedRun) exec(ctx context.Context, args []string, env map[string]string) (*exec.Cmd, error) {
-	execArgs := []string{"exec", "--user", AttemptUser}
-	if r.volume != "" {
-		execArgs = append(execArgs, "--workdir", repo.WorkDir)
-	}
+func (r *projectedRun) exec(ctx context.Context, args []string, env map[string]string, flags ...string) (*exec.Cmd, error) {
+	execArgs := append([]string{"exec", "--user", AttemptUser, "--workdir", repo.WorkDir}, flags...)
 	environ := os.Environ()
 	for name, value := range env {
 		if !envPattern.MatchString(name) || strings.ContainsAny(value, "\x00\r\n") || len(value) > 4096 {

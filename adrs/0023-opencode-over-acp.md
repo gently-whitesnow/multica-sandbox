@@ -1,6 +1,6 @@
 # ADR 0023: Current OpenCode over ACP
 
-Status: Proposed
+Status: Accepted
 Date: 2026-10-30
 
 ## Context
@@ -41,17 +41,19 @@ session. `PromptResponse.usage` covers the turn there; on 1.x it holds the last
 model call only, and turn usage comes from `opencode export`. 2.x drops
 `acp --cwd` and answers an unknown session with -32602 instead of -32603.
 
-The Docker backend's `Stream` offers no stdin.
+The Docker backend's `Stream` offered no stdin. Implementation found that 2.x hides
+MCP tools the permissions deny, and registers session MCP tools shortly after
+`session/new` answers, so an immediate prompt's first step lacks them.
 
 ## Decision
 
 **Version.** The target is OpenCode 2.2.2, the newest release on 2026-10-30, pinned
 by its multi-platform index `sha256:7c8cd91b6055e39306fa9040b9abf4e7d2808b1fccfe2d0389e3f0cdc654a048`.
 GitHub still labels 1.19.5 "Latest"; the target follows the newest release, not the
-label. No floating tag is used. The spike lists it as a candidate; it enters
-`images.txt`, and so `Supported`, only when the conformance suite passes on the
-ACP adapter. Newer releases follow the same path: a script resolves the release's
-index digest, runs the spike and conformance, and proposes the `images.txt` change.
+label. No floating tag is used. A release enters `images.txt`, and so `Supported`,
+only when the conformance suite passes on the ACP adapter; 2.2.2 did.
+`scripts/opencode-release.sh` resolves a new release's index digest, runs the spike
+and the MCP rotation conformance, and appends the release for review.
 
 **Transport.** The adapter drives `opencode acp` with `coder/acp-go-sdk`:
 
@@ -65,7 +67,8 @@ index digest, runs the spike and conformance, and proposes the `images.txt` chan
 - `stopReason` decides the outcome; an exit without a prompt response stays the
   retryable provider-network failure.
 - Resume uses `session/load` in the retained workdir and ignores the replay. Any
-  load error retires the session and runs fresh once.
+  load error retires the session and runs fresh once in the same process.
+- On 2.x with MCP, the prompt waits 2 s after `session/new` for tool registration.
 - Cancellation sends `session/cancel` before the exec is torn down.
 - Usage comes from `PromptResponse.usage` where a version is verified to report
   the whole turn, else from the session export through `Capture`.
@@ -78,7 +81,9 @@ the existing renewal loop, registered with the attempt authority before use
 (ADR 0009, 0011). It carries streamable HTTP (POST, SSE responses, the GET
 stream, `Mcp-Session-Id`), refuses redirects, and revocation at cleanup cancels
 open streams. Access tokens no longer enter the attempt; the auth-store
-projection and its file go.
+projection and its file go. The projected permissions allow each connection's tools.
+Upstreams the controller calls must not share a name with an attempt peer: a
+pooled connection through a removed attempt network hangs.
 
 **1.x.** Listed 1.x images run on the same transport and relay. The `run`
 transport is removed once ACP conformance passes, keeping only operator commands.
@@ -91,9 +96,9 @@ adapters. It gains one dependency, a stdin path in the backend contract, an MCP
 relay policy and a conformance gate per release. Releases arrive almost daily, so
 the pinned version lags the newest by the time a run of the gate takes.
 
-ACP and OpenCode 2.x move fast. Usage and child-session handling rely on behavior
-the spike observed, not documented contracts; conformance must check them on every
-candidate. Until the relay lands, 2.x stays out of `images.txt`.
+ACP and OpenCode 2.x move fast. Usage, child-session handling and the MCP settle
+delay rely on observed behavior, not documented contracts; conformance must check
+them on every candidate.
 
 ## References
 

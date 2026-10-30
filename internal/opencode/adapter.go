@@ -2,7 +2,6 @@ package opencode
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -38,6 +37,8 @@ type Status interface {
 type Grants interface {
 	Issue(string, relay.Upstream) (string, error)
 	Revoke(string)
+	// Refusal is the attempt's last upstream refusal status, 0 if none.
+	Refusal(string) int
 }
 
 type Adapter struct {
@@ -47,11 +48,16 @@ type Adapter struct {
 	Authority          Authority
 	Workloads          Workloads
 	Status             Status
-	Command            []string
-	Reporter           Reporter
+	// Command replaces the `opencode acp` argv; it must speak ACP on stdio.
+	Command  []string
+	Reporter Reporter
 	// Relay and RelayURL enable upstream-equivalent Multica CLI access (ADR 0014).
 	Relay    Grants
 	RelayURL string
+	// MCPRelay and MCPRelayURL carry selected MCP connections with controller-held
+	// tokens (ADR 0023); agents selecting MCP need them.
+	MCPRelay    *MCPRelay
+	MCPRelayURL string
 	// InferenceRelay and InferenceRelayURL carry workspace-key inference (ADR 0012).
 	InferenceRelay    Grants
 	InferenceRelayURL string
@@ -70,17 +76,24 @@ type running struct {
 	task        multica.Task
 	connections map[string]Remote
 	workload    execution.ProjectedRun
-	tokens      map[string]identity.AccessToken
-	cancel      context.CancelFunc
-	done        chan error
-	exited      chan struct{}
-	started     bool
-	once        sync.Once
-	cleanupErr  error
-	events      *eventStream
-	model       string
-	effort      string
-	relayToken  string
+	// mu guards tokens, which the MCP relay reads while the renewal loop replaces them.
+	mu         sync.Mutex
+	tokens     map[string]identity.AccessToken
+	cancel     context.CancelFunc
+	done       chan error
+	exited     chan struct{}
+	started    bool
+	once       sync.Once
+	cleanupErr error
+	events     *eventStream
+	model      string
+	effort     string
+	relayToken string
+	// mcpToken is the opaque MCP relay credential named in session/new.
+	mcpToken string
+	// prompt is the turn's message; v2 marks an OpenCode 2.x agent.
+	prompt []byte
+	v2     bool
 	// inferenceToken is the opaque per-attempt provider key; it never rotates.
 	inferenceToken string
 	// gitEnv routes claim repositories through the Git relay with an opaque credential.
@@ -92,8 +105,8 @@ type running struct {
 	skills map[string][]byte
 }
 
-// SessionDB keeps OpenCode's session store in the retained workdir, apart from the
-// auth stores under XDG_DATA_HOME.
+// SessionDB keeps OpenCode's session store in the retained workdir, apart from
+// XDG_DATA_HOME.
 const SessionDB = "/workspace/work/.multica-sandbox/opencode.db"
 
 var sessionID = regexp.MustCompile(`^ses_[A-Za-z0-9]{1,64}$`)
@@ -105,6 +118,9 @@ func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, 
 	}
 	if len(connections) != 0 && a.Issuer == nil {
 		return nil, &execution.RejectedError{Err: fmt.Errorf("MCP connections require identity_file: %w", ErrDenied)}
+	}
+	if len(connections) != 0 && a.MCPRelay == nil {
+		return nil, &execution.RejectedError{Err: fmt.Errorf("MCP connections require mcp_relay: %w", ErrDenied)}
 	}
 	continuity := Fresh
 	if task.PriorSessionID != "" {
@@ -129,6 +145,11 @@ func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, 
 		}
 		if err != nil {
 			return nil, r.reject(fmt.Errorf("Multica relay grant: %w", ErrDenied))
+		}
+	}
+	if len(connections) != 0 {
+		if r.mcpToken, err = a.MCPRelay.issue(r); err != nil {
+			return nil, r.reject(fmt.Errorf("MCP relay grant: %w", ErrDenied))
 		}
 	}
 	if a.GitRelay != nil {
@@ -172,11 +193,12 @@ func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, 
 	if reused && r.workDir == task.PriorWorkDir && sessionID.MatchString(task.PriorSessionID) {
 		r.resume, continuity = task.PriorSessionID, Resumed
 	}
-	prompt, brief, err := Prompt(task, a.Relay != nil, a.Checkout != nil, continuity)
+	var brief []byte
+	r.prompt, brief, err = Prompt(task, a.Relay != nil, a.Checkout != nil, continuity)
 	if err != nil {
 		return nil, r.reject(err)
 	}
-	if err = r.initialize(runCtx, prompt, brief); err != nil {
+	if err = r.initialize(runCtx, brief); err != nil {
 		return nil, r.reject(err)
 	}
 	if a.Checkout != nil {
@@ -195,7 +217,7 @@ func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, 
 	return r, nil
 }
 
-func (r *running) initialize(ctx context.Context, prompt, brief []byte) error {
+func (r *running) initialize(ctx context.Context, brief []byte) error {
 	// The global config directory is sealed after skills are laid down in it.
 	script, seal := `set -eu; mkdir -p /workspace/config/opencode; printf "{}" > /workspace/config/opencode/opencode.json; printf "*\n" > /workspace/config/opencode/.gitignore`, "chmod 555 /workspace/config/opencode"
 	if len(r.skills) == 0 {
@@ -223,7 +245,7 @@ func (r *running) initialize(ctx context.Context, prompt, brief []byte) error {
 	if err != nil {
 		return err
 	}
-	files := map[string][]byte{"/workspace/opencode.json": config, "/workspace/prompt.txt": prompt}
+	files := map[string][]byte{"/workspace/opencode.json": config}
 	if brief != nil {
 		files[BriefPath] = brief
 	}
@@ -236,26 +258,7 @@ func (r *running) initialize(ctx context.Context, prompt, brief []byte) error {
 			return err
 		}
 	}
-	return r.project(ctx)
-}
-
-func (r *running) project(ctx context.Context) error {
-	status, err := r.adapter.Status.Status(ctx, r.task.ID)
-	if err != nil || status != "running" {
-		return ErrDenied
-	}
-	store := map[string]Entry{}
-	for name, token := range r.tokens {
-		if time.Until(token.ExpiresAt) <= time.Second {
-			return ErrDenied
-		}
-		store[name] = Entry{r.connections[name].URL, Token{token.Bearer(), token.ExpiresAt.Unix()}}
-	}
-	data, err := json.Marshal(store)
-	if err != nil {
-		return ErrDenied
-	}
-	return r.workload.Write(ctx, AuthPath, data)
+	return nil
 }
 
 func (r *running) grant(action string) attempt.Grant {
@@ -267,18 +270,18 @@ func (r *running) refresh(ctx context.Context) error {
 	if err != nil || status != "running" {
 		return fmt.Errorf("task status: %w", ErrDenied)
 	}
-	changed := false
 	ref := identity.Ref{Server: r.adapter.Server, WorkspaceID: r.task.WorkspaceID, AgentID: r.task.AgentID}
 	for name, connection := range r.connections {
+		r.mu.Lock()
 		token := r.tokens[name]
+		r.mu.Unlock()
 		if time.Until(token.ExpiresAt) <= 10*time.Second {
 			token, err = r.adapter.Issuer.AcquireForMCP(ctx, ref, r.task.Agent.CustomEnv, connection.URL)
 			if err != nil || time.Until(token.ExpiresAt) <= 10*time.Second {
 				return fmt.Errorf("MCP issuance: %w", ErrDenied)
 			}
-			changed = true
 		}
-		// An optional authority registers the JWT fingerprint before OpenCode sees it.
+		// An optional authority registers the JWT fingerprint before the relay uses it.
 		if r.adapter.Authority != nil {
 			grant := r.grant("renew")
 			grant.URL = connection.URL
@@ -288,31 +291,24 @@ func (r *running) refresh(ctx context.Context) error {
 				return err
 			}
 		}
+		r.mu.Lock()
 		r.tokens[name] = token
+		r.mu.Unlock()
 	}
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-	if changed && r.workload != nil {
-		return r.project(ctx)
-	}
-	return nil
+	return ctx.Err()
 }
 
 func (r *running) loop(ctx context.Context) {
 	defer close(r.exited)
 	command := r.adapter.Command
 	if len(command) == 0 {
-		command = []string{"/bin/sh", "-c", `exec opencode run --format json ${MULTICA_SANDBOX_RESUME:+--session "$MULTICA_SANDBOX_RESUME"} "$(cat /workspace/prompt.txt)"`}
+		command = []string{"opencode", "acp"}
 	}
 	agent := make(chan error, 1)
 	go func() {
-		read := func(reader io.Reader) error { return r.events.read(ctx, reader) }
-		err := r.workload.Stream(ctx, command, r.environment(), read)
-		if err != nil && r.retryFresh(ctx) {
-			err = r.workload.Stream(ctx, command, r.environment(), read)
-		}
-		agent <- err
+		agent <- r.workload.Stream(ctx, command, r.environment(), func(stdin io.Writer, stdout io.Reader) error {
+			return r.converse(ctx, stdin, stdout)
+		})
 	}()
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
@@ -361,21 +357,6 @@ func (a *Adapter) idleWatchdog() time.Duration {
 	return idleWatchdog
 }
 
-// retryFresh follows upstream shouldRetryWithFreshSession for OpenCode: a resume that
-// established no session and used no tool retires the prior session and runs once more,
-// fresh, with the continuity notice.
-func (r *running) retryFresh(ctx context.Context) bool {
-	if r.resume == "" || ctx.Err() != nil || r.events.session != "" || r.events.tools.Load() > 0 {
-		return false
-	}
-	prompt, _, err := Prompt(r.task, r.adapter.Relay != nil, r.adapter.Checkout != nil, Lost)
-	if err != nil || r.workload.Write(ctx, "/workspace/prompt.txt", prompt) != nil {
-		return false
-	}
-	r.retired, r.resume = r.resume, ""
-	return true
-}
-
 // Result reports the session as retained only with a retained workdir.
 func (r *running) Result() execution.Result {
 	t := execution.Telemetry{Model: r.model, Effort: r.effort}
@@ -385,9 +366,9 @@ func (r *running) Result() execution.Result {
 	if r.events == nil {
 		return execution.Result{Disposable: true, Telemetry: t}
 	}
-	u := r.events.usage
+	output, session, u := r.events.result()
 	t.InputTokens, t.OutputTokens, t.CachedTokens = u.Input, u.Output, u.CacheRead
-	return execution.Result{Output: r.events.output.String(), SessionID: r.events.session, WorkDir: r.workDir, RetiredSessionID: r.retired, Disposable: r.workDir == "", Telemetry: t}
+	return execution.Result{Output: output, SessionID: session, WorkDir: r.workDir, RetiredSessionID: r.retired, Disposable: r.workDir == "", Telemetry: t}
 }
 
 func (r *running) Wait(ctx context.Context) error {
@@ -407,6 +388,9 @@ func (r *running) Remove(ctx context.Context) error {
 		if r.inferenceToken != "" {
 			r.adapter.InferenceRelay.Revoke(r.task.AttemptKey())
 		}
+		if r.mcpToken != "" {
+			r.adapter.MCPRelay.revoke(r.task.AttemptKey())
+		}
 		if r.gitEnv != nil {
 			r.adapter.Checkout.Unregister(r.task.AttemptKey())
 			r.adapter.GitRelay.Revoke(r.task.AttemptKey())
@@ -423,7 +407,9 @@ func (r *running) Remove(ctx context.Context) error {
 		if r.workload != nil {
 			r.cleanupErr = errors.Join(r.cleanupErr, r.workload.Remove(cleanCtx))
 		}
+		r.mu.Lock()
 		clear(r.tokens)
+		r.mu.Unlock()
 	})
 	return r.cleanupErr
 }

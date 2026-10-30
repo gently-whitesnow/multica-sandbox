@@ -47,9 +47,6 @@ func (r *running) environment() map[string]string {
 	if r.workDir != "" {
 		env["OPENCODE_DB"] = SessionDB
 	}
-	if r.resume != "" {
-		env["MULTICA_SANDBOX_RESUME"] = r.resume
-	}
 	if r.gitEnv != nil {
 		// The helper forwards the upstream daemon port to the checkout endpoint (ADR 0015).
 		env["MULTICA_DAEMON_PORT"] = repo.DaemonPort

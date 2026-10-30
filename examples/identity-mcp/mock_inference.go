@@ -18,6 +18,15 @@ var warmHints = []*regexp.Regexp{
 	regexp.MustCompile(`\d+ DISTINCT threads`),
 }
 
+// mockProvider serves the mock model alone on the attempt template, so names the
+// controller resolves (the gateway's MCP and authority) never share a template alias.
+func mockProvider() error {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/chat/completions", mockInference)
+	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(204) })
+	return serve(":8080", mux)
+}
+
 // No provider or account is contacted: deterministic tool turns test the MCP adapter.
 func mockInference(w http.ResponseWriter, r *http.Request) {
 	var body struct {
@@ -62,13 +71,17 @@ func mockInference(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	chat := strings.Contains(latest, "You are running as a chat assistant for a Multica workspace.")
-	name, bash := "", false
+	// OpenCode 2.x names the shell tool "shell"; 1.x calls it "bash".
+	name, shell := "", ""
 	for _, tool := range body.Tools {
 		if strings.HasSuffix(tool.Function.Name, "read_fixture") {
 			name = tool.Function.Name
 		}
-		bash = bash || tool.Function.Name == "bash"
+		if tool.Function.Name == "bash" || tool.Function.Name == "shell" {
+			shell = tool.Function.Name
+		}
 	}
+	bash := shell != ""
 	if name != "" || (bash && issue != "") {
 		time.Sleep(2 * time.Second)
 	}
@@ -88,7 +101,7 @@ func mockInference(w http.ResponseWriter, r *http.Request) {
 		if prompts > 1 {
 			command = "cat chat-note.txt"
 		}
-		call("bash", map[string]string{"command": command, "description": "Read the chat"})
+		call(shell, map[string]string{"command": command, "description": "Read the chat"})
 	case bash && chat:
 		state := map[bool]string{true: "Chat resumed", false: "Chat started"}[prompts > 1]
 		for _, word := range []string{"history read", "violet"} {
@@ -111,10 +124,10 @@ func mockInference(w http.ResponseWriter, r *http.Request) {
 		if match := parentPattern.FindStringSubmatch(latest); match != nil {
 			parent = " --parent " + match[1]
 		}
-		call("bash", map[string]string{"command": "printf '%s: %s\\n' '" + state + "' \"$(cat notes.txt)\" > reply.md && multica issue comment add " + issue + parent + " --content-file ./reply.md --output table && rm reply.md", "description": "Post the follow-up"})
+		call(shell, map[string]string{"command": "printf '%s: %s\\n' '" + state + "' \"$(cat notes.txt)\" > reply.md && multica issue comment add " + issue + parent + " --content-file ./reply.md --output table && rm reply.md", "description": "Post the follow-up"})
 	case bash && issue != "" && count == 0:
 		// The upstream-style prompt names the issue; the agent reads it through the Multica relay.
-		call("bash", map[string]string{"command": "multica issue get " + issue + " --output json", "description": "Read the assigned issue"})
+		call(shell, map[string]string{"command": "multica issue get " + issue + " --output json", "description": "Read the assigned issue"})
 	case bash && issue != "" && count == 1:
 		if title := titlePattern.FindStringSubmatch(result); title != nil {
 			// Relay fixture tasks hold up to 40 s until the test probe marks the live attempt.
@@ -131,7 +144,7 @@ func mockInference(w http.ResponseWriter, r *http.Request) {
 					`{ ! command -v gh >/dev/null || { pr=$(cd "$repo" && gh pr create --head "$(git branch --show-current)" --base main --title 'Fixture agent work' --body 'Fixture agent work') && printf 'Pull request: %s\n' "$pr" >> reply.md; }; } && `
 			}
 			// A configured tool bundle reports itself; images without jq post only the read.
-			call("bash", map[string]string{"command": checkout + hold + "printf '%s\\n' 'Relay fixture read: " + title[1] + "' >> reply.md && { ! command -v jq >/dev/null || jq --version >> reply.md; } && multica issue comment add " + issue + " --content-file ./reply.md --output table && rm reply.md", "description": "Post the result"})
+			call(shell, map[string]string{"command": checkout + hold + "printf '%s\\n' 'Relay fixture read: " + title[1] + "' >> reply.md && { ! command -v jq >/dev/null || jq --version >> reply.md; } && multica issue comment add " + issue + " --content-file ./reply.md --output table && rm reply.md", "description": "Post the result"})
 		}
 	}
 	chunk["choices"] = []any{map[string]any{"index": 0, "delta": delta, "finish_reason": nil}}

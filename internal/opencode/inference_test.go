@@ -51,7 +51,7 @@ func inferenceLease(t *testing.T, grants *relay.Grants, bearer string) (relay.Le
 }
 
 func inferenceAdapter(source Inference, grants Grants, workload *stubWorkload) *Adapter {
-	return &Adapter{Server: "https://multica.example.invalid", Issuer: &stubIssuer{}, Inference: source, Authority: &stubAuthority{}, Workloads: workload, Status: stubStatus{}, InferenceRelay: grants, InferenceRelayURL: "http://inference-relay:8092"}
+	return &Adapter{Server: "https://multica.example.invalid", Issuer: &stubIssuer{}, MCPRelay: NewMCPRelay(), Inference: source, Authority: &stubAuthority{}, Workloads: workload, Status: stubStatus{}, InferenceRelay: grants, InferenceRelayURL: "http://inference-relay:8092"}
 }
 
 func TestInferenceDenialBeforeWorkload(t *testing.T) {

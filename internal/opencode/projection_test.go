@@ -43,9 +43,25 @@ func TestNativeStoreContract(t *testing.T) {
 	if strings.Contains(string(config), "oauth\":false") || strings.Contains(string(config), "headers") {
 		t.Fatal("native OAuth disabled")
 	}
-	store, _ := json.Marshal(map[string]Entry{"selected": {ServerURL: selected["selected"].URL, Tokens: Token{"access", 123}}})
-	if string(store) != `{"selected":{"serverUrl":"https://tools.example.invalid/mcp","tokens":{"accessToken":"access","expiresAt":123}}}` {
-		t.Fatal("native store contract changed")
+	if strings.Contains(string(config), "tools.example.invalid") || !strings.Contains(string(config), `"selected_*":"allow"`) {
+		t.Fatalf("MCP endpoints reach OpenCode only through the relay: %s", config)
+	}
+}
+
+func TestSelectAdmitsOnlyRelayableEndpoints(t *testing.T) {
+	for _, server := range []string{
+		`{"url":"https://tools.example.invalid/mcp","type":"sse"}`,
+		`{"url":"https://tools.example.invalid/mcp?token=x"}`,
+		`{"url":"https://user@tools.example.invalid/mcp"}`,
+		`{"url":"https://tools.example.invalid/a%2Fb"}`,
+		`{"url":"ftp://tools.example.invalid/mcp"}`,
+		`{"url":"/mcp"}`,
+	} {
+		task := safeTask()
+		task.Agent.MCPConfig = json.RawMessage(`{"mcpServers":{"x":` + server + `}}`)
+		if _, err := Select(task); err == nil {
+			t.Fatalf("accepted %s", server)
+		}
 	}
 }
 

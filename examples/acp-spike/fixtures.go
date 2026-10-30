@@ -73,7 +73,7 @@ func inference(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if debug {
-		fmt.Printf("  inference: prompts=%d count=%d tools=%v\n", prompts, count, names)
+		fmt.Printf("  inference: %s prompts=%d count=%d tools=%v\n", time.Now().Format("15:04:05.000"), prompts, count, names)
 	}
 	delta, finish := map[string]any{"content": "ok"}, "stop"
 	call := func(tool string, args any) {
@@ -120,7 +120,7 @@ type bearers struct {
 func (b *bearers) record(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if debug {
-			fmt.Printf("  mcp: %s %s\n", r.Method, r.Header.Get("Mcp-Method"))
+			fmt.Printf("  mcp: %s %s %s\n", time.Now().Format("15:04:05.000"), r.Method, r.Header.Get("Mcp-Method"))
 		}
 		b.mu.Lock()
 		b.seen = append(b.seen, strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))

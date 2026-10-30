@@ -12,8 +12,6 @@ import (
 	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
 )
 
-const AuthPath = "/workspace/data/opencode/mcp-auth.json"
-
 var ErrDenied = errors.New("OpenCode task projection denied")
 var namePattern = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_-]{0,63}$`)
 
@@ -26,16 +24,6 @@ type Connection struct {
 type Remote struct {
 	Type string `json:"type"`
 	URL  string `json:"url"`
-}
-
-type Token struct {
-	AccessToken string `json:"accessToken"`
-	ExpiresAt   int64  `json:"expiresAt"`
-}
-
-type Entry struct {
-	ServerURL string `json:"serverUrl"`
-	Tokens    Token  `json:"tokens"`
 }
 
 func Select(t multica.Task) (map[string]Remote, error) {
@@ -60,7 +48,8 @@ func Select(t multica.Task) (map[string]Remote, error) {
 	}
 	out := map[string]Remote{}
 	for name, c := range document.Servers {
-		if !namePattern.MatchString(name) || c.URL == "" || (c.Type != "" && c.Type != "http" && c.Type != "sse") || len(c.Headers) != 0 {
+		// The MCP relay carries streamable HTTP only; legacy SSE endpoints are refused.
+		if !namePattern.MatchString(name) || !validMCPURL(c.URL) || (c.Type != "" && c.Type != "http") || len(c.Headers) != 0 {
 			return nil, ErrDenied
 		}
 		// No user headers: API keys and authorization aliases are credentials too.
@@ -73,6 +62,8 @@ func Select(t multica.Task) (map[string]Remote, error) {
 // for the CLI, and skill loads the claim's skills from the attempt's config directory.
 var localTools = []string{"bash", "read", "edit", "write", "glob", "grep", "list", "todoread", "todowrite", "skill"}
 
+// Config projects deny-by-default permissions; selected MCP connections reach OpenCode
+// through session/new, not the configuration.
 func Config(connections map[string]Remote, local bool) ([]byte, error) {
 	permissions := map[string]string{"*": "deny"}
 	if local {
@@ -83,7 +74,7 @@ func Config(connections map[string]Remote, local bool) ([]byte, error) {
 	for name := range connections {
 		permissions[name+"_*"] = "allow"
 	}
-	return json.Marshal(map[string]any{"mcp": connections, "autoupdate": false, "share": "disabled", "permission": permissions})
+	return json.Marshal(map[string]any{"autoupdate": false, "share": "disabled", "permission": permissions})
 }
 
 // Continuity says how a run relates to the claim's prior session.

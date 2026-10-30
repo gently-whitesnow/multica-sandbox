@@ -130,8 +130,8 @@ func TestChatResumesOnlyItsRetainedWorkdir(t *testing.T) {
 			if workload.workdir != (execution.Workdir{Workspace: task.WorkspaceID, Agent: task.AgentID, Chat: chatID, Prior: c.prior}) {
 				t.Fatalf("requested workdir: %+v", workload.workdir)
 			}
-			prompt := string(workload.files["/workspace/prompt.txt"])
-			if (env["MULTICA_SANDBOX_RESUME"] == "ses_prior") != c.resume || strings.Contains(prompt, "Multica stored it") == c.resume || !strings.Contains(prompt, "User message:\nContinue") {
+			prompt := string(workload.files[sentPrompt])
+			if workload.loaded() != c.resume || strings.Contains(prompt, "Multica stored it") == c.resume || !strings.Contains(prompt, "User message:\nContinue") {
 				t.Fatalf("resume %t: env %v prompt %q", c.resume, env, prompt)
 			}
 			if err := run.Remove(context.Background()); err != nil {

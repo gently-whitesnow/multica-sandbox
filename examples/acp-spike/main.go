@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -25,20 +26,13 @@ import (
 )
 
 const (
-	repository = "ghcr.io/anomalyco/opencode"
-	user       = "65532:65532"
-	workDir    = "/workspace/work"
+	user    = "65532:65532"
+	workDir = "/workspace/work"
 )
 
-// candidates pin official releases the spike exercises before conformance; images.txt
-// lists only verified releases, which the controller accepts (ADR 0023).
-var candidates = map[string]string{
-	"2.2.2": "sha256:7c8cd91b6055e39306fa9040b9abf4e7d2808b1fccfe2d0389e3f0cdc654a048",
-}
-
 func main() {
-	version := flag.String("version", "", "candidate release from candidates; default: newest verified image")
-	image := flag.String("image", "", "OpenCode image; overrides -version")
+	version := flag.String("version", "", "verified release from images.txt; default: the newest")
+	image := flag.String("image", "", "OpenCode image, such as an unlisted candidate; overrides -version")
 	host := flag.String("host", "host.docker.internal", "host name the container uses to reach the fixtures")
 	keep := flag.Bool("keep", false, "keep the container for inspection")
 	flag.BoolVar(&debug, "debug", false, "log fixture requests")
@@ -47,12 +41,12 @@ func main() {
 	if *image == "" {
 		*image = opencode.Images[len(opencode.Images)-1]
 		if *version != "" {
-			digest, ok := candidates[*version]
-			if !ok {
-				fmt.Fprintln(os.Stderr, "acp-spike: unknown candidate", *version)
+			i := slices.Index(opencode.Supported, *version)
+			if i < 0 {
+				fmt.Fprintln(os.Stderr, "acp-spike: unverified release", *version)
 				os.Exit(2)
 			}
-			*image = repository + ":" + *version + "@" + digest
+			*image = opencode.Images[i]
 		}
 	}
 	if err := run(*image, *host, *keep); err != nil {
@@ -160,8 +154,11 @@ func (s *spike) launch(ctx context.Context, image string) error {
 	return nil
 }
 
-// project writes the adapter's projection: deny-by-default permissions, a remote MCP from
-// opencode.json with its access token in the native auth store, and a fixed provider key.
+// authStore is OpenCode's native MCP OAuth store, which the adapter projected before ADR 0023.
+const authStore = "/workspace/data/opencode/mcp-auth.json"
+
+// project writes the adapter's permissions, the pre-ADR 0023 projection of a remote MCP
+// in opencode.json with its access token in the native auth store, and a fixed provider key.
 func (s *spike) project(ctx context.Context, origin string) error {
 	config, err := opencode.Config(map[string]opencode.Remote{"spike": {Type: "remote", URL: s.mcpURL}}, true)
 	if err != nil {
@@ -169,6 +166,11 @@ func (s *spike) project(ctx context.Context, origin string) error {
 	}
 	var projected map[string]any
 	_ = json.Unmarshal(config, &projected)
+	projected["mcp"] = map[string]opencode.Remote{"spike": {Type: "remote", URL: s.mcpURL}}
+	if acpMCP {
+		// The adapter allows the tools of each connection it names in session/new.
+		projected["permission"].(map[string]any)["viaacp_*"] = "allow"
+	}
 	projected["model"] = "fixture/model"
 	projected["enabled_providers"] = []string{"fixture"}
 	projected["provider"] = map[string]any{"fixture": map[string]any{"npm": "@ai-sdk/openai-compatible", "name": "Fixture",
@@ -201,6 +203,9 @@ func (s *spike) handshake(ctx context.Context) (*agent, acp.SessionId, error) {
 		return nil, "", fmt.Errorf("session/new: %w (stderr: %s)", err, a.stderr())
 	}
 	id := session.SessionId
+	if debug {
+		fmt.Printf("  session/new answered %s\n", time.Now().Format("15:04:05.000"))
+	}
 	s.check("session id shape", strings.HasPrefix(string(id), "ses_"), "%s (adapter regexp %s)", id, `^ses_[A-Za-z0-9]{1,64}$`)
 	return a, id, nil
 }
@@ -419,6 +424,9 @@ func (c *client) SessionUpdate(_ context.Context, n acp.SessionNotification) err
 		Meta map[string]any `json:"_meta"`
 	}
 	_ = json.Unmarshal(data, &u)
+	if debug {
+		fmt.Printf("  update: %s %s %s\n", time.Now().Format("15:04:05.000"), u.Kind, u.Status)
+	}
 	tool := u.Title
 	if name, ok := u.Meta["opencode/tool"].(string); ok {
 		tool = name
@@ -632,8 +640,9 @@ func (s *spike) write(ctx context.Context, path string, data []byte) error {
 }
 
 func (s *spike) writeToken(ctx context.Context, token string) error {
-	store, _ := json.Marshal(map[string]opencode.Entry{"spike": {ServerURL: s.mcpURL, Tokens: opencode.Token{AccessToken: token, ExpiresAt: time.Now().Add(time.Hour).Unix()}}})
-	return s.write(ctx, opencode.AuthPath, store)
+	entry := map[string]any{"serverUrl": s.mcpURL, "tokens": map[string]any{"accessToken": token, "expiresAt": time.Now().Add(time.Hour).Unix()}}
+	store, _ := json.Marshal(map[string]any{"spike": entry})
+	return s.write(ctx, authStore, store)
 }
 
 func docker(ctx context.Context, stdin []byte, args ...string) ([]byte, error) {

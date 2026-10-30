@@ -3,6 +3,7 @@
 package docker
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -44,14 +45,14 @@ func TestProjectedAttemptIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := a.Write(ctx, "/workspace/data/opencode/mcp-auth.json", []byte(`{"a":"private-a"}`)); err != nil {
+	if err := a.Write(ctx, "/workspace/opencode.json", []byte(`{"a":"private-a"}`)); err != nil {
 		t.Fatal(err)
 	}
 	// Exec sessions inherit the controller PATH; the mounted CLI stays read-only.
 	if err := b.Execute(ctx, []string{"/bin/sh", "-c", `set -e; test "$(command -v multica)" = /opt/multica-sandbox/multica/bin/multica; multica >/dev/null; ! touch /opt/multica-sandbox/multica/bin/x`}); err != nil {
 		t.Fatal("controller CLI is not the read-only PATH entry:", err)
 	}
-	if err := b.Execute(ctx, []string{"/bin/sh", "-c", `test ! -e /workspace/data/opencode/mcp-auth.json; test ! -e /var/run/docker.sock; test ! -e /run/secrets; ! wget -T 1 -q -O /tmp/leak http://169.254.169.254/; ! wget -T 1 -q -O /tmp/leak http://1.1.1.1/`}); err != nil {
+	if err := b.Execute(ctx, []string{"/bin/sh", "-c", `test ! -e /workspace/opencode.json; test ! -e /var/run/docker.sock; test ! -e /run/secrets; ! wget -T 1 -q -O /tmp/leak http://169.254.169.254/; ! wget -T 1 -q -O /tmp/leak http://1.1.1.1/`}); err != nil {
 		t.Fatal(err)
 	}
 	// A hostile attempt resolves only approved peer aliases: no route, external DNS or IPv6 egress.
@@ -69,7 +70,7 @@ cp "$TMPDIR/run" /tmp/run; ! /tmp/run; df -k /workspace | awk 'NR==2 { exit !($2
 	if rA.network == rB.network {
 		t.Fatal("shared attempt network")
 	}
-	if err := b.Write(ctx, "/workspace/prompt.txt", []byte("other-workspace-private")); err != nil {
+	if err := b.Write(ctx, "/workspace/AGENTS.md", []byte("other-workspace-private")); err != nil {
 		t.Fatal(err)
 	}
 	if err := b.Execute(ctx, []string{"/bin/sh", "-c", `(while true; do printf "HTTP/1.1 200 OK\r\nContent-Length: 7\r\n\r\nprivate" | nc -l -p 8080 -w 1; done) > /tmp/server.log 2>&1 < /dev/null &`}); err != nil {
@@ -85,7 +86,7 @@ cp "$TMPDIR/run" /tmp/run; ! /tmp/run; df -k /workspace | awk 'NR==2 { exit !($2
 	// Stream env reaches only that exec process: not container config, sibling execs or argv.
 	const credential = "mat_relay_stream-env-sentinel"
 	var streamed strings.Builder
-	if err := a.Stream(ctx, []string{"/bin/sh", "-c", `printf %s "$MULTICA_TOKEN"`}, map[string]string{"MULTICA_TOKEN": credential}, func(r io.Reader) error {
+	if err := a.Stream(ctx, []string{"/bin/sh", "-c", `printf %s "$MULTICA_TOKEN"`}, map[string]string{"MULTICA_TOKEN": credential}, func(_ io.Writer, r io.Reader) error {
 		_, err := io.Copy(&streamed, r)
 		return err
 	}); err != nil || streamed.String() != credential {
@@ -97,7 +98,19 @@ cp "$TMPDIR/run" /tmp/run; ! /tmp/run; df -k /workspace | awk 'NR==2 { exit !($2
 	if err := a.Execute(ctx, []string{"/bin/sh", "-c", `test -z "${MULTICA_TOKEN-}"`}); err != nil {
 		t.Fatal("stream env leaked into a later exec")
 	}
-	if err := a.Stream(ctx, []string{"true"}, map[string]string{"BAD=NAME": "x"}, func(io.Reader) error { return nil }); err == nil {
+	// Stdin reaches the agent while its output is read; closing stdin ends it.
+	var echoed string
+	if err := a.Stream(ctx, []string{"cat"}, nil, func(w io.Writer, r io.Reader) error {
+		if _, err := io.WriteString(w, "ping\n"); err != nil {
+			return err
+		}
+		var err error
+		echoed, err = bufio.NewReader(r).ReadString('\n')
+		return err
+	}); err != nil || echoed != "ping\n" {
+		t.Fatalf("stream stdin not delivered: %q %v", echoed, err)
+	}
+	if err := a.Stream(ctx, []string{"true"}, map[string]string{"BAD=NAME": "x"}, func(io.Writer, io.Reader) error { return nil }); err == nil {
 		t.Fatal("invalid environment name accepted")
 	}
 	if err := a.Write(ctx, "/etc/forbidden", []byte("secret")); err == nil {

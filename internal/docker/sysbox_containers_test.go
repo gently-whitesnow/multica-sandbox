@@ -150,13 +150,16 @@ func TestOutOfMemoryIsReported(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	discard := func(r io.Reader) error { _, err := io.Copy(io.Discard, r); return err }
+	discard := func(_ io.Writer, r io.Reader) error { _, err := io.Copy(io.Discard, r); return err }
 	if err := a.Stream(ctx, []string{"/bin/sh", "-c", "exit 3"}, nil, discard); err == nil || errors.As(err, new(*execution.OOMError)) {
 		t.Fatalf("plain failure reported as out of memory: %v", err)
 	}
 	// The adapter reads a stream that ends without its terminal event; the kill wins.
-	streamEnded := func(r io.Reader) error { _, _ = io.Copy(io.Discard, r); return errors.New("stream ended early") }
-	for _, consume := range []func(io.Reader) error{discard, streamEnded} {
+	streamEnded := func(_ io.Writer, r io.Reader) error {
+		_, _ = io.Copy(io.Discard, r)
+		return errors.New("stream ended early")
+	}
+	for _, consume := range []func(io.Writer, io.Reader) error{discard, streamEnded} {
 		err = a.Stream(ctx, []string{"/bin/sh", "-c", "tail /dev/zero"}, nil, consume)
 		var oom *execution.OOMError
 		if !errors.As(err, &oom) || oom.Killed < 1 || oom.Limit != 64<<20 || oom.Pool {

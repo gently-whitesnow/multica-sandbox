@@ -39,6 +39,11 @@ type Authorizer interface {
 	Authorize(*http.Request) (Lease, bool)
 }
 
+// responder is an Authorizer that records each upstream response status per attempt.
+type responder interface {
+	Responded(attempt string, status int)
+}
+
 // Policy bounds what a relay forwards.
 type Policy struct {
 	// Allow admits cleaned request paths.
@@ -119,6 +124,9 @@ func New(auth Authorizer, p Policy) (*Relay, error) {
 			}
 		},
 		ModifyResponse: func(resp *http.Response) error {
+			if r, ok := auth.(responder); ok {
+				r.Responded(resp.Request.Context().Value(leaseKey{}).(Lease).Attempt, resp.StatusCode)
+			}
 			// The transport never follows redirects; refusing them also withholds upstream locations.
 			if resp.StatusCode >= 300 && resp.StatusCode < 400 {
 				return errRedirect

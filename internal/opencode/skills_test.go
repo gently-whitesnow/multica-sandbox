@@ -116,7 +116,7 @@ func TestAdapterProjectsSkillsForUpstreamTasks(t *testing.T) {
 	task := relayTask(t)
 	task.Agent.Skills = []multica.Skill{{Name: "Review", Description: "Reviews", Content: "Body", Files: []multica.SkillFile{{Path: "ref.md", Content: "r"}}}}
 	workload := &stubWorkload{files: map[string][]byte{}, envs: make(chan map[string]string, 1)}
-	a := Adapter{Server: "https://multica.example.invalid", Issuer: &stubIssuer{}, Authority: &stubAuthority{}, Workloads: workload, Status: stubStatus{}, Relay: relay.NewGrants(multica.RelayPrefix), RelayURL: "http://multica-relay:8091"}
+	a := Adapter{Server: "https://multica.example.invalid", Issuer: &stubIssuer{}, MCPRelay: NewMCPRelay(), Authority: &stubAuthority{}, Workloads: workload, Status: stubStatus{}, Relay: relay.NewGrants(multica.RelayPrefix), RelayURL: "http://multica-relay:8091"}
 	run, err := a.Start(context.Background(), task)
 	if err != nil {
 		t.Fatal(err)
