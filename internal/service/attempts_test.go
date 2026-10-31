@@ -11,6 +11,7 @@ import (
 
 	"github.com/gently-whitesnow/multica-sandbox/internal/docker"
 	"github.com/gently-whitesnow/multica-sandbox/internal/metrics"
+	"github.com/gently-whitesnow/multica-sandbox/internal/pool"
 )
 
 func TestAttemptRuntimeConfiguration(t *testing.T) {
@@ -146,5 +147,46 @@ func TestClaimsWaitWhilePoolIsUnderPressure(t *testing.T) {
 	a.queued["a"] = 1
 	if err := f.claim(context.Background(), 10, execute); err != nil || len(f.active) != 3 || !strings.Contains(log.String(), "attempt pool unreadable") {
 		t.Fatalf("unreadable pool admitted: %v %d", err, len(f.active))
+	}
+}
+
+func TestAutoAdmissionDoesNotFillColdCapacity(t *testing.T) {
+	dir := fakeSlice(t, "0.00")
+	p, _, err := attemptPool(&OpenCodeConfig{Pool: &PoolConfig{CgroupParent: "attempts.slice", CgroupDir: dir, AutoAdmission: true, DiskPath: t.TempDir()}}, docker.DefaultResources)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &fleetFake{queued: map[string]int{"a": 10}}
+	f := newFleet(t, a)
+	now := time.Now()
+	f.clock = func() time.Time { return now }
+	f.admit = admission(p, f.metrics)
+	f.autoAdmission = &pool.AutoAdmission{Pool: p, DiskPath: t.TempDir(), ReadDisk: func(string) (pool.Disk, error) { return pool.Disk{Total: 100 << 30, Available: 50 << 30}, nil }}
+	f.ready = map[string]string{"a": "a"}
+	execute, _, release := track()
+	defer close(release)
+	if err := f.claim(context.Background(), 10, execute); err != nil || len(f.active) != 1 {
+		t.Fatalf("cold fill: %d %v", len(f.active), err)
+	}
+	now = now.Add(pool.ColdStartInterval + admissionCooldown)
+	// The fleet first clears the previous workspace fairness round.
+	if err := f.claim(context.Background(), 10, execute); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.claim(context.Background(), 10, execute); err != nil || len(f.active) != 2 {
+		t.Fatalf("warm ramp: %d %v", len(f.active), err)
+	}
+}
+
+func TestAutoAdmissionNeedsFilesystemMount(t *testing.T) {
+	dir := fakeSlice(t, "0.00")
+	for _, p := range []*PoolConfig{
+		{CgroupParent: "p.slice", CgroupDir: dir, AutoAdmission: true},
+		{CgroupParent: "p.slice", CgroupDir: dir, AutoAdmission: true, DiskPath: "relative"},
+		{CgroupParent: "p.slice", CgroupDir: dir, DiskPath: "/host-docker"},
+	} {
+		if _, _, err := attemptPool(&OpenCodeConfig{Pool: p}, docker.DefaultResources); err == nil {
+			t.Fatal("invalid auto config accepted", p)
+		}
 	}
 }

@@ -289,3 +289,41 @@ func TestDebugNamesReasonsWithoutSecrets(t *testing.T) {
 		t.Fatal("debug exposed a secret")
 	}
 }
+
+func TestOAuthClientSecretBasic(t *testing.T) {
+	f := newTokenFixture(t)
+	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id, secret, ok := r.BasicAuth()
+		_ = r.ParseForm()
+		if !ok || id != "client-a" || secret != "private-sentinel" || r.Form.Get("client_secret") != "" || r.Form.Get("grant_type") != "client_credentials" {
+			t.Error("OAuth Basic authentication not used")
+			w.WriteHeader(401)
+			return
+		}
+		response, err := http.Get(f.server.URL + "/token")
+		if err != nil {
+			w.WriteHeader(503)
+			return
+		}
+		defer response.Body.Close()
+		w.Header().Set("Content-Type", "application/json")
+		var body any
+		_ = json.NewDecoder(response.Body).Decode(&body)
+		_ = json.NewEncoder(w).Encode(body)
+	}))
+	defer endpoint.Close()
+	c := f.config(t)
+	c.Issuer.TokenURL = endpoint.URL
+	c.TokenSource.AuthMethod = "client_secret_basic"
+	s, err := New(c, identityTestServer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Acquire(context.Background(), ref(c), nil); err != nil {
+		t.Fatal("OAuth Basic JWT issuance failed", err)
+	}
+	c.TokenSource.AuthMethod = "unsupported"
+	if _, err = New(c, identityTestServer); err != ErrDenied {
+		t.Fatal("unknown OAuth auth method accepted")
+	}
+}

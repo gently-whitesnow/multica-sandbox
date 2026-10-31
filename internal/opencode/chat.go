@@ -7,17 +7,16 @@ import (
 	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
 )
 
-// Text below mirrors Multica v0.5.2 server/internal/daemon/prompt.go (buildChatPrompt,
+// Text below mirrors Multica v0.7.2 server/internal/daemon/prompt.go (buildChatPrompt,
 // sessionContinuityNoticeFor) and execenv/{channel_type,runtime_config_sections}.go chat
 // sections for web chat, with the explicit skill selection of slash links (ADR 0017).
 
-// chatTask reports a web chat claim; upstream discriminates chat before issue tasks.
-// Channel-backed chats keep the legacy prompt.
-func chatTask(t multica.Task) bool { return t.ChatSessionID != "" && t.ChatChannelType == "" }
+// chatTask follows upstream: channel and web chat use the same retained conversation.
+func chatTask(t multica.Task) bool { return t.ChatSessionID != "" }
 
 // validChat bounds chat claims; shapes the server would not send reject the claim.
 func validChat(t multica.Task) bool {
-	if !multica.ValidID(t.ChatSessionID) || len(t.ChatMessageAttachments) > 64 {
+	if !multica.ValidID(t.ChatSessionID) || len(t.ChatMessageAttachments) > 64 || len(t.ChatChannelType) > 64 || strings.ContainsAny(t.ChatChannelType, "\x00\r\n") {
 		return false
 	}
 	for _, a := range t.ChatMessageAttachments {
@@ -33,7 +32,7 @@ func audience(t multica.Task) string {
 	switch {
 	case t.ChatType == "group":
 		return "Audience: group room; not private; unseen members may read replies.\n\n"
-	case t.ChatType == "p2p" || t.ChatType == "":
+	case t.ChatType == "p2p" || t.ChatType == "" && t.ChatChannelType == "":
 		return "Audience: direct room.\n\n"
 	}
 	return "Audience: unknown.\n\n"
@@ -48,6 +47,7 @@ func chatPrompt(t multica.Task) string {
 		return b.String()
 	}
 	b.WriteString(audience(t))
+	b.WriteString(channelContext(t))
 	if selected := selectedSkills(t); len(selected) > 0 {
 		b.WriteString("Explicitly selected skills:\n")
 		for _, name := range selected {
@@ -65,10 +65,20 @@ func chatPrompt(t multica.Task) string {
 				fmt.Fprintf(&b, "- id=%s filename=%q\n", a.ID, a.Filename)
 			}
 		}
-		b.WriteString("Use `multica attachment download <id>` to fetch each file locally before referring to it.\n")
-		b.WriteString("When creating an issue that should preserve one of these attachments, pass `--attachment-id <id>` to `multica issue create` in addition to keeping the attachment markdown inline.\n")
+		if t.ChatChannelType == "" {
+			b.WriteString("Use `multica attachment download <id>` to fetch each file locally before referring to it.\n")
+			b.WriteString("When creating an issue that should preserve one of these attachments, pass `--attachment-id <id>` to `multica issue create` in addition to keeping the attachment markdown inline.\n")
+		} else {
+			b.WriteString("Attachment contents cannot be downloaded by this sandbox. Work from the text provided; ask for essential attachment text when needed.\n")
+		}
 	}
-	b.WriteString("\nTo include a file or image you produced in your reply, run `multica attachment upload <local-path>`. The file binds to your reply automatically and appears as an attachment card below it even if you paste nothing. The command also returns a `markdown` snippet you may paste on its own line to place the item where you want it (files render as a card, images inline).\n")
+	switch {
+	case t.ChatChannelType == "":
+		b.WriteString("\nTo include a file or image you produced in your reply, run `multica attachment upload <local-path>`. The file binds to your reply automatically and appears as an attachment card below it even if you paste nothing. The command also returns a `markdown` snippet you may paste on its own line to place the item where you want it (files render as a card, images inline).\n")
+	default:
+		fmt.Fprintf(&b, "\nThis sandbox delivers replies to %s as text only. File upload/download and attachment delivery are unavailable in this runtime, even if the channel itself supports files. If you produce a file, describe it in words — never write its local path as a link or claim it was delivered.\n", channelDisplayName(t.ChatChannelType))
+	}
+
 	return b.String()
 }
 
@@ -86,7 +96,7 @@ func chatNotice() string {
 func chatWorkflow(b *strings.Builder) {
 	b.WriteString("**You are in chat mode.**\n\n")
 	b.WriteString("- Respond conversationally and helpfully to the user's message\n")
-	b.WriteString("- You have full access to the `multica` CLI to look up issues, workspace info, members, agents, etc.\n")
+	b.WriteString("- Use the task-scoped `multica` CLI to look up issues, workspace info, members and agents; administration remains outside this runtime.\n")
 	b.WriteString("- If asked about issues, use `multica issue list --output json` or `multica issue get <id> --output json`\n")
 	b.WriteString("- If asked about the workspace, use `multica workspace get --output json`\n")
 	b.WriteString("- If asked to perform actions (create issues, update status, etc.), use the appropriate CLI commands\n")

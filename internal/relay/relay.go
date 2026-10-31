@@ -50,7 +50,9 @@ type responder interface {
 type Policy struct {
 	// Allow admits cleaned request paths.
 	Allow func(string) bool
-	Limit int64
+	// AllowRequest optionally narrows the admitted path by method or other request policy.
+	AllowRequest func(*http.Request) bool
+	Limit        int64
 	// Reserved lists lower-case header prefixes owned by the relay: caller values
 	// are removed before forwarding and upstream values before responding.
 	Reserved []string
@@ -177,7 +179,7 @@ func New(auth Authorizer, p Policy) (*Relay, error) {
 func (r *Relay) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	start := time.Now()
 	absolute := req.URL.Scheme != "" || req.URL.Host != ""
-	if absolute != r.policy.Proxy || (absolute && (req.URL.Scheme != "http" || req.URL.User != nil)) || req.Method == http.MethodConnect || req.Header.Get("Upgrade") != "" || !cleanPath(req.URL, r.policy.EncodedSlash) || !r.policy.Allow(req.URL.Path) {
+	if absolute != r.policy.Proxy || (absolute && (req.URL.Scheme != "http" || req.URL.User != nil)) || req.Method == http.MethodConnect || req.Header.Get("Upgrade") != "" || !cleanPath(req.URL, r.policy.EncodedSlash) || !r.policy.Allow(req.URL.Path) || (r.policy.AllowRequest != nil && !r.policy.AllowRequest(req)) {
 		r.refuse(w, req, http.StatusForbidden, ErrPolicy, start)
 		return
 	}

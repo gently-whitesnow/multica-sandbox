@@ -73,9 +73,9 @@ func TestChatBriefOffersClaimRepositories(t *testing.T) {
 	if err != nil || !strings.Contains(string(brief), "## Repositories\n\nAvailable in this workspace — `multica repo checkout <url>") || !strings.Contains(string(brief), "- If the task requires code changes, use `multica repo checkout <url>` to get the code first.") {
 		t.Fatalf("chat repositories: %v %s", err, brief)
 	}
-	// Channel-backed chats are not supported yet and keep the legacy prompt.
+	// Channel chats use the native prompt and the same retained workdir contract.
 	task.ChatChannelType = "slack"
-	if prompt, brief, _ := Prompt(task, true, true, Fresh); brief != nil || strings.Contains(string(prompt), "chat assistant") {
+	if prompt, brief, _ := Prompt(task, true, true, Fresh); brief == nil || !strings.Contains(string(prompt), "operating inside a Slack conversation") {
 		t.Fatalf("channel chat prompt: %s", prompt)
 	}
 	// Without the relay the agent has no CLI: chat keeps the bounded legacy prompt.
@@ -122,6 +122,7 @@ func TestChatResumesOnlyItsRetainedWorkdir(t *testing.T) {
 			a := sessionAdapter(workload)
 			task := relayTask(t)
 			task.ChatSessionID, task.ChatMessage, task.PriorSessionID, task.PriorWorkDir = chatID, "Continue", "ses_prior", c.prior
+			task.ChatChannelType, task.ChatType = "telegram", "p2p"
 			run, err := a.Start(context.Background(), task)
 			if err != nil {
 				t.Fatal(err)
@@ -131,7 +132,7 @@ func TestChatResumesOnlyItsRetainedWorkdir(t *testing.T) {
 				t.Fatalf("requested workdir: %+v", workload.workdir)
 			}
 			prompt := string(workload.files[sentPrompt])
-			if workload.loaded() != c.resume || strings.Contains(prompt, "Multica stored it") == c.resume || !strings.Contains(prompt, "User message:\nContinue") {
+			if workload.loaded() != c.resume || strings.Contains(prompt, "context could NOT be restored") == c.resume || !strings.Contains(prompt, "User message:\nContinue") {
 				t.Fatalf("resume %t: env %v prompt %q", c.resume, env, prompt)
 			}
 			if err := run.Remove(context.Background()); err != nil {

@@ -232,7 +232,7 @@ func newOpenCodeAdapter(ctx context.Context, c Config, stateDir string, api *mul
 			adapter.Checkout = &repo.Checkout{Auth: grants, Hosts: hosts, Settings: api, Git: adapter.GitRelay}
 			routes = map[string]http.Handler{"/repo/checkout": adapter.Checkout}
 		}
-		if err = c.serveRelay(ctx, "Multica", grants, *c.OpenCode.MulticaRelay, relay.Policy{Allow: multica.RelayPath}, routes, nil); err != nil {
+		if err = c.serveRelay(ctx, "Multica", grants, *c.OpenCode.MulticaRelay, relay.Policy{Allow: multica.RelayPath, AllowRequest: multica.RelayRequest}, routes, nil); err != nil {
 			return nil, nil, err
 		}
 		adapter.Relay = grants

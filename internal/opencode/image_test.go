@@ -13,7 +13,7 @@ import (
 	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
 )
 
-const pinnedCLI = "cli-version multica dev (commit: d45aba1cd7582bef9210b921bbb7dc198b48e1ee, built: unknown)\n"
+const pinnedCLI = "cli-version multica dev (commit: f05a525ac8e82f5e9169ad078e44f166fad6d5c8, built: unknown)\n"
 const controllerCLI = "cli /opt/multica-sandbox/multica/bin/multica\n" + pinnedCLI + "tar /bin/tar\n"
 
 func TestCheckImage(t *testing.T) {
@@ -46,7 +46,7 @@ func TestCheckImage(t *testing.T) {
 		"env":         {"env OPENCODE_CONFIG_CONTENT\nversion 1.18.35\n", `image ENV sets reserved "OPENCODE_CONFIG_CONTENT"`},
 		"cli":         {"cli \ncli-version \nversion 1.18.35\n", `multica resolves to "", not the controller artifact`},
 		"shadowed":    {"cli /usr/local/bin/multica\n" + pinnedCLI + "version 1.18.35\n", `"/usr/local/bin/multica", not the controller artifact`},
-		"revision":    {"cli /opt/multica-sandbox/multica/bin/multica\ncli-version multica dev (commit: unknown, built: unknown)\nversion 1.18.35\n", "is not built from Multica d45aba1cd7582bef9210b921bbb7dc198b48e1ee"},
+		"revision":    {"cli /opt/multica-sandbox/multica/bin/multica\ncli-version multica dev (commit: unknown, built: unknown)\nversion 1.18.35\n", "is not built from Multica f05a525ac8e82f5e9169ad078e44f166fad6d5c8"},
 		"control":     {"version \x1b[31m1.18.35\n" + controllerCLI, `"\x1b[31m1.18.35" is not verified`},
 		"bounded":     {strings.Repeat("env OPENCODE_X\n", 100) + "version 1.18.35\n" + controllerCLI, "; ..."},
 	} {

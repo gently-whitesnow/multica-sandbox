@@ -12,6 +12,7 @@ import (
 	"github.com/gently-whitesnow/multica-sandbox/internal/controller"
 	"github.com/gently-whitesnow/multica-sandbox/internal/metrics"
 	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
+	"github.com/gently-whitesnow/multica-sandbox/internal/pool"
 )
 
 type fleetAPI interface {
@@ -47,10 +48,11 @@ type fleet struct {
 	done           chan completion
 	// admit, when set, defers claims while the attempt pool is under memory pressure;
 	// paused records the state so changes are logged once, refused the last refusal.
-	admit   func() (bool, string)
-	paused  bool
-	refused time.Time
-	clock   func() time.Time
+	admit         func() (bool, string)
+	paused        bool
+	refused       time.Time
+	clock         func() time.Time
+	autoAdmission *pool.AutoAdmission
 	// wake carries daemon WebSocket hints and connection changes from listen; runtimes
 	// hands it the ready set, published the last set handed over.
 	wake      chan wakeEvent
@@ -90,6 +92,14 @@ func serveFleet(ctx context.Context, c Config, dir string, api fleetAPI, p *cont
 	}
 	f := newFleetState(api, c.Daemon, dir, c.logger(), known, c.Concurrency, c.WorkspaceConcurrency)
 	f.admit, f.metrics = admit, c.metrics
+	if c.OpenCode != nil && c.OpenCode.Pool != nil && c.OpenCode.Pool.AutoAdmission {
+		pc := c.OpenCode.Pool
+		workingSet := pc.MaxWorkingSet
+		if workingSet == 0 {
+			workingSet = pool.DefaultMaxWorkingSet
+		}
+		f.autoAdmission = &pool.AutoAdmission{Pool: &pool.Pool{Dir: pc.CgroupDir, MaxPressure: pool.DefaultMaxPressure, MaxWorkingSet: workingSet}, DiskPath: pc.DiskPath}
+	}
 	return f.serve(ctx, c.Concurrency, p.Execute)
 }
 
@@ -165,6 +175,9 @@ func (f *fleet) serve(ctx context.Context, capacity int, execute func(context.Co
 // claim fills free capacity one task per workspace per round, so a busy workspace cannot
 // starve its peers; unused capacity is never pre-claimed and Multica keeps the queue.
 func (f *fleet) claim(ctx context.Context, capacity int, execute func(context.Context, multica.Task) error) error {
+	if f.autoAdmission != nil {
+		f.autoAdmission.Observe(len(f.active))
+	}
 	claimed := false
 	for len(f.active) < capacity && f.admitted() {
 		scopes := map[string]string{}
@@ -198,6 +211,9 @@ func (f *fleet) claim(ctx context.Context, capacity int, execute func(context.Co
 		f.perRuntime[task.RuntimeID]++
 		f.served[task.RuntimeID], claimed = true, true
 		f.metrics.Active(1)
+		if f.autoAdmission != nil {
+			f.autoAdmission.Started(f.clock())
+		}
 		go func() { f.done <- completion{key, task.RuntimeID, execute(runCtx, task)} }()
 	}
 	return nil
@@ -210,6 +226,9 @@ func (f *fleet) admitted() bool {
 	}
 	ok, status := f.admit()
 	now := f.clock()
+	if ok && f.autoAdmission != nil {
+		ok, status = f.autoAdmission.Admit(len(f.active), now)
+	}
 	if !ok {
 		f.refused = now
 	}
