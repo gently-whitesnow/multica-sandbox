@@ -113,6 +113,7 @@ func multicaRelayService(t *testing.T, api *multica.Client, agentImage string, n
 	if full {
 		title = "Repository fixture issue"
 		configureRepositories(t, dir, project, &c)
+		c.Command[2] = "export HTTPS_PROXY=http://git-relay:8093 https_proxy=http://git-relay:8093; " + c.Command[2]
 	}
 	var w *workspaceInference
 	if withInference {

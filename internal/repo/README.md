@@ -62,6 +62,8 @@ end at cleanup and on restart.
 `gh` uses host credentials:
 - Attempts resolve each `api` name (`api.github.com` for `github.com`, otherwise the
   host, `/api/` only) to loopback, where the helper forwards port 443 to the relay.
+- `NO_PROXY`/`no_proxy` preserve image bypasses and add API names at port 443,
+  keeping Git's HTTP aliases on their relay even when the hostname is shared.
 - The relay terminates TLS with certificates from a per-process CA. The CA is
   name-constrained to those names and trusted through `SSL_CERT_DIR`
   (`/workspace/certs:/etc/ssl/certs`, so clients that read only that variable keep the system roots). It checks that the Host header matches the TLS name.
@@ -97,8 +99,7 @@ operations; merges and other API actions are bounded only by the credential's ro
 protected branches (#62).
 `GH_HOST` is unset when a workspace binds several API hosts; `gh` then resolves only
 `github.com` remotes, so pass `--repo <host>/<owner>/<repo>` or `GH_HOST` for
-Enterprise Server. github.com and Enterprise Server behavior beyond the fixture is
-unverified.
+Enterprise Server; behavior beyond the fixture is unverified.
 
 `/repo/checkout` authorizes requests in this order, with upstream's messages:
 1. the attempt's Multica relay credential;
@@ -134,8 +135,7 @@ The controller publishes that setting to live hooks like the native daemon:
 - On a change it reconciles checkouts up to two levels below the workdir, as upstream's
   sweep: it removes its hook when off and installs it when on, leaving foreign hooks
   alone. Retained checkouts converge at the next attempt's start.
-- As natively, the agent can edit the hook and the file; the trailer is attribution, not
-  a control.
+- As natively, the agent can edit the hook and file; the trailer is attribution, not a control.
 
 Differences from upstream:
 - checkout outside the claim admits workspace repositories after a refresh, from their
