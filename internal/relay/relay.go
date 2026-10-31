@@ -164,6 +164,7 @@ func New(auth Authorizer, p Policy) (*Relay, error) {
 				body := `{"error":{"message":"upstream refused the request","type":"upstream_error","code":"` + strconv.Itoa(resp.StatusCode) + `"}}`
 				resp.Body = io.NopCloser(strings.NewReader(body))
 				resp.ContentLength = int64(len(body))
+				resp.Trailer = nil
 				resp.Header = http.Header{"Content-Type": {"application/json"}, "Cache-Control": {"no-store"}, "Content-Length": {strconv.Itoa(len(body))}}
 			}
 			return nil

@@ -36,7 +36,9 @@ func newPathHTTPFixture(t *testing.T) *pathHTTPFixture {
 		if status := int(f.status.Load()); status != 200 {
 			w.Header().Set("Location", "https://redirect.example"+r.URL.Path)
 			w.Header().Set("X-Debug-Url", r.URL.String())
+			w.Header().Set("Trailer", "X-Request-Url")
 			http.Error(w, r.URL.String(), status)
+			w.Header().Set("X-Request-Url", r.URL.String())
 			return
 		}
 		_, _ = io.WriteString(w, `{"ok":true,"result":{"message_id":1}}`)
@@ -151,7 +153,7 @@ func TestHTTPPathCredentialWithholdsErrorsRedirectsAndRecordedPaths(t *testing.T
 		response := mcpRequest(t, "POST", f.front+"/http/messenger/sendMessage", f.opaque)
 		body, _ := io.ReadAll(response.Body)
 		response.Body.Close()
-		if response.StatusCode < 400 || strings.Contains(string(body)+fmt.Sprint(response.Header)+<-f.records, "private-path") || response.Header.Get("Location") != "" {
+		if response.StatusCode < 400 || strings.Contains(string(body)+fmt.Sprint(response.Header, response.Trailer)+<-f.records, "private-path") || response.Header.Get("Location") != "" || len(response.Trailer) != 0 {
 			t.Fatal("path credential leaked through errors, redirect or recorded URL")
 		}
 	}
