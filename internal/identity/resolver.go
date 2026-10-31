@@ -24,7 +24,7 @@ func (s *staticResolver) Resolve(ctx context.Context, r Ref) (Credentials, error
 	if err != nil {
 		return Credentials{}, ErrDenied
 	}
-	return Credentials{b.ClientID, secret, copyTokenRequest(b.Token)}, nil
+	return Credentials{ClientID: b.ClientID, secret: secret, request: copyTokenRequest(b.Token), principal: b.Principal}, nil
 }
 
 type remoteResolver struct {
@@ -58,5 +58,5 @@ func (s *remoteResolver) Resolve(ctx context.Context, r Ref) (Credentials, error
 	if err != nil || response.StatusCode != 200 || strictJSON(body, &out) != nil || out.Version != 1 || out.Agent != r || !text(out.ClientSecret, 8192) {
 		return Credentials{}, ErrDenied
 	}
-	return Credentials{out.ClientID, out.ClientSecret, copyTokenRequest(out.Token)}, nil
+	return Credentials{ClientID: out.ClientID, secret: out.ClientSecret, request: copyTokenRequest(out.Token), principal: out.Principal}, nil
 }

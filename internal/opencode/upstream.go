@@ -13,7 +13,7 @@ import (
 	"github.com/gently-whitesnow/multica-sandbox/internal/repo"
 )
 
-// Text below mirrors Multica v0.5.2 (multica.UpstreamRevision)
+// Text below mirrors Multica v0.7.2 (multica.UpstreamRevision)
 // server/internal/daemon/prompt.go (buildPromptBody, buildCommentPrompt) and
 // execenv/{runtime_config_sections,reply_instructions,issue_state_instructions}.go,
 // reduced to the issue workflow this adapter supports. Re-check on upgrades.
@@ -30,6 +30,7 @@ func (r *running) environment() map[string]string {
 			env[name] = value
 		}
 	}
+	r.httpEnvironment(env)
 	if r.relayToken == "" {
 		return env
 	}
@@ -60,7 +61,7 @@ func (r *running) environment() map[string]string {
 // reservedEnv are names and prefixes the controller or the attempt image owns, including
 // the connection and identity credentials only the controller consumes (ADR 0022).
 var reservedEnv = []string{"HOME", "PATH", "USER", "SHELL", "TERM", "TMPDIR", "TMP", "TEMP", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY",
-	"MULTICA_", "OPENCODE_", "XDG_", "GIT_", "GH_", "GITLAB_", "SSL_CERT_", "LD_",
+	"MULTICA_", "OPENCODE_", "SANDBOX_HTTP_", "XDG_", "GIT_", "GH_", "GITLAB_", "SSL_CERT_", "LD_",
 	inference.EnvBaseURL, inference.EnvAPIKey, identity.EnvClientID, identity.EnvClientSecret}
 
 // ValidEnvAllow checks a custom_env allowlist: at most 32 distinct names the controller
@@ -100,17 +101,35 @@ const sessionContinuityNotice = "## Session Continuity Notice\n\n" +
 // upstreamPrompt renders upstream buildCommentPrompt; resumed is upstream's single gate
 // for the warm issue-state and comment hints.
 func upstreamPrompt(t multica.Task, resumed bool) string {
+	if t.WakeupID != "" {
+		return wakeupPrompt(t)
+	}
 	var b strings.Builder
 	b.WriteString("You are running as a local coding agent for a Multica workspace.\n\n")
 	fmt.Fprintf(&b, "Your assigned issue ID is: %s\n\n", t.IssueID)
 	if t.TriggerCommentID == "" {
+		if t.HandoffNote != "" {
+			b.WriteString("You were handed this issue with a handoff note. Treat it as the assigner's scoping instruction for this run; follow it before doing anything broader, and do not reply to it as if it were a comment:\n\n")
+			for _, line := range strings.Split(strings.TrimSpace(t.HandoffNote), "\n") {
+				fmt.Fprintf(&b, "> %s\n", line)
+			}
+			b.WriteString("\n")
+		}
 		fmt.Fprintf(&b, "Start by running `multica issue get %s --output json` to understand your task, then complete it.\n", t.IssueID)
 		fmt.Fprintf(&b, "For comment history, workflow step 2 applies. Scan the threads first with `multica issue comment list %s --roots-only --summary --compact --output json`, then expand only what matters with `--thread <thread-id> --tail 30`. For `--since` incremental polling, pagination, and folding, see `multica issue comment list --help`.\n", t.IssueID)
 		return b.String()
 	}
 	if t.TriggerCommentContent != "" {
-		fmt.Fprintf(&b, "[NEW COMMENT] %s just left a new comment. Focus on THIS comment — do not confuse it with previous ones:\n\n", author(t.TriggerAuthorType, t.TriggerAuthorName, ""))
+		edited := resumed && t.TriggerCommentEditedAt != ""
+		if edited {
+			fmt.Fprintf(&b, "[EDITED COMMENT] %s edited a comment after your previous run in this session started. Focus on THIS comment — do not confuse it with previous ones:\n\n", author(t.TriggerAuthorType, t.TriggerAuthorName, ""))
+		} else {
+			fmt.Fprintf(&b, "[NEW COMMENT] %s just left a new comment. Focus on THIS comment — do not confuse it with previous ones:\n\n", author(t.TriggerAuthorType, t.TriggerAuthorName, ""))
+		}
 		fmt.Fprintf(&b, "> %s\n\n", t.TriggerCommentContent)
+		if edited {
+			b.WriteString(editedTriggerNote(t))
+		}
 		if len(t.CoalescedComments) > 0 {
 			fmt.Fprintf(&b, "This run also covers %d earlier comment(s) posted before it started — you must read and address them too, not just the one above. They may be in different threads, so each is reproduced here with its own thread:\n\n", len(t.CoalescedComments))
 			for _, c := range t.CoalescedComments {
@@ -123,7 +142,18 @@ func upstreamPrompt(t multica.Task, resumed bool) string {
 				if c.ThreadID != "" {
 					fmt.Fprintf(&b, " [thread %s]", c.ThreadID)
 				}
+				if resumed && c.EditedAt != "" {
+					fmt.Fprintf(&b, " [EDITED at %s, revision %d — current version]", c.EditedAt, c.Revision)
+				}
 				fmt.Fprintf(&b, ":\n  > %s\n", strings.ReplaceAll(strings.TrimSpace(c.Content), "\n", "\n  > "))
+			}
+			if resumed {
+				for _, c := range t.CoalescedComments {
+					if c.EditedAt != "" {
+						b.WriteString("\n" + editedCommentGuidance + "\n")
+						break
+					}
+				}
 			}
 			fmt.Fprintf(&b, "\nIf you need the surrounding discussion for any of them, fetch its thread with `multica issue comment list %s --thread <thread-id> --tail 30 --compact --output json` using the thread id shown above.\n\n", t.IssueID)
 		}
@@ -284,8 +314,8 @@ func upstreamBrief(t multica.Task, repositories string, checkout bool) string {
 		b.WriteString("- `multica repo checkout <url> [--ref <branch-or-sha>] [--fresh]` — repository checkout on a dedicated branch. Re-running it keeps an existing checkout that has uncommitted or unpushed work, or is already on this task's branch, and only fetches. `--fresh` discards uncommitted and untracked files and starts a new branch; commits stay on the old branch, but push any you still need first.\n")
 	}
 	b.WriteString("\n")
-	chat := chatTask(t)
-	if !chat {
+	chat, autopilot := chatTask(t), autopilotTask(t)
+	if !chat && !autopilot {
 		b.WriteString("## Comment Formatting\n\n")
 		b.WriteString("For issue comments, **always write the comment body to a UTF-8 file with your file-write tool first, then post it with `--content-file <path>`**. Never use inline `--content` for agent-authored comments; never use `--content-stdin` HEREDOCs alongside other flags. Write the file inside your working directory, never `/tmp` or shared paths. Keep the same `--parent` value from the trigger comment when replying; delete the temp file (`rm ./reply.md`) only after the post succeeded; do not rely on `\\n` escapes.\n\n")
 		b.WriteString("For final-result comments, use `--output table` to confirm success without echoing the body. Use `--output json` instead when you need the returned comment ID. Gate the cleanup on the post succeeding (`&&`): a cleanup command run unconditionally succeeds after a failed post and makes the whole shell call exit 0.\n\n")
@@ -295,6 +325,8 @@ func upstreamBrief(t multica.Task, repositories string, checkout bool) string {
 	b.WriteString("### Workflow\n\n")
 	if chat {
 		chatWorkflow(&b)
+	} else if autopilot {
+		autopilotWorkflow(&b)
 	} else {
 		issueWorkflow(&b)
 		writeSubIssueCreation(&b, t.Agent.Skills)
@@ -303,7 +335,9 @@ func upstreamBrief(t multica.Task, repositories string, checkout bool) string {
 	b.WriteString("## Important: Always Use the `multica` CLI\n\n")
 	b.WriteString("Access Multica platform resources only through the `multica` CLI — never `curl` / `wget`. For anything the CLI doesn't cover, post a comment mentioning the workspace owner rather than working around it.\n\n")
 	if chat {
-		chatOutput(&b)
+		chatOutputFor(&b, t)
+	} else if autopilot {
+		autopilotOutput(&b)
 	} else {
 		issueOutput(&b)
 	}

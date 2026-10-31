@@ -25,7 +25,9 @@ var MCPReservedHeaders = []string{"www-authenticate"}
 var mcpAlias = regexp.MustCompile(`^/[a-zA-Z][a-zA-Z0-9_-]{0,63}$`)
 
 // MCPRelayPath admits one connection alias per request path: /<name>.
-func MCPRelayPath(path string) bool { return mcpAlias.MatchString(path) }
+func MCPRelayPath(path string) bool {
+	return mcpAlias.MatchString(path) || strings.HasPrefix(path, "/http/")
+}
 
 // MCPRelay forwards an attempt's MCP requests to the exact approved URL of the named
 // connection with its current access token (ADR 0023); tokens never enter the attempt.
@@ -71,13 +73,19 @@ func (m *MCPRelay) Authorize(req *http.Request) (relay.Lease, bool) {
 		return relay.Lease{}, false
 	}
 	origin, path, bearer, ok := r.mcpUpstream(strings.TrimPrefix(req.URL.Path, "/"))
+	httpService := strings.HasPrefix(req.URL.Path, "/http/")
+	if httpService {
+		origin, path, bearer, ok = r.httpUpstream(req.Method, req.URL.Path)
+		name := strings.SplitN(strings.TrimPrefix(req.URL.Path, "/http/"), "/", 2)[0]
+		lease.Header = r.httpServices[name].Header()
+	}
 	if !ok {
 		lease.Release()
 		return relay.Lease{}, false
 	}
 	lease.Origin, lease.Path, lease.Credential = origin, path, bearer
 	// OpenCode adds codemode=false; no caller query may change the approved URL.
-	lease.DropQuery = true
+	lease.DropQuery = !httpService
 	return lease, true
 }
 

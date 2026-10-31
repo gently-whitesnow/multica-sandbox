@@ -97,7 +97,7 @@ const (
 // Prompt returns the per-turn prompt and, for upstream CLI issue and chat tasks, the AGENTS.md brief.
 // With checkout, the brief offers `multica repo checkout` for the claim repositories.
 func Prompt(t multica.Task, upstream, checkout bool, c Continuity) ([]byte, []byte, error) {
-	if t.Agent == nil || !validComments(t) || chatTask(t) && !validChat(t) || !validProject(t) {
+	if t.Agent == nil || !validComments(t) || chatTask(t) && !validChat(t) || autopilotTask(t) && !validAutopilot(t) || !validProject(t) {
 		return nil, nil, ErrDenied
 	}
 	sources, err := repositories(t)
@@ -106,9 +106,11 @@ func Prompt(t multica.Task, upstream, checkout bool, c Continuity) ([]byte, []by
 	}
 	var prompt, brief string
 	notice := sessionContinuityNotice
-	if upstream && (chatTask(t) || upstreamTask(t)) {
+	if upstream && (chatTask(t) || upstreamTask(t) || autopilotTask(t)) {
 		if chatTask(t) {
-			prompt, notice = chatPrompt(t), chatNotice()
+			prompt, notice = chatPrompt(t), chatNoticeFor(t)
+		} else if autopilotTask(t) {
+			prompt = autopilotPrompt(t)
 		} else {
 			prompt = upstreamPrompt(t, c == Resumed && !t.PriorSessionResumeUnavailable)
 		}
@@ -134,11 +136,18 @@ func Prompt(t multica.Task, upstream, checkout bool, c Continuity) ([]byte, []by
 		}
 		prompt = strings.Join(sections, "\n\n")
 	}
+	if upstream {
+		prompt += turnContext(t)
+	}
 	if c == Lost || t.PriorSessionResumeUnavailable {
 		// Upstream appends the notice to the per-turn message, never the brief.
 		prompt = strings.TrimRight(prompt, "\n") + "\n\n" + strings.TrimRight(notice, "\n")
 	}
-	if _, err := projectFile(t); err != nil || len(prompt) > 65536 || len(brief) > 65536 {
+	limit := 65536
+	if autopilotTask(t) {
+		limit = 512 << 10
+	}
+	if _, err := projectFile(t); err != nil || len(prompt) > limit || len(brief) > 65536 {
 		return nil, nil, ErrDenied
 	}
 	if brief == "" {
