@@ -29,8 +29,8 @@ type Lease struct {
 	// request path, and RawPath, when set, is its escaped form (encoded slashes).
 	Authorization, Path, RawPath string
 	Header                       http.Header
-	// DropQuery discards caller query parameters for an exact upstream endpoint.
-	DropQuery bool
+	// DropQuery discards caller parameters; WithholdErrors protects secret-bearing paths.
+	DropQuery, WithholdErrors bool
 	// Context ends when the grant is revoked, cancelling in-flight requests.
 	Context context.Context
 	Release func()
@@ -87,6 +87,7 @@ var (
 	ErrPolicy     = errors.New("request not permitted")
 	ErrCredential = errors.New("invalid relay credential")
 	ErrRedirect   = errors.New("upstream redirect refused")
+	ErrUpstream   = errors.New("upstream unavailable")
 )
 
 // dropped never leave the relay: caller credentials, sessions and forwarding hints.
@@ -158,7 +159,7 @@ func New(auth Authorizer, p Policy) (*Relay, error) {
 					resp.Header.Del(name)
 				}
 			}
-			if p.Withhold && resp.StatusCode >= 400 {
+			if (p.Withhold || x.lease.WithholdErrors) && resp.StatusCode >= 400 {
 				_ = resp.Body.Close()
 				body := `{"error":{"message":"upstream refused the request","type":"upstream_error","code":"` + strconv.Itoa(resp.StatusCode) + `"}}`
 				resp.Body = io.NopCloser(strings.NewReader(body))
@@ -169,6 +170,9 @@ func New(auth Authorizer, p Policy) (*Relay, error) {
 		},
 		ErrorHandler: func(w http.ResponseWriter, req *http.Request, err error) {
 			x := req.Context().Value(exchangeKey{}).(exchange)
+			if x.lease.WithholdErrors {
+				err = ErrUpstream
+			}
 			r.record(x.in, 0, err, x.start)
 			deny(w, http.StatusBadGateway, "upstream unavailable")
 		},

@@ -2,7 +2,6 @@ package identity
 
 import (
 	"context"
-	"maps"
 	"net/http"
 	"net/url"
 	"path"
@@ -23,9 +22,10 @@ type HTTPService struct {
 	Routes []HTTPRoute `json:"routes"`
 	// BearerFile explicitly selects a service credential instead of the agent JWT.
 	// It requires an agent allowlist and is never a JWT-verification fallback.
-	BearerFile string            `json:"bearer_file,omitempty"`
-	AgentIDs   []string          `json:"agent_ids,omitempty"`
-	Headers    map[string]string `json:"headers,omitempty"`
+	BearerFile     string              `json:"bearer_file,omitempty"`
+	PathCredential *HTTPPathCredential `json:"path_credential,omitempty"`
+	AgentIDs       []string            `json:"agent_ids,omitempty"`
+	Headers        map[string]string   `json:"headers,omitempty"`
 }
 
 // HTTPRoute selects one exact method and either a path or a slash-ended prefix.
@@ -48,6 +48,9 @@ func (s *Service) configureHTTP(services []HTTPService, allowHTTP bool) error {
 			return ErrDenied
 		}
 		if service.BearerFile != "" && (!filepath.IsAbs(service.BearerFile) || len(service.AgentIDs) == 0) {
+			return ErrDenied
+		}
+		if !service.validPathCredential() {
 			return ErrDenied
 		}
 		for _, id := range service.AgentIDs {
@@ -76,10 +79,7 @@ func (s *Service) configureHTTP(services []HTTPService, allowHTTP bool) error {
 				return ErrDenied
 			}
 		}
-		service.Routes = slices.Clone(service.Routes)
-		service.AgentIDs = slices.Clone(service.AgentIDs)
-		service.Headers = maps.Clone(service.Headers)
-		s.http[service.Name] = service
+		s.http[service.Name] = cloneHTTPService(service)
 	}
 	return nil
 }
@@ -88,10 +88,7 @@ func (s *Service) configureHTTP(services []HTTPService, allowHTTP bool) error {
 func (s *Service) HTTPServices() []HTTPService {
 	result := make([]HTTPService, 0, len(s.http))
 	for _, service := range s.http {
-		service.Routes = slices.Clone(service.Routes)
-		service.AgentIDs = slices.Clone(service.AgentIDs)
-		service.Headers = maps.Clone(service.Headers)
-		result = append(result, service)
+		result = append(result, cloneHTTPService(service))
 	}
 	slices.SortFunc(result, func(a, b HTTPService) int { return strings.Compare(a.Name, b.Name) })
 	return result
@@ -118,9 +115,13 @@ func (s *Service) AcquireForHTTP(ctx context.Context, r Ref, env Env, name strin
 	if !validRef(r, s.server) || ctx.Err() != nil || service.Name == "" || len(service.AgentIDs) > 0 && !slices.Contains(service.AgentIDs, r.AgentID) {
 		return AccessToken{}, ErrDenied
 	}
-	if service.BearerFile != "" {
-		bearer, err := readSecret(service.BearerFile)
-		if err != nil {
+	file := service.BearerFile
+	if service.PathCredential != nil {
+		file = service.PathCredential.File
+	}
+	if file != "" {
+		bearer, err := readSecret(file)
+		if err != nil || service.PathCredential != nil && !validPathSecret(bearer) {
 			return AccessToken{}, ErrDenied
 		}
 		return NewAccessToken(bearer, time.Now().Add(30*time.Second)), nil

@@ -79,5 +79,10 @@ func (r *running) httpUpstream(method, requestPath string) (*url.URL, string, st
 	if err != nil || time.Until(token.ExpiresAt) <= time.Second {
 		return nil, "", "", false
 	}
+	origin.Path = strings.TrimSuffix(origin.Path, "/")
+	if service.PathCredential != nil {
+		path, ok := service.CredentialPath(path, token.Bearer())
+		return origin, path, "", ok
+	}
 	return origin, path, token.Bearer(), true
 }

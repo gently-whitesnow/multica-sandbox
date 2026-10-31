@@ -78,6 +78,7 @@ func (m *MCPRelay) Authorize(req *http.Request) (relay.Lease, bool) {
 		origin, path, bearer, ok = r.httpUpstream(req.Method, req.URL.Path)
 		name := strings.SplitN(strings.TrimPrefix(req.URL.Path, "/http/"), "/", 2)[0]
 		lease.Header = r.httpServices[name].Header()
+		lease.WithholdErrors = r.httpServices[name].PathCredential != nil
 	}
 	if !ok {
 		lease.Release()
@@ -85,7 +86,7 @@ func (m *MCPRelay) Authorize(req *http.Request) (relay.Lease, bool) {
 	}
 	lease.Origin, lease.Path, lease.Credential = origin, path, bearer
 	// OpenCode adds codemode=false; no caller query may change the approved URL.
-	lease.DropQuery = !httpService
+	lease.DropQuery = !httpService || lease.WithholdErrors
 	return lease, true
 }
 

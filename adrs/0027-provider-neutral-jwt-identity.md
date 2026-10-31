@@ -60,6 +60,14 @@ service route or environment. Re-read it on renewal under a 30-second internal
 lease; absent/unreadable credentials deny. Trusted constant `X-*` headers may
 carry service metadata. No static service credential enters the attempt.
 
+Services whose API embeds its credential in the URL may instead declare
+`path_credential: {file, prefix}`. The controller inserts its file-backed secret
+after that prefix and before the exact approved route, sends no bearer and drops
+caller query parameters. This mode requires an explicit agent allowlist and exact
+routes, cannot combine with `bearer_file`, and rejects separators or traversal in
+the secret. Upstream error bodies/headers and transport errors are withheld;
+redirects stay refused. The credential never enters the attempt's URL or environment.
+
 ## Consequences
 
 Existing Keycloak configurations remain compatible. Generic OpenBao deployments
