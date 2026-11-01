@@ -58,7 +58,7 @@ Agent environment: ordinary native agent `custom_env` variables reach attempts a
 
 `internal/attempt` POSTs authenticated version-1 JSON to one configured endpoint.
 It disables redirects/proxy environment, re-reads the controller-only bearer file
-and requires HTTP 204. HTTPS is required outside explicit isolated fixtures. The
+whenever it changes and requires HTTP 204. HTTPS is required outside explicit isolated fixtures. The
 authority is external; this repository contains only a fixture implementation.
 Public MCP needs `mcp_public_proxy`, managed identity needs `identity_file`; without the optional `authority` MCP tokens stay unregistered until expiry (ADR 0009).
 

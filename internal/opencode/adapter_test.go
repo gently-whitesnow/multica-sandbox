@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"slices"
 	"strings"
@@ -21,6 +22,8 @@ type stubIssuer struct {
 	calls  int
 	denyAt int
 	env    identity.Env
+	// ttl is the issued lifetime, 11 s by default.
+	ttl time.Duration
 }
 
 func (s *stubIssuer) AcquireForMCP(_ context.Context, _ identity.Ref, env identity.Env, _ string) (identity.AccessToken, error) {
@@ -29,7 +32,12 @@ func (s *stubIssuer) AcquireForMCP(_ context.Context, _ identity.Ref, env identi
 	if s.calls == s.denyAt {
 		return identity.AccessToken{}, identity.ErrDenied
 	}
-	return identity.AccessToken{ExpiresAt: time.Now().Add(11 * time.Second)}, nil
+	ttl := s.ttl
+	if ttl == 0 {
+		ttl = 11 * time.Second
+	}
+	// Like a real issuer, every token is distinct.
+	return identity.NewAccessToken(fmt.Sprintf("jwt-%d", s.calls), time.Now().Add(ttl)), nil
 }
 
 type stubAuthority struct {
@@ -37,6 +45,18 @@ type stubAuthority struct {
 	actions    []string
 	deny       bool
 	denyRevoke bool
+}
+
+func (s *stubAuthority) renewals() int {
+	s.Lock()
+	defer s.Unlock()
+	n := 0
+	for _, action := range s.actions {
+		if action == "renew" {
+			n++
+		}
+	}
+	return n
 }
 
 func (s *stubAuthority) Apply(_ context.Context, g attempt.Grant) error {
@@ -231,6 +251,32 @@ func TestFedStatusReplacesThePoll(t *testing.T) {
 	defer cancel()
 	if err := run.Wait(wait); !errors.Is(err, ErrDenied) {
 		t.Fatalf("fed cancellation did not stop renewal: %v", err)
+	}
+}
+
+// The authority holds a lease until half of it remains or the token changes.
+func TestAuthorityRenewsOnlyNearLeaseEndOrOnChange(t *testing.T) {
+	authority := &stubAuthority{}
+	a := Adapter{Issuer: &stubIssuer{ttl: time.Hour}, Authority: authority, Status: stubStatus{}}
+	connections, err := Select(safeTask())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &running{adapter: &a, task: safeTask(), connections: connections, tokens: map[string]identity.AccessToken{}, leases: map[string]lease{}}
+	step := func(want int) {
+		t.Helper()
+		if err := r.refresh(context.Background()); err != nil || authority.renewals() != want {
+			t.Fatalf("renewals=%d want %d: %v", authority.renewals(), want, err)
+		}
+	}
+	step(1)
+	step(1)
+	r.leases["selected"] = lease{r.leases["selected"].hash, time.Now().Add(attemptLease/2 - time.Second)}
+	step(2)
+	r.tokens["selected"] = identity.NewAccessToken("rotated", time.Now().Add(time.Hour))
+	step(3)
+	if r.leases["selected"].hash != attempt.Fingerprint("rotated") {
+		t.Fatal("rotated token not registered")
 	}
 }
 

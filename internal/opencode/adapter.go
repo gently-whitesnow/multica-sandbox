@@ -85,10 +85,13 @@ type running struct {
 	// mu guards tokens, which the MCP relay reads while the renewal loop replaces them,
 	// and the task status: confirmed is when Multica last reported it running, ended
 	// a final answer, fed that the controller's poll replaced the adapter's own.
-	mu           sync.Mutex
-	confirmed    time.Time
-	ended, fed   bool
-	tokens       map[string]identity.AccessToken
+	mu         sync.Mutex
+	confirmed  time.Time
+	ended, fed bool
+	tokens     map[string]identity.AccessToken
+	// leases are the fingerprints the authority holds and their ends; only the
+	// renewal loop uses them.
+	leases       map[string]lease
 	httpServices map[string]identity.HTTPService
 	httpTokens   map[string]identity.AccessToken
 	cancel       context.CancelFunc
@@ -118,8 +121,15 @@ type running struct {
 }
 
 // attemptLease bounds an authority lease and how long renewal rides out transient
-// task status errors after the last confirmation.
+// task status errors after the last confirmation. A lease is renewed once half of
+// it remains, which leaves an authority request timeout of slack, or at once when
+// the token changes.
 const attemptLease = 15 * time.Second
+
+type lease struct {
+	hash string
+	end  time.Time
+}
 
 // SessionDB keeps OpenCode's session store in the retained workdir, apart from
 // XDG_DATA_HOME.
@@ -158,7 +168,7 @@ func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, 
 	if err != nil {
 		return nil, &execution.RejectedError{Err: err}
 	}
-	r := &running{adapter: a, task: task, connections: connections, anonymous: anonymous, public: public, tokens: map[string]identity.AccessToken{}, done: make(chan error, 1), exited: make(chan struct{}), skills: skills}
+	r := &running{adapter: a, task: task, connections: connections, anonymous: anonymous, public: public, tokens: map[string]identity.AccessToken{}, leases: map[string]lease{}, done: make(chan error, 1), exited: make(chan struct{}), skills: skills}
 	if err := r.configureHTTP(); err != nil {
 		return nil, &execution.RejectedError{Err: err}
 	}
@@ -357,14 +367,16 @@ func (r *running) refresh(ctx context.Context) error {
 			}
 		}
 		// An optional authority registers the JWT fingerprint before the relay uses it.
-		if r.adapter.Authority != nil {
+		hash := attempt.Fingerprint(token.Bearer())
+		if held := r.leases[name]; r.adapter.Authority != nil && (held.hash != hash || time.Until(held.end) <= attemptLease/2) {
 			grant := r.grant("renew")
 			grant.URL = connection.URL
-			grant.TokenHash = attempt.Fingerprint(token.Bearer())
+			grant.TokenHash = hash
 			grant.ExpiresAt = min(token.ExpiresAt.Unix(), time.Now().Add(attemptLease).Unix())
 			if err := r.adapter.Authority.Apply(ctx, grant); err != nil {
 				return err
 			}
+			r.leases[name] = lease{hash, time.Unix(grant.ExpiresAt, 0)}
 		}
 		r.mu.Lock()
 		r.tokens[name] = token
