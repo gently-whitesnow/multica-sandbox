@@ -108,7 +108,8 @@ func (b *Backend) Reconcile(ctx context.Context) error {
 		return err
 	}
 	for _, id := range strings.Fields(string(data)) {
-		if _, err = command(ctx, "rm", "-fv", id); err != nil {
+		// After a crash under memory pressure leftovers exit as slowly as attempts do.
+		if _, err = commandWithin(ctx, RemoveTimeout, "rm", "-fv", id); err != nil {
 			return err
 		}
 	}
