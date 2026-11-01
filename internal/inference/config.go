@@ -35,9 +35,10 @@ type Config struct {
 	GatewayCatalog *GatewayCatalog `json:"gateway_catalog,omitempty"`
 }
 
-// GatewayCatalog discovers models from LiteLLM's /v1/model/info: only the models the
-// workspace key may use, with their limits, reasoning support, prices and wire API.
+// GatewayCatalog discovers the workspace key's models and preparation metadata.
 type GatewayCatalog struct {
+	// Format selects litellm (default) or cliproxy catalog responses.
+	Format string `json:"format,omitempty"`
 	// TTL bounds how long a discovered catalog is reused (default 5m, 10s to 24h).
 	TTL string `json:"ttl,omitempty"`
 	// DefaultModel is used by agents without a selection when the gateway offers it.
@@ -50,8 +51,8 @@ type Binding struct {
 }
 type Model struct {
 	Label    string    `json:"label,omitempty"`
-	Context  int       `json:"context"`
-	Output   int       `json:"output"`
+	Context  int       `json:"context,omitempty"`
+	Output   int       `json:"output,omitempty"`
 	Thinking *Thinking `json:"thinking,omitempty"`
 	// API is the wire API: chat (default), responses or messages.
 	API string `json:"api,omitempty"`

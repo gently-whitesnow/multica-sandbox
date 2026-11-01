@@ -64,7 +64,7 @@ func TestGatewayCatalogMapsWorkspaceKeyModels(t *testing.T) {
 	if claude.API != APIMessages || claude.Context != 1000000 || claude.Output != 128000 || claude.Thinking == nil || claude.Thinking.SupportedLevels[1].Value != "max" || claude.Cost == nil || claude.Cost.Input != 3 || claude.Cost.CacheRead != 0.3 {
 		t.Fatalf("anthropic model = %+v", claude)
 	}
-	if gpt.API != APIResponses || gpt.Thinking == nil || gpt.Cost != nil || local.API != "" || local.Context != 128000 || local.Output != 16384 || local.Thinking != nil {
+	if gpt.API != APIResponses || gpt.Thinking == nil || gpt.Cost != nil || local.API != "" || local.Context != 0 || local.Output != 0 || local.Thinking != nil {
 		t.Fatalf("openai/other models = %+v %+v", gpt, local)
 	}
 	if ModelID("claude-demo", claude) != "inference-claude/claude-demo" || ModelID("gpt-demo", gpt) != "inference-codex/gpt-demo" || ModelID("local-demo", local) != "managed-inference/local-demo" {
@@ -101,6 +101,7 @@ func TestGatewayCatalogDenials(t *testing.T) {
 		"with static": func(c *Config) {
 			c.Catalogs = []CatalogBinding{{WorkspaceID: testScope().WorkspaceID, Catalog: testCatalog()}}
 		},
+		"bad format":  func(c *Config) { c.GatewayCatalog.Format = "unknown" },
 		"short ttl":   func(c *Config) { c.GatewayCatalog.TTL = "1s" },
 		"bad ttl":     func(c *Config) { c.GatewayCatalog.TTL = "soon" },
 		"bad default": func(c *Config) { c.GatewayCatalog.DefaultModel = "a\nb" },
@@ -173,5 +174,34 @@ func TestGatewayCatalogReasoningLevelsFollowLiteLLM(t *testing.T) {
 	}
 	if c.Models["gpt-flags"].Thinking.SupportedLevels[3].Label != "Extra high" {
 		t.Fatal("known level without its label")
+	}
+}
+
+func TestGatewayCatalogKeepsOnlySuppliedLimits(t *testing.T) {
+	for _, tc := range []struct {
+		name, info      string
+		context, output int
+		valid           bool
+	}{
+		{"absent", `{}`, 0, 0, true},
+		{"context only", `{"max_input_tokens":64000}`, 64000, 0, true},
+		{"output only", `{"max_output_tokens":4096}`, 0, 4096, true},
+		{"supplied", `{"max_input_tokens":64000,"max_output_tokens":4096}`, 64000, 4096, true},
+		{"negative", `{"max_input_tokens":-1}`, 0, 0, false},
+		{"inconsistent", `{"max_input_tokens":4096,"max_output_tokens":8192}`, 0, 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var body atomic.Value
+			var calls atomic.Int32
+			body.Store(`{"data":[{"model_name":"demo","litellm_params":{"model":"openai/demo"},"model_info":` + tc.info + `}]}`)
+			s, scope := gatewayFixture(t, &body, &calls)
+			got, err := s.Catalog(context.Background(), scope)
+			if (err == nil) != tc.valid {
+				t.Fatalf("accepted=%v, want %v", err == nil, tc.valid)
+			}
+			if tc.valid && (got.Models["demo"].Context != tc.context || got.Models["demo"].Output != tc.output) {
+				t.Fatalf("gateway limits changed: %+v", got.Models["demo"])
+			}
+		})
 	}
 }

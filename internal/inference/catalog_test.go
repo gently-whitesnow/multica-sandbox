@@ -96,3 +96,48 @@ func TestExternalCatalogContract(t *testing.T) {
 		})
 	}
 }
+
+func TestCatalogLimitsAreOptionalMetadata(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		model Model
+		valid bool
+	}{
+		{"absent", Model{}, true},
+		{"context only", Model{Context: 64000}, true},
+		{"output only", Model{Output: 4096}, true},
+		{"complete", Model{Context: 64000, Output: 4096}, true},
+		{"negative context", Model{Context: -1}, false},
+		{"negative output", Model{Output: -1}, false},
+		{"oversize context", Model{Context: 10000001}, false},
+		{"oversize output", Model{Output: 10000001}, false},
+		{"inconsistent", Model{Context: 4096, Output: 8192}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := testConfig(t)
+			c.Catalogs = []CatalogBinding{{WorkspaceID: testScope().WorkspaceID, Catalog: Catalog{Models: map[string]Model{"demo": tc.model}}}}
+			s, err := New(c, testScope().Server)
+			if (err == nil) != tc.valid {
+				t.Fatalf("accepted=%v, want %v", err == nil, tc.valid)
+			}
+			if !tc.valid {
+				return
+			}
+			got, err := s.Catalog(context.Background(), testScope())
+			if err != nil || got.Models["demo"] != tc.model {
+				t.Fatalf("metadata changed: %+v, %v", got.Models["demo"], err)
+			}
+			data, err := json.Marshal(got.Models["demo"])
+			var fields map[string]any
+			if err != nil || json.Unmarshal(data, &fields) != nil {
+				t.Fatal("invalid catalog JSON")
+			}
+			if _, present := fields["context"]; present != (tc.model.Context > 0) {
+				t.Fatalf("context presence: %s", data)
+			}
+			if _, present := fields["output"]; present != (tc.model.Output > 0) {
+				t.Fatalf("output presence: %s", data)
+			}
+		})
+	}
+}

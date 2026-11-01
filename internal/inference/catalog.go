@@ -48,7 +48,7 @@ func validCatalogSize(c Catalog, limit int) bool {
 		}
 	}
 	for name, m := range c.Models {
-		if !validModel(name) || m.Context < 1 || m.Context > 10000000 || m.Output < 1 || m.Output > m.Context || (m.API != "" && providers[m.API] == "") || !validCost(m.Cost) {
+		if !validModel(name) || m.Context < 0 || m.Context > 10000000 || m.Output < 0 || m.Output > 10000000 || m.Context > 0 && m.Output > m.Context || (m.API != "" && providers[m.API] == "") || !validCost(m.Cost) {
 			return false
 		}
 		if m.Thinking == nil {

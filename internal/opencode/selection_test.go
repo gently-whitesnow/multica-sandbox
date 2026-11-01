@@ -133,3 +133,46 @@ func TestWireAPISelectsNativeProvider(t *testing.T) {
 		t.Fatal("unmappable Messages reasoning option accepted")
 	}
 }
+
+func TestInferenceProjectionDoesNotInventModelLimits(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		metadata inference.Model
+		limits   string
+	}{
+		{"unknown", inference.Model{}, "null"},
+		{"context only", inference.Model{Context: 64000}, `{"context":64000}`},
+		{"output only", inference.Model{Output: 4096}, `{"output":4096}`},
+		{"supplied", inference.Model{Context: 64000, Output: 4096}, `{"context":64000,"output":4096}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			task := safeTask()
+			task.Agent.Model = "inference-codex/demo"
+			catalog := inference.Catalog{Models: map[string]inference.Model{}}
+			if tc.name != "unknown" {
+				catalog.Models["demo"] = tc.metadata
+			}
+			r := &running{adapter: &Adapter{Server: "https://controller.example.invalid", Inference: &catalogInference{catalog: catalog}, InferenceRelayURL: "http://inference-relay:8092"}, task: task, inferenceToken: "opaque"}
+			data, err := r.configureInference(context.Background(), []byte(`{}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var config struct {
+				Provider map[string]struct {
+					Models map[string]map[string]json.RawMessage `json:"models"`
+				} `json:"provider"`
+			}
+			if json.Unmarshal(data, &config) != nil {
+				t.Fatal("invalid projected JSON")
+			}
+			limit, exists := config.Provider["inference-codex"].Models["demo"]["limit"]
+			if tc.name == "unknown" {
+				if exists {
+					t.Fatalf("unknown model received limits: %s", limit)
+				}
+			} else if string(limit) != tc.limits {
+				t.Fatalf("projected limits=%s, want %s", limit, tc.limits)
+			}
+		})
+	}
+}

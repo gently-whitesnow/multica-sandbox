@@ -90,6 +90,11 @@ func ReadConfig(path string) (Config, error) {
 	if len(c.Tools) > 0 && c.OpenCode == nil {
 		return c, fmt.Errorf("tools require the opencode adapter")
 	}
+	if c.OpenCode != nil {
+		if err := c.OpenCode.validateCompaction(); err != nil {
+			return c, err
+		}
+	}
 	if c.Concurrency == 0 {
 		c.Concurrency = DefaultConcurrency
 	}
@@ -125,13 +130,15 @@ type OpenCodeConfig struct {
 	// the attempt helper forwards loopback 443 to.
 	ForgeRelay *RelayConfig `json:"forge_relay,omitempty"`
 	// Sessions, with the helper, retains issue workdirs and resumes sessions (ADR 0015).
-	Sessions     *SessionsConfig      `json:"sessions,omitempty"`
-	EnvAllow     []string             `json:"env_allow,omitempty"`
-	IdleWatchdog string               `json:"idle_watchdog,omitempty"`
-	Resources    *docker.ResourceSpec `json:"resources,omitempty"`
-	Runtime      string               `json:"runtime,omitempty"`
-	DinD         *DinDConfig          `json:"dind,omitempty"`
-	Pool         *PoolConfig          `json:"pool,omitempty"`
+	Sessions     *SessionsConfig `json:"sessions,omitempty"`
+	EnvAllow     []string        `json:"env_allow,omitempty"`
+	IdleWatchdog string          `json:"idle_watchdog,omitempty"`
+	// CompactionMaxTokens is an optional native compaction trigger cap for verified OpenCode 2.x.
+	CompactionMaxTokens int                  `json:"compaction_max_tokens,omitempty"`
+	Resources           *docker.ResourceSpec `json:"resources,omitempty"`
+	Runtime             string               `json:"runtime,omitempty"`
+	DinD                *DinDConfig          `json:"dind,omitempty"`
+	Pool                *PoolConfig          `json:"pool,omitempty"`
 }
 
 // SessionsConfig bounds retained workdirs: TTL after last use and a session count.
@@ -149,4 +156,16 @@ type SessionsConfig struct {
 type RelayConfig struct {
 	Listen string `json:"listen"`
 	URL    string `json:"url"`
+}
+
+// validateCompaction prevents a configured cap from being silently ignored without
+// managed inference, which supplies the selected model's context metadata.
+func (c *OpenCodeConfig) validateCompaction() error {
+	if c.CompactionMaxTokens < 0 {
+		return fmt.Errorf("compaction_max_tokens must be nonnegative")
+	}
+	if c.CompactionMaxTokens > 0 && c.InferenceFile == "" {
+		return fmt.Errorf("compaction_max_tokens requires inference_file")
+	}
+	return nil
 }

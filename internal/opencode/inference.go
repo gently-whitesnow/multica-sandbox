@@ -50,6 +50,7 @@ func (r *running) configureInference(ctx context.Context, config []byte) ([]byte
 	if err != nil {
 		return nil, err
 	}
+	projectCompaction(projected, selection.metadata.Context, r.adapter.CompactionMaxTokens)
 	// Only the selected model is projected: the catalog may hold hundreds of advisory entries.
 	provider, pkg := inference.Provider(selection.api), providerPackages[selection.api]
 	r.model, r.effort = provider+"/"+selection.model, selection.effort
