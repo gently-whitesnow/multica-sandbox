@@ -178,6 +178,45 @@ func TestAutoAdmissionDoesNotFillColdCapacity(t *testing.T) {
 	}
 }
 
+// Polled each second, warm starts follow the warmup interval: a warmup wait is not
+// pressure, so it neither restarts the calm cooldown nor reports claims as paused.
+func TestAutoAdmissionPacesStartsAtWarmupInterval(t *testing.T) {
+	p := &pool.Pool{Dir: fakeSlice(t, "0.00"), MaxPressure: pool.DefaultMaxPressure, MaxWorkingSet: pool.DefaultMaxWorkingSet}
+	a := &fleetFake{queued: map[string]int{"a": 3, "b": 3}}
+	f := newFleet(t, a)
+	var log bytes.Buffer
+	m, _ := metrics.New()
+	start := time.Now()
+	now := start
+	f.clock = func() time.Time { return now }
+	f.log, f.metrics, f.admit, f.ready = newLogger(&log, false), m, admission(p, m), map[string]string{"a": "a", "b": "b"}
+	f.autoAdmission = &pool.AutoAdmission{Pool: p, ReadDisk: func(string) (pool.Disk, error) { return pool.Disk{Total: 100 << 30, Available: 50 << 30}, nil }}
+	execute, _, release := track()
+	defer close(release)
+	var starts []time.Duration
+	for ; len(starts) < 4 && now.Sub(start) < 5*time.Minute; now = now.Add(time.Second) {
+		before := len(f.active)
+		if err := f.claim(context.Background(), 10, execute); err != nil {
+			t.Fatal(err)
+		}
+		if len(f.active) > before {
+			starts = append(starts, now.Sub(start))
+		}
+		if strings.Contains(exposition(m), "\nsandbox_claims_paused 1") {
+			t.Fatalf("warmup exported as a pause at %s", now.Sub(start))
+		}
+	}
+	// A start may wait one more poll while claim clears a served fairness round.
+	for i := 1; i < len(starts); i++ {
+		if gap := starts[i] - starts[i-1]; gap < pool.ColdStartInterval || gap > pool.ColdStartInterval+time.Second {
+			t.Fatalf("starts at %v", starts)
+		}
+	}
+	if len(starts) != 4 || strings.Contains(log.String(), "claims paused") {
+		t.Fatalf("starts at %v, log %q", starts, log.String())
+	}
+}
+
 func TestAutoAdmissionNeedsFilesystemMount(t *testing.T) {
 	dir := fakeSlice(t, "0.00")
 	for _, p := range []*PoolConfig{

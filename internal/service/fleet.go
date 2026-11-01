@@ -232,19 +232,20 @@ func (f *fleet) admitted() bool {
 	if ok && f.autoAdmission != nil {
 		ok, status = f.autoAdmission.Admit(len(f.active), now)
 	}
-	if !ok {
+	// Warmup paces starts: it neither pauses claims nor restarts the cooldown.
+	if !ok && status != pool.Warmup {
 		f.refused = now
 	}
-	calm := ok && now.Sub(f.refused) >= admissionCooldown
+	calm := now.Sub(f.refused) >= admissionCooldown
 	switch {
 	case calm && f.paused:
 		f.log.Info("claims resumed", "pool", status)
-	case !ok && !f.paused:
+	case !calm && !f.paused:
 		f.log.Warn("claims paused", "pool", status)
 	}
 	f.paused = !calm
 	f.metrics.Paused(f.paused)
-	return calm
+	return ok && calm
 }
 
 // finish releases a completed attempt's slot.

@@ -11,6 +11,10 @@ import (
 // before another claim. The controller still owns no queue: work waits in Multica.
 const ColdStartInterval = 30 * time.Second
 
+// Warmup is the reason Admit gives while a cold start establishes its working set.
+// It paces starts and is not pool pressure.
+const Warmup = "auto admission: cold-start warmup"
+
 // EstimateHalfLife halves an observed per-attempt peak that is no longer seen, so one
 // heavy build slows later starts for tens of minutes rather than until restart.
 const EstimateHalfLife = 10 * time.Minute
@@ -105,7 +109,7 @@ func (a *AutoAdmission) Admit(active int, now time.Time) (bool, string) {
 		return true, "auto admission: first attempt"
 	}
 	if now.Sub(a.lastStart) < ColdStartInterval {
-		return false, "auto admission: cold-start warmup"
+		return false, Warmup
 	}
 	_, s, err := a.Pool.Admit()
 	if err != nil {

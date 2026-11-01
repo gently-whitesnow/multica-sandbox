@@ -27,7 +27,8 @@ filesystem backing Docker and attempt workdirs. It adds to existing PSI admissio
 
 - Only one cold start per 30-second warmup period while other attempts run. An empty
   pool may immediately start one attempt. The existing 15-second calm cooldown also
-  applies after a refusal.
+  applies after a pressure, headroom or disk refusal. A warmup wait is pacing, not a
+  pause: it neither restarts the cooldown nor sets `sandbox_claims_paused`.
 - New work needs headroom for a conservative build estimate plus 25%: the peak
   observed working set per active attempt, halved every 10 minutes after it was last
   seen, and at least a cold floor. The floor is `pool.attempt_memory_max` (else the
