@@ -211,7 +211,7 @@ func newOpenCodeAdapter(ctx context.Context, c Config, stateDir string, api *mul
 	if err = workloads.ValidateNetwork(ctx); err != nil {
 		return nil, nil, err
 	}
-	adapter := &opencode.Adapter{Server: strings.TrimRight(c.Server, "/"), Controller: c.Daemon, Issuer: issuer, Authority: authority, Status: api, Reporter: api, Workloads: workloads, Command: c.Command, IdleWatchdog: watchdog, MCPPublicProxy: publicProxy, CompactionMaxTokens: c.OpenCode.CompactionMaxTokens}
+	adapter := &opencode.Adapter{Server: strings.TrimRight(c.Server, "/"), Controller: c.Daemon, Issuer: issuer, Authority: authority, Status: api, Reporter: api, Workloads: workloads, Command: c.Command, IdleWatchdog: watchdog, MCPPublicProxy: publicProxy, CompactionMaxTokens: c.OpenCode.CompactionMaxTokens, Log: log}
 	if issuer != nil || publicProxy != nil {
 		adapter.MCPRelay = opencode.NewMCPRelay()
 		policy := relay.Policy{Allow: opencode.MCPRelayPath, Reserved: opencode.MCPReservedHeaders, HeaderTimeout: opencode.MCPHeaderTimeout}
