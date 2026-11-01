@@ -67,10 +67,15 @@ wget -T 1 -q -O /tmp/leak http://169.254.169.254/ && exit 1; wget -T 1 -q -O /tm
 gw=$(ip route | awk '/default/ {print $3}'); for i in 1 2 3 4 5; do nc -w 2 "$gw" 15353 </dev/null | grep -q reached && exit 0; sleep 1; done; exit 1`); err != nil {
 		t.Fatal("control container cannot resolve example.com or reach the host listener:", err)
 	}
-	// A hostile attempt resolves only approved peer aliases: no route, external DNS through
-	// the embedded or a direct resolver, host address or IPv6.
-	if err := b.Execute(ctx, []string{"/bin/sh", "-c", `set -e; nslookup gateway >/dev/null
-test "$(grep '^nameserver' /etc/resolv.conf)" = "nameserver 127.0.0.11"
+	// The approved peer alias resolves through the embedded resolver. getent follows libc
+	// like real clients; busybox nslookup tries host search domains first and fails there.
+	if err := b.Execute(ctx, []string{"/bin/sh", "-c", `set -e; getent hosts gateway >/dev/null
+test "$(grep '^nameserver' /etc/resolv.conf)" = "nameserver 127.0.0.11"`}); err != nil {
+		t.Fatal("attempt cannot resolve its approved peer:", err)
+	}
+	// A hostile attempt reaches nothing else: no route, external DNS through the embedded
+	// or a direct resolver, host address or IPv6.
+	if err := b.Execute(ctx, []string{"/bin/sh", "-c", `set -e
 ip route | grep -q default && exit 1; ip -6 route | grep -q default && exit 1; test -z "$(ip -6 addr show scope global)"
 timeout 3 nslookup example.com && exit 1; timeout 3 nslookup -type=TXT probe.example.com && exit 1
 for dns in 1.1.1.1 8.8.8.8 2606:4700:4700::1111; do timeout 3 nslookup example.com "$dns" && exit 1; nc -w 2 "$dns" 53 </dev/null && exit 1; done
