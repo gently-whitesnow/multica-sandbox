@@ -40,7 +40,18 @@ type gatewayCatalog struct {
 	format  string
 	mu      sync.Mutex
 	cached  map[Scope]gatewayEntry
+	flight  map[Scope]*gatewayFetch
 }
+
+// gatewayFetch is one scope's refresh, shared by its concurrent callers.
+type gatewayFetch struct {
+	done    chan struct{}
+	catalog Catalog
+	err     error
+}
+
+// gatewayFetchTimeout bounds a shared refresh that its callers stopped waiting for.
+const gatewayFetchTimeout = 30 * time.Second
 
 type gatewayEntry struct {
 	catalog Catalog
@@ -61,27 +72,52 @@ func (s *Service) configureGatewayCatalog(c GatewayCatalog) error {
 	if c.DefaultModel != "" && !validModel(c.DefaultModel) {
 		return ErrDenied
 	}
-	s.gateway = &gatewayCatalog{service: s, ttl: ttl, model: c.DefaultModel, format: c.Format, cached: map[Scope]gatewayEntry{}}
+	s.gateway = &gatewayCatalog{service: s, ttl: ttl, model: c.DefaultModel, format: c.Format, cached: map[Scope]gatewayEntry{}, flight: map[Scope]*gatewayFetch{}}
 	return nil
 }
 
 // catalog returns the workspace key's models; a failed refresh reuses the last good catalog.
+// Callers of one scope share a single refresh and the lock never spans network I/O, so a
+// slow gateway delays only its own workspace.
 func (g *gatewayCatalog) catalog(ctx context.Context, scope Scope) (Catalog, error) {
 	g.mu.Lock()
-	defer g.mu.Unlock()
 	entry, ok := g.cached[scope]
 	if ok && time.Since(entry.at) < g.ttl {
+		g.mu.Unlock()
 		return cloneCatalog(entry.catalog), nil
 	}
-	fresh, err := g.fetch(ctx, scope)
-	if err != nil {
-		if ok {
-			return cloneCatalog(entry.catalog), nil
-		}
-		return Catalog{}, ErrDenied
+	f := g.flight[scope]
+	if f == nil {
+		f = &gatewayFetch{done: make(chan struct{})}
+		g.flight[scope] = f
+		go g.refresh(context.WithoutCancel(ctx), scope, f)
 	}
-	g.cached[scope] = gatewayEntry{fresh, time.Now()}
-	return cloneCatalog(fresh), nil
+	g.mu.Unlock()
+	select {
+	case <-f.done:
+		if f.err == nil {
+			return cloneCatalog(f.catalog), nil
+		}
+	case <-ctx.Done():
+	}
+	if ok {
+		return cloneCatalog(entry.catalog), nil
+	}
+	return Catalog{}, ErrDenied
+}
+
+// refresh completes even when its callers give up, so the next caller finds the result.
+func (g *gatewayCatalog) refresh(ctx context.Context, scope Scope, f *gatewayFetch) {
+	ctx, cancel := context.WithTimeout(ctx, gatewayFetchTimeout)
+	defer cancel()
+	f.catalog, f.err = g.fetch(ctx, scope)
+	g.mu.Lock()
+	if f.err == nil {
+		g.cached[scope] = gatewayEntry{f.catalog, time.Now()}
+	}
+	delete(g.flight, scope)
+	g.mu.Unlock()
+	close(f.done)
 }
 
 type modelInfo struct {

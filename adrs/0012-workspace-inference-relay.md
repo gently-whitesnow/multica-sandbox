@@ -49,7 +49,9 @@ inventing numbers or sending zeros that disable native compaction. OpenCode owns
 the fallback for unknown metadata.
 
 Gateway discovery uses the same workspace key, caches results for a TTL and
-retains the last good catalog when refresh fails:
+retains the last good catalog when refresh fails. Concurrent callers of one
+workspace share a single refresh; no lock spans gateway I/O, so a slow gateway
+delays only its own workspace:
 
 - `format: litellm` (default) reads `/v1/model/info`. Native provider identity,
   limits, reasoning levels and prices are mapped; deployment parameters are not.
