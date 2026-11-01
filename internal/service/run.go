@@ -117,6 +117,10 @@ func openCodeAdapter(ctx context.Context, c Config, stateDir string, api *multic
 
 func newOpenCodeAdapter(ctx context.Context, c Config, stateDir string, api *multica.Client, backend *docker.Backend) (*opencode.Adapter, *docker.Projected, error) {
 	log := c.logger()
+	publicProxy, err := opencode.ParseMCPPublicProxy(c.OpenCode.MCPPublicProxy)
+	if err != nil {
+		return nil, nil, err
+	}
 	watchdog, err := optionalDuration(c.OpenCode.IdleWatchdog, 10*time.Minute)
 	if err != nil {
 		return nil, nil, fmt.Errorf("idle_watchdog must be a positive duration")
@@ -204,8 +208,8 @@ func newOpenCodeAdapter(ctx context.Context, c Config, stateDir string, api *mul
 	if err = workloads.ValidateNetwork(ctx); err != nil {
 		return nil, nil, err
 	}
-	adapter := &opencode.Adapter{Server: strings.TrimRight(c.Server, "/"), Controller: c.Daemon, Issuer: issuer, Authority: authority, Status: api, Reporter: api, Workloads: workloads, Command: c.Command, EnvAllow: c.OpenCode.EnvAllow, IdleWatchdog: watchdog}
-	if issuer != nil {
+	adapter := &opencode.Adapter{Server: strings.TrimRight(c.Server, "/"), Controller: c.Daemon, Issuer: issuer, Authority: authority, Status: api, Reporter: api, Workloads: workloads, Command: c.Command, EnvAllow: c.OpenCode.EnvAllow, IdleWatchdog: watchdog, MCPPublicProxy: publicProxy}
+	if issuer != nil || publicProxy != nil {
 		adapter.MCPRelay = opencode.NewMCPRelay()
 		policy := relay.Policy{Allow: opencode.MCPRelayPath, Reserved: opencode.MCPReservedHeaders, HeaderTimeout: opencode.MCPHeaderTimeout}
 		if err = c.serveRelay(ctx, "MCP", adapter.MCPRelay, *c.OpenCode.MCPRelay, policy, nil, nil); err != nil {
@@ -327,13 +331,16 @@ func cliRevision(c *OpenCodeConfig) (string, error) {
 }
 
 // attemptIdentity builds the MCP issuer and the attempt authority. Both are optional:
-// without identity_file (and its mcp_relay) attempts get no MCP access and agents
-// selecting MCP are refused; without authority MCP tokens are not registered and end only at expiry.
+// identity_file enables managed identity; mcp_public_proxy enables public selected
+// endpoints without an issuer. Both use mcp_relay; authority is independently optional.
 func attemptIdentity(ctx context.Context, c Config) (opencode.Issuer, opencode.Authority, error) {
 	var issuer opencode.Issuer
 	var authority opencode.Authority
-	if (c.OpenCode.IdentityFile == "") != (c.OpenCode.MCPRelay == nil) {
-		return nil, nil, fmt.Errorf("identity_file and mcp_relay must be configured together")
+	if _, err := opencode.ParseMCPPublicProxy(c.OpenCode.MCPPublicProxy); err != nil {
+		return nil, nil, err
+	}
+	if (c.OpenCode.IdentityFile != "" || c.OpenCode.MCPPublicProxy != "") != (c.OpenCode.MCPRelay != nil) {
+		return nil, nil, fmt.Errorf("identity_file or mcp_public_proxy requires mcp_relay, and mcp_relay requires one of them")
 	}
 	if c.OpenCode.IdentityFile != "" {
 		config, err := agentidentity.ReadConfig(c.OpenCode.IdentityFile)

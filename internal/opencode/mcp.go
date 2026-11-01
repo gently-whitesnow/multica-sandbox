@@ -3,6 +3,7 @@ package opencode
 import (
 	"net/http"
 	"net/url"
+	"path"
 	"regexp"
 	"strings"
 	"sync"
@@ -72,44 +73,75 @@ func (m *MCPRelay) Authorize(req *http.Request) (relay.Lease, bool) {
 		lease.Release()
 		return relay.Lease{}, false
 	}
-	origin, path, bearer, ok := r.mcpUpstream(strings.TrimPrefix(req.URL.Path, "/"))
 	httpService := strings.HasPrefix(req.URL.Path, "/http/")
 	if httpService {
-		origin, path, bearer, ok = r.httpUpstream(req.Method, req.URL.Path)
+		origin, path, bearer, allowed := r.httpUpstream(req.Method, req.URL.Path)
+		if !allowed {
+			lease.Release()
+			return relay.Lease{}, false
+		}
+		lease.Origin, lease.Path, lease.Credential = origin, path, bearer
 		name := strings.SplitN(strings.TrimPrefix(req.URL.Path, "/http/"), "/", 2)[0]
 		lease.Header = r.httpServices[name].Header()
 		lease.WithholdErrors = r.httpServices[name].PathCredential != nil
+	} else {
+		target, allowed := r.mcpUpstream(strings.TrimPrefix(req.URL.Path, "/"))
+		if !allowed {
+			lease.Release()
+			return relay.Lease{}, false
+		}
+		lease.Origin, lease.Path, lease.Credential = target.origin, target.path, target.bearer
+		lease.Header, lease.ProxyURL, lease.WithholdErrors = target.header, target.proxy, target.withhold
 	}
-	if !ok {
-		lease.Release()
-		return relay.Lease{}, false
-	}
-	lease.Origin, lease.Path, lease.Credential = origin, path, bearer
 	// OpenCode adds codemode=false; no caller query may change the approved URL.
 	lease.DropQuery = !httpService || lease.WithholdErrors
 	return lease, true
 }
 
-// mcpUpstream resolves a selected connection and its registered, unexpired token; an
-// anonymous connection gets none, and the relay still drops the caller's credentials.
-func (r *running) mcpUpstream(name string) (*url.URL, string, string, bool) {
+type mcpTarget struct {
+	origin, proxy *url.URL
+	path, bearer  string
+	header        http.Header
+	withhold      bool
+}
+
+// mcpUpstream binds the exact selected endpoint, credentials and deployment egress.
+// Public connections never borrow an issuer token or choose their own proxy.
+func (r *running) mcpUpstream(name string) (mcpTarget, bool) {
 	connection, ok := r.connections[name]
 	r.mu.Lock()
 	token := r.tokens[name]
 	r.mu.Unlock()
 	u, err := url.Parse(connection.URL)
 	if !ok || err != nil || !r.anonymous[name] && time.Until(token.ExpiresAt) <= time.Second {
-		return nil, "", "", false
+		return mcpTarget{}, false
 	}
-	path := u.Path
-	if path == "" {
-		path = "/"
+	target := mcpTarget{origin: &url.URL{Scheme: u.Scheme, Host: u.Host, RawQuery: u.RawQuery, ForceQuery: u.ForceQuery}, path: u.Path, bearer: token.Bearer()}
+	if target.path == "" {
+		target.path = "/"
 	}
-	return &url.URL{Scheme: u.Scheme, Host: u.Host}, path, token.Bearer(), true
+	if r.public[name] {
+		if r.adapter == nil || r.adapter.MCPPublicProxy == nil {
+			return mcpTarget{}, false
+		}
+		target.proxy, target.withhold = r.adapter.MCPPublicProxy, true
+	}
+	if len(connection.headers) != 0 {
+		target.header = http.Header{}
+		for name, value := range connection.headers {
+			target.header.Set(name, value)
+		}
+		target.bearer, target.withhold = "", true
+	}
+	return target, true
 }
 
 // validMCPURL admits an exact HTTP(S) endpoint the relay can address unchanged.
 func validMCPURL(raw string) bool {
 	u, err := url.Parse(raw)
-	return err == nil && (u.Scheme == "https" || u.Scheme == "http") && u.Host != "" && u.User == nil && u.RawQuery == "" && !u.ForceQuery && u.Fragment == "" && u.RawPath == "" && !strings.ContainsAny(raw, "\r\n\x00")
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil || u.Fragment != "" || u.RawPath != "" || strings.ContainsAny(raw, "\r\n\x00") || strings.Contains(u.Path, "\\") {
+		return false
+	}
+	trimmed := strings.TrimSuffix(u.Path, "/")
+	return trimmed == "" || path.Clean(trimmed) == trimmed
 }

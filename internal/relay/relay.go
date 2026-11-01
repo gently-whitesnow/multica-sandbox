@@ -22,8 +22,10 @@ import (
 // Lease is an authorized forwarding grant for one request.
 type Lease struct {
 	// Attempt names the grant's attempt for authorizers that add per-request policy.
-	Attempt    string
-	Origin     *url.URL
+	Attempt string
+	Origin  *url.URL
+	// ProxyURL is a trusted deployment egress; nil keeps direct transport.
+	ProxyURL   *url.URL
 	Credential string
 	// Authorization, when set, replaces the bearer built from Credential; Path replaces the
 	// request path, and RawPath, when set, is its escaped form (encoded slashes).
@@ -99,7 +101,10 @@ func New(auth Authorizer, p Policy) (*Relay, error) {
 		p.HeaderTimeout = 60 * time.Second
 	}
 	transport := &http.Transport{
-		Proxy:                 nil,
+		Proxy: func(req *http.Request) (*url.URL, error) {
+			x, _ := req.Context().Value(exchangeKey{}).(exchange)
+			return x.lease.ProxyURL, nil
+		},
 		DialContext:           (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ResponseHeaderTimeout: p.HeaderTimeout,
@@ -115,7 +120,7 @@ func New(auth Authorizer, p Policy) (*Relay, error) {
 			lease := pr.In.Context().Value(exchangeKey{}).(exchange).lease
 			pr.SetURL(lease.Origin)
 			if lease.DropQuery {
-				pr.Out.URL.RawQuery, pr.Out.URL.ForceQuery = "", false
+				pr.Out.URL.RawQuery, pr.Out.URL.ForceQuery = lease.Origin.RawQuery, lease.Origin.ForceQuery
 			}
 			if lease.Path != "" {
 				pr.Out.URL.Path, pr.Out.URL.RawPath = lease.Origin.Path+lease.Path, ""

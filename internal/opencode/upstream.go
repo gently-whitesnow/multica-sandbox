@@ -30,6 +30,11 @@ func (r *running) environment() map[string]string {
 			env[name] = value
 		}
 	}
+	for _, connection := range r.connections {
+		for _, name := range connection.headerEnv {
+			delete(env, name)
+		}
+	}
 	r.httpEnvironment(env)
 	if r.relayToken == "" {
 		return env
