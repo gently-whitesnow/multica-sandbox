@@ -82,8 +82,10 @@ type running struct {
 	anonymous map[string]bool
 	public    map[string]bool
 	workload  execution.ProjectedRun
-	// mu guards tokens, which the MCP relay reads while the renewal loop replaces them.
+	// mu guards tokens, which the MCP relay reads while the renewal loop replaces them,
+	// and confirmed, when Multica last reported the task running.
 	mu           sync.Mutex
+	confirmed    time.Time
 	tokens       map[string]identity.AccessToken
 	httpServices map[string]identity.HTTPService
 	httpTokens   map[string]identity.AccessToken
@@ -112,6 +114,10 @@ type running struct {
 	// skills are the claim's skill files under SkillsDir, upstream tasks only (ADR 0017).
 	skills map[string][]byte
 }
+
+// attemptLease bounds an authority lease and how long renewal rides out transient
+// task status errors after the last confirmation.
+const attemptLease = 15 * time.Second
 
 // SessionDB keeps OpenCode's session store in the retained workdir, apart from
 // XDG_DATA_HOME.
@@ -288,10 +294,26 @@ func (r *running) grant(action string) attempt.Grant {
 	return attempt.Grant{Controller: r.adapter.Controller, Attempt: r.task.AttemptKey(), Server: r.adapter.Server, Workspace: r.task.WorkspaceID, Agent: r.task.AgentID, Task: r.task.ID, Action: action}
 }
 
-func (r *running) refresh(ctx context.Context) error {
+// confirm gates renewal on Multica reporting the task running (ADR 0011). Like the
+// controller it rides out transient status errors, but only within the attempt lease;
+// denial, absence and any other state end renewal at once.
+func (r *running) confirm(ctx context.Context) error {
 	status, err := r.adapter.Status.Status(ctx, r.task.ID)
-	if err != nil || status != "running" {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	switch {
+	case err == nil && status == "running":
+		r.confirmed = time.Now()
+	case !multica.Transient(err) || time.Since(r.confirmed) > attemptLease:
 		return fmt.Errorf("task status: %w", ErrDenied)
+	}
+	return nil
+}
+
+func (r *running) refresh(ctx context.Context) error {
+	err := r.confirm(ctx)
+	if err != nil {
+		return err
 	}
 	ref := identity.Ref{Server: r.adapter.Server, WorkspaceID: r.task.WorkspaceID, AgentID: r.task.AgentID}
 	for name, connection := range r.connections {
@@ -312,7 +334,7 @@ func (r *running) refresh(ctx context.Context) error {
 			grant := r.grant("renew")
 			grant.URL = connection.URL
 			grant.TokenHash = attempt.Fingerprint(token.Bearer())
-			grant.ExpiresAt = min(token.ExpiresAt.Unix(), time.Now().Add(15*time.Second).Unix())
+			grant.ExpiresAt = min(token.ExpiresAt.Unix(), time.Now().Add(attemptLease).Unix())
 			if err := r.adapter.Authority.Apply(ctx, grant); err != nil {
 				return err
 			}

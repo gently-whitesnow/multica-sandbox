@@ -14,6 +14,7 @@ import (
 	"github.com/gently-whitesnow/multica-sandbox/internal/attempt"
 	"github.com/gently-whitesnow/multica-sandbox/internal/execution"
 	"github.com/gently-whitesnow/multica-sandbox/internal/identity"
+	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
 )
 
 type stubIssuer struct {
@@ -51,6 +52,30 @@ func (s *stubAuthority) Apply(_ context.Context, g attempt.Grant) error {
 type stubStatus struct{}
 
 func (stubStatus) Status(context.Context, string) (string, error) { return "running", nil }
+
+// scriptedStatus answers status polls with state, or err when set, and counts them.
+type scriptedStatus struct {
+	sync.Mutex
+	state string
+	err   error
+	calls int
+}
+
+func (s *scriptedStatus) Status(context.Context, string) (string, error) {
+	s.Lock()
+	defer s.Unlock()
+	s.calls++
+	if s.err != nil {
+		return "", s.err
+	}
+	return s.state, nil
+}
+func (s *scriptedStatus) set(state string, err error) {
+	s.Lock()
+	defer s.Unlock()
+	s.state, s.err = state, err
+}
+func (s *scriptedStatus) polls() int { s.Lock(); defer s.Unlock(); return s.calls }
 
 type stubWorkload struct {
 	writes  int
@@ -137,6 +162,53 @@ func TestRenewalOutageStopsAndRevokes(t *testing.T) {
 		})
 	}
 }
+func TestStatusGateRidesOutTransientErrorsWithinLease(t *testing.T) {
+	unavailable, denied := &multica.HTTPError{Status: 503}, &multica.HTTPError{Status: 403}
+	for _, c := range []struct {
+		name      string
+		confirmed time.Duration
+		state     string
+		err       error
+		ok        bool
+	}{
+		{"running", -time.Hour, "running", nil, true},
+		{"transient", -time.Second, "", unavailable, true},
+		{"transient past lease", -attemptLease - time.Second, "", unavailable, false},
+		{"transient unconfirmed", 0, "", unavailable, false},
+		{"denied", -time.Second, "", denied, false},
+		{"missing", -time.Second, "", &multica.HTTPError{Status: 404}, false},
+		{"cancelled", -time.Second, "cancelled", nil, false},
+	} {
+		r := &running{adapter: &Adapter{Status: &scriptedStatus{state: c.state, err: c.err}}, task: safeTask()}
+		if c.confirmed != 0 {
+			r.confirmed = time.Now().Add(c.confirmed)
+		}
+		if err := r.confirm(context.Background()); (err == nil) != c.ok {
+			t.Errorf("%s: %v", c.name, err)
+		}
+	}
+
+	status := &scriptedStatus{state: "running"}
+	a := Adapter{Issuer: &stubIssuer{}, MCPRelay: NewMCPRelay(), Authority: &stubAuthority{}, Workloads: &stubWorkload{}, Status: status}
+	run, err := a.Start(context.Background(), safeTask())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer run.Remove(context.Background())
+	status.set("", unavailable)
+	short, cancel := context.WithTimeout(context.Background(), 2500*time.Millisecond)
+	defer cancel()
+	if err := run.Wait(short); !errors.Is(err, context.DeadlineExceeded) || status.polls() < 3 {
+		t.Fatalf("transient status error stopped the attempt: %v after %d polls", err, status.polls())
+	}
+	status.set("", denied)
+	wait, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := run.Wait(wait); !errors.Is(err, ErrDenied) {
+		t.Fatalf("denied status did not stop the attempt: %v", err)
+	}
+}
+
 func TestInitialDenialNeverStartsWorkload(t *testing.T) {
 	workload := &stubWorkload{}
 	authority := &stubAuthority{deny: true}
