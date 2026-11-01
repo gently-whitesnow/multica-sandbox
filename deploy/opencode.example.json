@@ -45,5 +45,6 @@
     "tmp_size": "256m",
     "shm_size": "64m"
   },
-  "compaction_max_tokens": 400000
+  "compaction_max_tokens": 400000,
+  "mcp_public_proxy": "http://mcp-public-egress:3128"
 }

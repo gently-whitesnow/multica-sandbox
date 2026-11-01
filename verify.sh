@@ -29,3 +29,5 @@ git diff --check
 git diff --cached --check
 
 if [ "${VERIFY_INFERENCE:-0}" = 1 ]; then ./scripts/test-inference.sh; fi
+
+if [ "${VERIFY_DYNAMIC_MCP:-0}" = 1 ]; then ./scripts/test-dynamic-mcp.sh; fi

@@ -3,16 +3,10 @@
 The persistent controller's opt-in OpenCode path projects trusted Multica task context, drives `opencode acp` over the Agent Client Protocol (ADR 0023) and carries selected MCP connections through a controller relay that rotates verified identity during one disposable attempt. Images are user-owned; the controller
 inspects the digest-pinned image once at startup against the [image contract](#image-contract). Optional inference uses the workspace-key relay from ADR 0012. The [conformance](#conformance) section lists pinned versions, verified behavior with its tests and explicit limitations.
 
-```mermaid
-flowchart TD
-    M[Multica claim: workspace, agent, effective MCP selection] --> S[Select: validate identity and safe remote connections]
-    S --> I[AcquireForMCP: exact URL rule and verified Keycloak JWT]
-    I --> G[External authority: fingerprint and active attempt lease]
-    G --> P[MCP relay holds the current JWT; session/new names the relay alias and an opaque grant]
-    P --> O[OpenCode calls the relay; the relay forwards to the exact approved URL]
-    O --> V[MCP validates JWT, audience, lease and concrete operation]
-    C[Completion, cancellation, outage or recovery] --> R[Revoke attempt and remove container/network]
-```
+Multica's selected remote MCP configuration is read on each claim. Public endpoints
+use anonymous access or user-supplied headers through trusted egress; explicit
+managed recipients use rotating identity. Both receive only opaque attempt grants
+inside OpenCode. See [ADR 0029](../../adrs/0029-dynamic-http-mcp.md).
 
 ## Configuration
 
@@ -22,11 +16,15 @@ configuration, static/external secret files and authority credential **only into
 controller**, for example through a local Compose override. The base Compose manifest
 has no corporate identity mounts. Keep all actual configuration outside Git.
 
-`identity_file` requires `mcp_relay` (`listen`, `url`): attempts reach selected MCP only through it, with an opaque per-attempt `mcp_relay_` credential, and access tokens stay in the controller. Add the controller to the template `peers` with the alias named by `url`; MCP services belong on the control network, not the template. The relay forwards streamable HTTP (POST, SSE responses, the GET stream, `Mcp-Session-Id`) to the exact approved URL, refuses redirects, strips `WWW-Authenticate` and cancels open streams at cleanup; legacy SSE endpoints and URLs with a query or encoded path are refused.
+`identity_file` or `mcp_public_proxy` requires `mcp_relay` (`listen`, `url`): attempts reach selected MCP only through it, with an opaque per-attempt `mcp_relay_` credential, and access tokens stay in the controller. Add the controller to the template `peers` with the alias named by `url`; MCP services belong on the control network, not the template. The relay forwards streamable HTTP (POST, SSE responses, the GET stream, `Mcp-Session-Id`) to the exact approved URL, refuses redirects, strips `WWW-Authenticate` and cancels open streams at cleanup; configured query parameters are preserved exactly and caller query is discarded. Legacy SSE and encoded paths are unsupported.
 
 `network` names an operator-owned internal bridge template containing exactly the named `peers`. Each attempt gets a new internal network with only those peers and its own container. Place Multica, IAM, resolver, MCP services and credential stores on a separate control network. Only the controller and approved gateway services may be peers. Enforce host/metadata and destination policy outside Docker; internal bridges do not establish a production adversarial egress boundary. Do not attach untrusted workloads/services to the template. Concurrent attempt containers never share a network.
 
 The default command is `opencode acp` in `/workspace/work`. An operator-supplied command must speak ACP on stdio and may read `/workspace/opencode.json`; only controller configuration chooses that command. Images may include their own tools and credential-free provider configuration; [tool bundles](#image-contract) add tools without rebuilding the image. No inference/provider credential is permitted in an image or command; managed inference uses `inference_file` and `inference_relay`; see [`internal/inference`](../inference/README.md). The fixture supplies a mock provider from trusted test configuration solely to exercise tool turns without a subscription.
+
+Add remote MCPs in Multica Settings → MCP and assign them to agents. Both `mcpServers` and native `mcp` remote shapes, enabled toggles, fixed query parameters and optional headers are accepted. Header `{env:NAME}` reads only agent ENV from the claim; referenced values stay out of attempt ENV even if `env_allow` names them. Headers and endpoint URLs stay controller-side. New settings apply next attempt without rollout.
+
+`mcp_public_proxy` is a deployment-owned HTTP(S) proxy origin (for example `http://mcp-public-egress:3128`), not a target allowlist. It must enforce private/host/metadata denial, including DNS; transport never falls back to direct access. Explicit managed/anonymous recipients retain their approved direct route. User headers select public transport and never acquire the managed JWT. Public errors withhold bodies, headers, trailers and redirect locations. Stdio, browser OAuth, per-server ENV/timeout and broker connections return clear unsupported errors; use remote HTTP headers for this release.
 
 ## Image contract
 
@@ -63,7 +61,7 @@ Agent environment: `env_allow` lists up to 32 agent `custom_env` names passed to
 It disables redirects/proxy environment, re-reads the controller-only bearer file
 and requires HTTP 204. HTTPS is required outside explicit isolated fixtures. The
 authority is external; this repository contains only a fixture implementation.
-Without `identity_file` agents selecting MCP are refused; without the optional `authority` MCP tokens stay unregistered until expiry (ADR 0009).
+Public MCP needs `mcp_public_proxy`, managed identity needs `identity_file`; without the optional `authority` MCP tokens stay unregistered until expiry (ADR 0009).
 
 `renew` includes `controller`, the dispatch-fenced `attempt`, `server`,
 `workspace_id`, `agent_id`, `task_id`, `mcp_url`, SHA-256 `token_hash`, and epoch-second
@@ -101,6 +99,7 @@ Engine 29.2.1 (runc, cgroup v2, `linux/arm64`; `amd64` is unverified). Reproduce
 | Upstream failure reasons, durable reports, replay before recovery | `internal/multica/outbox_test.go`; `integration/retry_test.go` (UPSTREAM) |
 | Cancellation revokes and cleans up before the terminal callback | `adapter_test.go`; `integration/upstream_test.go`; fixture `cancelled` (OPENCODE) |
 | Native task API: admin updates workspace, member is refused; member creates project/repository and workflow; native human-only credential checks, actor attribution, workspace isolation and revoked grant hold | `integration/task_authority_test.go` (UPSTREAM); `internal/multica/relay_test.go` |
+| Dynamic remote MCP via public proxy: anonymous/static/agent ENV, fixed query, no JWT/secret projection, next-claim library edits/toggles and retained-session updates/removal | `public_mcp_test.go`, `mcp_selection_test.go`; `integration/mcp_library_test.go` (UPSTREAM); `scripts/test-dynamic-mcp.sh` (DYNAMIC_MCP, OpenCode 2.2.2) |
 | Native run-only autopilot instructions/result and synthetic Telegram claim/follow-up continuity without outbound delivery; channel audience and lost-session prompts | `integration/native_claims_test.go` (UPSTREAM); `native_tasks_test.go`, `chat_test.go` |
 | Restart: old attempts removed, authority `recover`, relay grants lost | `integration/service_recovery_test.go`; `rotation_lease.go`; `restartFailsClosed` |
 | Concurrent workspaces; 100-workspace fairness | `examples/identity-mcp/rotation.go`, `inference.go`; `integration/fleet_test.go` |

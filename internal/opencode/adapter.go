@@ -70,7 +70,6 @@ type Adapter struct {
 	// the Multica relay and a workload with a workdir volume.
 	GitRelay *repo.Relay
 	Checkout *repo.Checkout
-	// EnvAllow names the agent custom_env variables attempts receive (ValidEnvAllow).
 	EnvAllow []string
 	// IdleWatchdog fails a run without native events for this long (default 10m, upstream's).
 	IdleWatchdog time.Duration

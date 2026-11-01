@@ -161,6 +161,7 @@ func TestUpstreamLifecycle(t *testing.T) {
 		}
 	})
 	t.Run("project-resources", func(t *testing.T) { projectClaim(t, ctx, api, rt) })
+	t.Run("mcp-library", func(t *testing.T) { mcpLibrary(t, api, rt) })
 	t.Run("restart-reconciliation", func(t *testing.T) {
 		for n, want := range []string{"dispatched", "running"} {
 			id := enqueue(t, rt, 5+n)

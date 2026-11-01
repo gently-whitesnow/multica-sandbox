@@ -30,11 +30,13 @@ func (a *Adapter) mcpModes(connections map[string]Remote) (map[string]bool, map[
 			if known && managed.ManagedMCP(connection.URL) {
 				continue
 			}
-			if !known && a.MCPPublicProxy == nil && !a.Issuer.AnonymousMCP(connection.URL) {
+			// An explicitly approved anonymous endpoint keeps its operator-owned
+			// direct route, including private services, when public egress is enabled.
+			if a.Issuer.AnonymousMCP(connection.URL) {
+				anonymous[name] = true
 				continue
 			}
-			if a.MCPPublicProxy == nil && a.Issuer.AnonymousMCP(connection.URL) {
-				anonymous[name] = true
+			if !known && a.MCPPublicProxy == nil {
 				continue
 			}
 		}
