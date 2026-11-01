@@ -88,6 +88,46 @@ func (f *fixture) do(t *testing.T, method, path, bearer string, body io.Reader, 
 	return resp, string(data)
 }
 
+// Native permissions decide both business and administrative operations; the relay
+// retains credential translation and attempt revocation without a second ACL.
+func TestMulticaPreservesNativeAuthorization(t *testing.T) {
+	var wantStatus, calls atomic.Int32
+	f := newFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if r.Header.Get("Authorization") != "Bearer "+upstreamA {
+			t.Error("native task credential not forwarded")
+		}
+		w.WriteHeader(int(wantStatus.Load()))
+	}, Policy{})
+	opaque := f.issue(t, "attempt-a", upstreamA)
+	for _, tc := range []struct {
+		method, path string
+		status       int
+	}{
+		{"POST", "/api/projects", 201},
+		{"PUT", "/api/issue-workflows/x", 200},
+		{"DELETE", "/api/issues/x", 204},
+		{"POST", "/api/autopilots", 201},
+		{"PUT", "/api/agents/x", 200},
+		{"PATCH", "/api/workspaces/x", 403},
+		{"POST", "/api/tokens", 403},
+		{"GET", "/api/future-native-route", 404},
+	} {
+		wantStatus.Store(int32(tc.status))
+		before := calls.Load()
+		response, _ := f.do(t, tc.method, tc.path, opaque, strings.NewReader("{}"), nil)
+		if response.StatusCode != tc.status || calls.Load() != before+1 {
+			t.Fatalf("%s %s: status=%d calls=%d", tc.method, tc.path, response.StatusCode, calls.Load()-before)
+		}
+	}
+	f.grants.Revoke("attempt-a")
+	before := calls.Load()
+	response, _ := f.do(t, "POST", "/api/projects", opaque, strings.NewReader("{}"), nil)
+	if response.StatusCode != http.StatusUnauthorized || calls.Load() != before {
+		t.Fatal("ended attempt reached Multica")
+	}
+}
+
 func TestTranslatesCredentialToGrantOrigin(t *testing.T) {
 	f := newFixture(t, nil, Policy{})
 	a := f.issue(t, "attempt-a", upstreamA)
@@ -253,7 +293,7 @@ func TestRefusesRedirectsAndWithholdsErrors(t *testing.T) {
 func TestPathPolicyAndRequestForm(t *testing.T) {
 	f := newFixture(t, nil, Policy{})
 	a := f.issue(t, "attempt-a", upstreamA)
-	for _, path := range []string{"/api/tokens", "/api/tokens/", "/api/daemon/tasks/claim", "/api/cli-token", "/api/auth/login", "/ws", "/uploads/x", "/api/issues/../tokens", "/api//tokens", "/api/issues/%2e%2e/tokens", "/api/issues%2F..%2Ftokens", "/api/./tokens"} {
+	for _, path := range []string{"/ws", "/uploads/x", "/api/issues/../tokens", "/api//tokens", "/api/issues/%2e%2e/tokens", "/api/issues%2F..%2Ftokens", "/api/./tokens"} {
 		req, _ := http.NewRequest(http.MethodGet, f.relay.URL, nil)
 		req.URL.Opaque = path
 		req.Header.Set("Authorization", "Bearer "+a)
@@ -432,7 +472,7 @@ func TestRecordsEachOutcomeOnce(t *testing.T) {
 	f.do(t, http.MethodGet, "/api/issues/x", a, nil, nil)
 	f.do(t, http.MethodGet, "/api/issues/redirect", a, nil, nil)
 	f.do(t, http.MethodGet, "/api/issues/x", "mat_unknown", nil, nil)
-	f.do(t, http.MethodGet, "/api/tokens", a, nil, nil)
+	f.do(t, http.MethodGet, "/health", a, nil, nil)
 	mu.Lock()
 	defer mu.Unlock()
 	want := []outcome{{http.StatusTooManyRequests, nil}, {0, ErrRedirect}, {0, ErrCredential}, {0, ErrPolicy}}

@@ -21,7 +21,7 @@ from verified behavior.
   OpenCode over ACP and the MCP relay (0023), the in-house credential relay (0024),
   quality metrics and structured logs (0025).
 - `adrs/0026-multica-072-and-task-capabilities.md`, `0027-provider-neutral-jwt-identity.md`
-  and `0028-auto-host-resources.md`: current upstream, bounded task API,
+  and `0028-auto-host-resources.md`: current upstream, native task API permissions,
   reusable identity sources and automatically sized execution resources.
 - `examples/end-to-end/`: opt-in real Multica/OpenCode/inference lab.
 - `examples/identity-mcp/`: disposable identity and MCP contract fixture.
