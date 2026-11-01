@@ -2,6 +2,7 @@ package pool
 
 import (
 	"errors"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -29,17 +30,75 @@ func TestAutoAdmissionPacesColdStartsAndPreservesHeadroom(t *testing.T) {
 	}
 	// A compiler grows late, after warmup. Its observed working set raises the
 	// estimate, rather than permitting a second equally expensive build.
+	late := now.Add(2 * ColdStartInterval)
 	write(t, a.Pool.Dir, map[string]string{"memory.current": "5368709120"})
-	a.Observe(1)
-	if ok, _ := a.Admit(1, now.Add(2*ColdStartInterval)); ok {
+	a.Observe(1, late)
+	if ok, _ := a.Admit(1, late); ok {
 		t.Fatal("new build without headroom admitted")
 	}
 	write(t, a.Pool.Dir, map[string]string{"memory.current": "1073741824"})
-	if ok, _ := a.Admit(1, now.Add(2*ColdStartInterval)); ok {
+	a.Observe(1, late)
+	if ok, _ := a.Admit(1, late); ok {
 		t.Fatal("observed peak lost when current usage dropped")
 	}
-	if ok, _ := a.Admit(0, now.Add(2*ColdStartInterval)); !ok {
+	if ok, _ := a.Admit(0, late); !ok {
 		t.Fatal("history deadlocked an empty pool")
+	}
+	if ok, reason := a.Admit(1, late.Add(EstimateHalfLife)); !ok {
+		t.Fatal("finished heavy build still limits starts:", reason)
+	}
+}
+
+func TestAutoAdmissionEstimateDecays(t *testing.T) {
+	a := autoPool(t)
+	now := time.Now()
+	for _, c := range []struct {
+		name     string
+		sample   int64
+		age      time.Duration
+		estimate int64
+	}{
+		{"first peak", 4 << 30, 0, 4 << 30},
+		{"lower sample keeps the peak", 1 << 30, 0, 4 << 30},
+		{"one half-life", 1 << 30, EstimateHalfLife, 2 << 30},
+		{"two half-lives", 0, EstimateHalfLife, 1 << 30},
+		{"growth replaces at once", 3 << 30, time.Minute, 3 << 30},
+	} {
+		now = now.Add(c.age)
+		write(t, a.Pool.Dir, map[string]string{"memory.current": strconv.FormatInt(2*c.sample, 10)})
+		a.Observe(2, now)
+		if got := a.observed(now); got != c.estimate {
+			t.Fatalf("%s: estimate %s, want %s", c.name, Size(got), Size(c.estimate))
+		}
+	}
+}
+
+func TestAutoAdmissionFloorFollowsAttemptCeiling(t *testing.T) {
+	for _, c := range []struct {
+		name          string
+		high, ceiling int64
+		floor         int64
+		workingSet    int64
+		admitted      bool
+	}{
+		{"small pool, no ceiling", 8 << 30, 0, 2 << 30, 4 << 30, true},
+		{"small pool, large ceiling", 8 << 30, 6 << 30, 2 << 30, 5 << 30, false},
+		{"small pool, small ceiling", 8 << 30, 1 << 30, 1 << 30, 5 << 30, true},
+		{"tiny pool", 1 << 30, 0, 512 << 20, 0, true},
+		{"large pool, no ceiling", 54 << 30, 0, 4 << 30, 40 << 30, true},
+		{"large pool, ceiling", 54 << 30, 6 << 30, 6 << 30, 40 << 30, true},
+		{"large pool, ceiling without headroom", 54 << 30, 6 << 30, 6 << 30, 42 << 30, false},
+		{"large pool, minimal ceiling", 54 << 30, 64 << 20, 512 << 20, 47 << 30, true},
+	} {
+		a := autoPool(t)
+		a.AttemptMax = c.ceiling
+		write(t, a.Pool.Dir, map[string]string{"memory.high": strconv.FormatInt(c.high, 10), "memory.current": strconv.FormatInt(c.workingSet, 10)})
+		if got := a.floor(c.high); got != c.floor {
+			t.Fatalf("%s: floor %s, want %s", c.name, Size(got), Size(c.floor))
+		}
+		if ok, reason := a.Admit(1, time.Now().Add(ColdStartInterval)); ok != c.admitted {
+			t.Fatalf("%s: admitted %v: %s", c.name, ok, reason)
+		}
 	}
 }
 

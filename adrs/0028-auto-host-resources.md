@@ -28,10 +28,13 @@ filesystem backing Docker and attempt workdirs. It adds to existing PSI admissio
 - Only one cold start per 30-second warmup period while other attempts run. An empty
   pool may immediately start one attempt. The existing 15-second calm cooldown also
   applies after a refusal.
-- New work needs headroom for a conservative build estimate: the largest observed
-  working set per active attempt, at least a quarter of MemoryHigh or 512 MiB, plus
-  25%. Samples continue when all slots are occupied. Estimates reset on restart;
-  cold-start pacing applies again. There is no learned cross-host model.
+- New work needs headroom for a conservative build estimate plus 25%: the peak
+  observed working set per active attempt, halved every 10 minutes after it was last
+  seen, and at least a cold floor. The floor is `pool.attempt_memory_max` (else the
+  legacy 4 GiB attempt limit), at most a quarter of MemoryHigh and at least 512 MiB,
+  so it does not grow with the host. Samples continue when all slots are occupied.
+  Estimates reset on restart; cold-start pacing applies again. There is no learned
+  cross-host model.
 - Claims pause below 10% free space (at least 2 GiB) or 5% free inodes. They resume
   above 15% free space (at least 3 GiB) and 10% free inodes. Unreadable filesystem
   statistics refuse new claims. Root's reserved blocks are not counted as available.
@@ -56,6 +59,6 @@ build can fill the disk. Swap can reduce throughput and does not replace RAM.
 The envelope must include all protected services; deploying additional workloads
 requires rerunning host sizing. Multi-host scheduling remains outside this change.
 
-Tests cover cold bursts, warmup, observed headroom, disk and inode hysteresis,
+Tests cover cold bursts, warmup, decaying observed headroom, the ceiling-based floor, disk and inode hysteresis,
 unreadable mounts, conflicting CPU modes and unchanged legacy defaults. Host
 sizing and real compiler/nested-engine pressure require deployment acceptance.

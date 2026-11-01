@@ -99,6 +99,9 @@ func serveFleet(ctx context.Context, c Config, dir string, api fleetAPI, p *cont
 			workingSet = pool.DefaultMaxWorkingSet
 		}
 		f.autoAdmission = &pool.AutoAdmission{Pool: &pool.Pool{Dir: pc.CgroupDir, MaxPressure: pool.DefaultMaxPressure, MaxWorkingSet: workingSet}, DiskPath: pc.DiskPath}
+		if f.autoAdmission.AttemptMax, err = attemptCeiling(pc, f.autoAdmission.Pool); err != nil {
+			return err
+		}
 	}
 	return f.serve(ctx, c.Concurrency, p.Execute)
 }
@@ -176,7 +179,7 @@ func (f *fleet) serve(ctx context.Context, capacity int, execute func(context.Co
 // starve its peers; unused capacity is never pre-claimed and Multica keeps the queue.
 func (f *fleet) claim(ctx context.Context, capacity int, execute func(context.Context, multica.Task) error) error {
 	if f.autoAdmission != nil {
-		f.autoAdmission.Observe(len(f.active))
+		f.autoAdmission.Observe(len(f.active), f.clock())
 	}
 	claimed := false
 	for len(f.active) < capacity && f.admitted() {
