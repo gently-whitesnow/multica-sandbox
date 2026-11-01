@@ -1,6 +1,6 @@
 name: Images
 # Publishes the controller, the attempt helper (ADR 0015) and the multica CLI artifact
-# at multica.UpstreamRevision (ADR 0014) for one platform, on a native runner. Manual
+# at multica.UpstreamRevision or an explicit compatible CLI commit (ADR 0014). Manual
 # only: run it for the commit a deployment needs and pin the digests from the summary.
 on:
   workflow_dispatch:
@@ -10,6 +10,11 @@ on:
         type: choice
         options: [linux/amd64, linux/arm64]
         default: linux/amd64
+      cli_revision:
+        description: Compatible Multica CLI commit (empty uses the pinned server revision)
+        type: string
+        required: false
+        default: ''
 permissions:
   contents: read
   packages: write
@@ -30,9 +35,15 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - id: upstream
         if: matrix.upstream
+        env:
+          CLI_REVISION: ${{ inputs.cli_revision }}
         run: |
           revision=$(sed -n 's/^const UpstreamRevision = "\([0-9a-f]\{40\}\)"$/\1/p' internal/multica/client.go)
-          test -n "$revision"
+          if [ -n "$CLI_REVISION" ]; then revision=$CLI_REVISION; fi
+          [ "${#revision}" -eq 40 ] && printf '%s' "$revision" | grep -Eq '^[0-9a-f]{40}$' || {
+            echo 'cli_revision must be a full lower-case commit hash' >&2
+            exit 1
+          }
           echo "contexts=multica=https://github.com/multica-ai/multica.git#$revision" >> "$GITHUB_OUTPUT"
           echo "args=REVISION=$revision" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
