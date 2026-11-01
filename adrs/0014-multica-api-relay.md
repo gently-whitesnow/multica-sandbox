@@ -67,6 +67,15 @@ the relay every tool is now allowed, as in native OpenCode; the disposable conta
 its network and the relays are the boundary between attempts. Only `question` and
 `doom_loop`, which would wait for a person, are denied.
 
+Compatible CLI artifacts may advance independently of the pinned server fixture.
+The manual Images workflow accepts an optional full lower-case `cli_revision`;
+empty keeps `multica.UpstreamRevision`. For example, dispatch
+`gh workflow run images.yml -f cli_revision=5a2cc891ac338eed1919aa11a1eef5957cd82cec`
+for native workflow commands. Pin the resulting CLI digest and set
+`opencode.multica_cli_revision` to the same commit. Controller/helper builds and
+the server fixture are unchanged. Verify compatibility against the pinned server
+with `MULTICA_TEST_WORKFLOW_CLI=/absolute/path/to/multica VERIFY_UPSTREAM=1 ./verify.sh`.
+
 ## Consequences
 
 This is a deliberate exception to ADR 0003. Inside the sandbox, the opaque
