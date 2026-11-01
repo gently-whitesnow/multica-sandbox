@@ -93,7 +93,17 @@ func nativeModel(name, api string, m inference.Model, effort string) map[string]
 	if label == "" {
 		label = name
 	}
-	native := map[string]any{"name": label, "limit": map[string]int{"context": m.Context, "output": m.Output}, "variants": variants}
+	native := map[string]any{"name": label, "variants": variants}
+	limits := map[string]int{}
+	if m.Context > 0 {
+		limits["context"] = m.Context
+	}
+	if m.Output > 0 {
+		limits["output"] = m.Output
+	}
+	if len(limits) > 0 {
+		native["limit"] = limits
+	}
 	if m.Thinking != nil {
 		native["reasoning"] = true
 	}

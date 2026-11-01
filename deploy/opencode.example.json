@@ -44,5 +44,6 @@
     "workspace_size": "1g",
     "tmp_size": "256m",
     "shm_size": "64m"
-  }
+  },
+  "compaction_max_tokens": 400000
 }

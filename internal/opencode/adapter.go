@@ -71,6 +71,8 @@ type Adapter struct {
 	EnvAllow []string
 	// IdleWatchdog fails a run without native events for this long (default 10m, upstream's).
 	IdleWatchdog time.Duration
+	// CompactionMaxTokens caps the native auto-compaction trigger; zero keeps native policy.
+	CompactionMaxTokens int
 }
 
 type running struct {

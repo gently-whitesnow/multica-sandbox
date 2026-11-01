@@ -63,12 +63,14 @@ hash. Callers cannot spoof it.
 
 Catalog data is advisory and runtime-scoped: static `catalogs` keyed by
 `workspace_id`, `catalog_external` or `gateway_catalog` (at most one). Entries include `default_model` and a model
-map with context/output preparation metadata, optional `thinking.supported_levels`
+map with optional context/output preparation metadata, `thinking.supported_levels`
 (value/label pairs) and `default_level`, `api` (`chat` default, `responses`,
 `messages`) and advisory `cost` (USD per million: `input`, `output`, `cache_read`).
-These are capabilities, not grants.
+These are capabilities, not grants. Unknown limits are omitted so OpenCode applies
+its native defaults; neither zero limits nor invented numeric caps are projected.
 
-`gateway_catalog: {ttl, default_model}` reads LiteLLM `/v1/model/info` with each
+`gateway_catalog: {format, ttl, default_model}` uses `litellm` format by default,
+reading `/v1/model/info` with each
 workspace's key, so the catalog is exactly what the key may use (up to 512 models).
 Anthropic models get `messages`, OpenAI models `responses`, others `chat`; non-chat
 modes are skipped. Limits, reasoning support and prices come from the gateway;
@@ -77,6 +79,22 @@ deployment parameters are discarded. Reasoning levels are LiteLLM's
 `high`/`max`) plus or minus each `supports_<level>_reasoning_effort` flag, with
 `default_reasoning_effort` as the default. Messages keeps levels with a budget. A catalog is reused for `ttl` (default 5m),
 and a failed refresh keeps the last good one.
+
+`format: cliproxy` joins `/v1/models` with `/v1/models?client_version=` from the
+same gateway and workspace key. The empty query selects CLIProxyAPI's existing
+rich client catalog without pinning a client version. Available IDs and owners
+select the wire API; effective `context_window`, `max_tokens` and reasoning come
+from metadata for that exact ID. Hidden/unsupported entries are omitted. Pool
+aliases are preserved; provider instructions and credentials are never projected.
+No gateway fork, management key or separate catalog service is needed.
+
+`opencode.compaction_max_tokens` optionally caps the native compaction trigger on
+verified OpenCode 2.x (0 keeps native thresholds). OpenCode, not Multica, summarizes
+history. For 1M context and a 400k cap, projection sets `compaction.buffer: 600000`
+while preserving `model.limit.context: 1000000`. Smaller models keep their earlier
+native safety threshold. Unknown context keeps native fallback behavior. This is
+not a hard request/spending quota: a tool result can overshoot; summarization also
+consumes tokens. Positive caps on unverified/1.x images fail startup explicitly.
 
 The model's `api` selects the OpenCode provider and picker prefix:
 `managed-inference/` (`@ai-sdk/openai-compatible`, chat), `inference-codex/`

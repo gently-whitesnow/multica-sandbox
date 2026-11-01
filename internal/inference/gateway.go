@@ -18,7 +18,7 @@ import (
 // gatewayModels bounds a discovered catalog; the Multica picker and OpenCode stay usable.
 const gatewayModels = 512
 
-// gatewayInfoLimit bounds the /v1/model/info response read with a workspace key.
+// gatewayInfoLimit bounds one catalog response read with a workspace key.
 const gatewayInfoLimit = 8 << 20
 
 // effortOrder sorts reasoning levels from LiteLLM; unknown levels follow in name order.
@@ -37,6 +37,7 @@ type gatewayCatalog struct {
 	service *Service
 	ttl     time.Duration
 	model   string
+	format  string
 	mu      sync.Mutex
 	cached  map[Scope]gatewayEntry
 }
@@ -47,6 +48,9 @@ type gatewayEntry struct {
 }
 
 func (s *Service) configureGatewayCatalog(c GatewayCatalog) error {
+	if c.Format != "" && c.Format != "litellm" && c.Format != "cliproxy" {
+		return ErrDenied
+	}
 	ttl := 5 * time.Minute
 	if c.TTL != "" {
 		var err error
@@ -57,7 +61,7 @@ func (s *Service) configureGatewayCatalog(c GatewayCatalog) error {
 	if c.DefaultModel != "" && !validModel(c.DefaultModel) {
 		return ErrDenied
 	}
-	s.gateway = &gatewayCatalog{service: s, ttl: ttl, model: c.DefaultModel, cached: map[Scope]gatewayEntry{}}
+	s.gateway = &gatewayCatalog{service: s, ttl: ttl, model: c.DefaultModel, format: c.Format, cached: map[Scope]gatewayEntry{}}
 	return nil
 }
 
@@ -184,26 +188,27 @@ func (d modelDetails) thinking(api string) *Thinking {
 // thinkingBudgets lists the Messages levels OpenCode maps to extended-thinking budgets.
 var thinkingBudgets = map[string]bool{"low": true, "medium": true, "high": true, "max": true}
 
-// fetch reads /v1/model/info with the workspace key. Only listed fields are kept:
-// deployment parameters such as upstream bases never leave this function.
+// fetch reads only the configured gateway with its workspace key. Parsers keep
+// model metadata, never provider credentials or gateway-supplied instructions.
 func (g *gatewayCatalog) fetch(ctx context.Context, scope Scope) (Catalog, error) {
 	target, err := g.service.Acquire(ctx, scope)
 	if err != nil {
 		return Catalog{}, ErrDenied
 	}
-	req, err := http.NewRequestWithContext(ctx, "GET", target.Gateway+"/v1/model/info", nil)
-	if err != nil {
-		return Catalog{}, ErrDenied
+	if g.format == "cliproxy" {
+		models, err := g.read(ctx, target, "/v1/models")
+		if err != nil {
+			return Catalog{}, err
+		}
+		metadata, err := g.read(ctx, target, "/v1/models?client_version=")
+		if err != nil {
+			return Catalog{}, err
+		}
+		return cliproxyModelsCatalog(models, metadata, g.model)
 	}
-	req.Header.Set("Authorization", "Bearer "+target.Key.Reveal())
-	resp, err := g.service.client.Do(req)
-	if err != nil {
-		return Catalog{}, ErrDenied
-	}
-	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, gatewayInfoLimit+1))
+	data, err := g.read(ctx, target, "/v1/model/info")
 	var info modelInfo
-	if err != nil || resp.StatusCode != 200 || len(data) > gatewayInfoLimit || json.Unmarshal(data, &info) != nil {
+	if err != nil || json.Unmarshal(data, &info) != nil {
 		return Catalog{}, ErrDenied
 	}
 	c := gatewayModelsCatalog(info, g.model)
@@ -211,6 +216,24 @@ func (g *gatewayCatalog) fetch(ctx context.Context, scope Scope) (Catalog, error
 		return Catalog{}, ErrDenied
 	}
 	return c, nil
+}
+
+func (g *gatewayCatalog) read(ctx context.Context, target Target, path string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", target.Gateway+path, nil)
+	if err != nil {
+		return nil, ErrDenied
+	}
+	req.Header.Set("Authorization", "Bearer "+target.Key.Reveal())
+	resp, err := g.service.client.Do(req)
+	if err != nil {
+		return nil, ErrDenied
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(resp.Body, gatewayInfoLimit+1))
+	if err != nil || resp.StatusCode != http.StatusOK || len(data) > gatewayInfoLimit {
+		return nil, ErrDenied
+	}
+	return data, nil
 }
 
 func gatewayModelsCatalog(info modelInfo, defaultModel string) Catalog {
@@ -222,12 +245,6 @@ func gatewayModelsCatalog(info modelInfo, defaultModel string) Catalog {
 			continue
 		}
 		m := Model{API: api, Context: d.Info.Input, Output: d.Info.Output}
-		if m.Context < 1 || m.Context > 10000000 {
-			m.Context = 128000
-		}
-		if m.Output < 1 || m.Output > m.Context {
-			m.Output = min(16384, m.Context)
-		}
 		if d.Info.Reasoning {
 			m.Thinking = d.Info.thinking(api)
 		}
