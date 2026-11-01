@@ -32,6 +32,7 @@ token=$(cat /proc/[0-9]*/environ 2>/dev/null | tr '\0' '\n' | sed -n 's/^MULTICA
 printf '%s' "$token"
 cat /proc/[0-9]*/environ 2>/dev/null | tr '\0' '\n' | grep -qE 'mat_[0-9a-f]{40}([^0-9a-f]|$)' && exit 10
 grep -rqE 'mat_[0-9a-f]{40}([^0-9a-f]|$)' /proc/1/root/workspace /proc/1/root/tmp 2>/dev/null && exit 11
+# Multica's native human-only token endpoint rejects the task actor.
 wget -q -O /dev/null --header "Authorization: Bearer $token" --post-data '{"name":"exfiltrate"}' http://multica-relay:8091/api/tokens 2>&1 | grep -q ' 403 ' || exit 12
 wget -T 2 -q -O /dev/null "http://$1:8080/health" 2>/dev/null && exit 13
 tr '\0' '\n' < /proc/1/environ | grep -qx 'PATH=/opt/multica-sandbox/multica/bin:.*' || exit 14

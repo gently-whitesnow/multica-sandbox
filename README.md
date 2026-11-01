@@ -83,8 +83,9 @@ updates, use one controller per identity, and do not scale this Compose service.
 Never remove the state volume while the controller is active.
 
 Use a dedicated user PAT. It may be a workspace admin for controller operations;
-tasks receive only the explicit member capability surface of ADR 0026 through the
-relay, not the PAT or administrative API access. Add that user to each workspace; the controller discovers
+tasks use Multica's native task-token permissions through the relay (ADR 0026),
+without receiving the controller PAT. At v0.7.2 a task token inherits the runtime
+owner's workspace role, including admin; the sandbox does not downgrade it. Add that user to each workspace; the controller discovers
 membership every 10 seconds and registers a runtime. The runtime owner manually
 sets public visibility in Multica. Public does not share across workspaces.
 An mdt_ token discovers only its bound workspace; registration never sweeps active containers.

@@ -43,11 +43,11 @@ is active. Cleanup revokes it before the agent process is joined, so completion,
 cancellation, renewal failure and controller recovery all end access. A
 controller restart loses every grant and fails closed.
 
-The relay denies credential, session, daemon and account surfaces:
-`/api/daemon`, `/api/tokens`, `/api/cli-token`, `/api/auth`, cloud billing,
-runtime and subscription routes, `/api/integrations`, `/api/plugin-bridge`,
-invitations and share links, plus every non-`/api/` path including `/ws`.
-Re-check this list on each upstream upgrade.
+Refinement (2026-11-01, ADR 0026): the relay forwards all `/api/` methods and
+routes. Multica owns authorization, including administrative and credential
+issuance decisions. Non-API paths, including `/ws`, stay outside this HTTP API
+transport. The former route denylist and method allowlist are removed; Git history
+retains their implementation.
 
 The controller is an approved peer on the execution template network. Attempts
 reach the relay by its alias; Multica itself stays off attempt networks. The
@@ -71,8 +71,10 @@ its network and the relays are the boundary between attempts. Only `question` an
 
 This is a deliberate exception to ADR 0003. Inside the sandbox, the opaque
 credential has the authority of the upstream daemon's agent: the originator user
-and agent across the workspace for the attempt's lifetime, minus the denied
-surfaces. It cannot outlive the attempt or be exchanged for a Multica token.
+and agent across the workspace for the attempt's lifetime. At v0.7.2 the runtime
+owner's workspace role is inherited. The opaque relay grant cannot outlive the
+attempt; credentials returned by native Multica APIs follow Multica's own policy
+and lifetime.
 Abuse of granted operations remains possible, as with upstream. The relay enlarges
 controller responsibility and adds a listener reachable from attempts. Production
 egress policy and TLS on the attempt network remain deployment-owned. Only
@@ -86,8 +88,8 @@ configuration. The pinned integration fixture runs a real claim through the
 Compose controller and the mounted upstream CLI on the Debian and official images,
 neither containing `multica`. It checks the issue read, one agent comment, the CLI
 first on `PATH`, no `mat_` token in agent env, files, controller logs or transcript,
-the `/api/tokens` denial, Multica unreachable from the attempt and ended-credential
-denial. Containers tests cover read-only mounts, shadowing and artifact rejection.
+native credential-issuance refusal, Multica unreachable from the attempt and
+ended-credential denial. Containers tests cover read-only mounts, shadowing and artifact rejection.
 
 ## References
 
