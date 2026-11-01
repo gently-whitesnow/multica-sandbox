@@ -56,7 +56,8 @@ Label values:
 - `event`: `start-rejected`, `message-deferred`, `report-deferred`, `cancelled`,
   `gone`, `settled` or `other`.
 - `relay`: `multica`, `inference`, `git`, `forge` or `mcp`.
-- Relay `error_type`: `policy-denied`, `invalid-credential`, `redirect-refused`,
+- Relay `error_type`: `policy-denied`, `invalid-credential`, `too-many-requests`
+  (a grant's in-flight slots are full; 429 with `Retry-After`), `redirect-refused`,
   `body-limit`, or a transport error (`request-timeout`, `request-canceled`,
   `connection-failed`, `dns-resolve`, `tls-handshake`, `other`).
 - Multica `path`: the request path with every segment outside a fixed word list

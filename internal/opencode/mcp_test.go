@@ -110,6 +110,25 @@ func TestMCPRelayAnonymousSendsNoCredential(t *testing.T) {
 	}
 }
 
+// All MCP connections share the attempt's grant: one beyond its slots is asked to retry.
+func TestMCPRelayFullGrantAsksToRetry(t *testing.T) {
+	m, _, opaque, _, front := mcpRelayFixture(t)
+	req := httptest.NewRequest(http.MethodPost, "/docs", nil)
+	req.Header.Set("Authorization", "Bearer "+opaque)
+	for {
+		lease, ok := m.Authorize(req)
+		if !ok {
+			break
+		}
+		defer lease.Release()
+	}
+	resp := mcpRequest(t, http.MethodPost, front.URL+"/docs", opaque)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusTooManyRequests || resp.Header.Get("Retry-After") == "" {
+		t.Fatalf("full MCP grant answered %d", resp.StatusCode)
+	}
+}
+
 func TestMCPRelayDiscardsCallerQuery(t *testing.T) {
 	_, _, opaque, upstream, front := mcpRelayFixture(t)
 	for _, query := range []string{"?tenant=other", "?codemode=false", "?"} {

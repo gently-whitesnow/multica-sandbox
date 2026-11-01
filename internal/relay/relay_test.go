@@ -362,6 +362,50 @@ func TestStreamsAndRevocationCancelsInflight(t *testing.T) {
 	}
 }
 
+// One grant serves all of an attempt's connections: a request beyond its slots is told
+// to retry, not that its credential is invalid.
+func TestFullGrantAnswersTooManyRequests(t *testing.T) {
+	var mu sync.Mutex
+	var errs []error
+	record := func(_ *http.Request, _ int, err error, _ time.Duration) {
+		mu.Lock()
+		defer mu.Unlock()
+		errs = append(errs, err)
+	}
+	f := newFixture(t, nil, Policy{Allow: multica.RelayPath, Limit: 1024, Record: record})
+	a := f.issue(t, "attempt-a", upstreamA)
+	req := httptest.NewRequest(http.MethodGet, "/api/issues/x", nil)
+	req.Header.Set("Authorization", "Bearer "+a)
+	var leases []Lease
+	for range inflight {
+		lease, ok := f.grants.Authorize(req)
+		if !ok {
+			t.Fatal("free slot refused")
+		}
+		leases = append(leases, lease)
+	}
+	if lease, ok := f.grants.Authorize(req); ok || !lease.Busy {
+		t.Fatal("full grant not reported busy")
+	}
+	resp, body := f.do(t, http.MethodGet, "/api/issues/x", a, nil, nil)
+	if resp.StatusCode != http.StatusTooManyRequests || resp.Header.Get("Retry-After") != "1" || !strings.Contains(body, ErrBusy.Error()) {
+		t.Fatalf("full grant: %d %q %s", resp.StatusCode, resp.Header.Get("Retry-After"), body)
+	}
+	if resp, _ := f.do(t, http.MethodGet, "/api/issues/x", prefix+strings.Repeat("0", 64), nil, nil); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unknown credential: %d", resp.StatusCode)
+	}
+	leases[0].Release()
+	if resp, _ := f.do(t, http.MethodGet, "/api/issues/x", a, nil, nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("released slot not reused: %d", resp.StatusCode)
+	}
+	<-f.seen
+	mu.Lock()
+	defer mu.Unlock()
+	if len(errs) != 3 || !errors.Is(errs[0], ErrBusy) || !errors.Is(errs[1], ErrCredential) || errs[2] != nil {
+		t.Fatalf("recorded %v", errs)
+	}
+}
+
 // resolver adds a per-request upstream to credential-less grants, as the Git relay does.
 type resolver struct {
 	grants *Grants
