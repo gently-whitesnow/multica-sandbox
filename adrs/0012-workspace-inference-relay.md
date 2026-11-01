@@ -1,130 +1,101 @@
-# ADR 0012: Workspace inference keys through the controller relay
+# ADR 0012: Workspace inference and gateway metadata
 
-Status: Accepted
-Date: 2026-10-04; rewritten 2026-10-06 (#36)
+Status: Accepted; refined 2026-11-01.
+Date: 2026-10-05
 
 ## Context
 
-Agent CLIs call inference over native HTTP, independently of MCP. Corporate
-gateways such as LiteLLM grant models, budgets and limits to long-lived virtual
-keys. Neither those keys nor provider credentials may enter the task sandbox.
-The first prototype issued controller-renewed inference JWTs per agent to a
-JWT-verifying gateway. That required a gateway custom-auth hook, an OpenCode auth
-plugin and a token renewal loop. It also scoped access per agent, while Multica
-discovers and caches model catalogs per runtime, which is one per workspace (#29).
-Nobody uses the product yet.
+Inference gateways own provider connections, available models and budgets. The
+sandbox must use the workspace's gateway key without exposing it to agents.
+Multica discovers models per runtime, which is registered per workspace.
+
+The early per-agent inference JWT prototype duplicated gateway authorization.
+The subsequent static catalog invented 128k context and 16k output limits. These
+values affect real OpenCode preparation and compaction, not only display labels.
 
 ## Decision
 
-The inference principal is the **workspace**. Model access, budgets and limits
-belong to the workspace's gateway key and stay in LiteLLM or the gateway. The
-controller neither stores keys in a vault nor routes providers.
+The inference principal is the workspace. Model access, budgets and provider
+routing belong to the gateway. The controller neither runs a provider router nor
+implements a second inference authorization service.
 
-There is one path: the embedded relay from ADR 0014 (`internal/relay`), enabled by
-`opencode.inference_file` together with `opencode.inference_relay`. A binding maps
-a workspace to an approved gateway origin and its key:
+Enable the shared credential relay with `opencode.inference_file` and
+`opencode.inference_relay`. Resolve the gateway origin and key from a static
+workspace binding, an authenticated external resolver, or workspace Multica env
+(ADR 0022). The controller supplies its Multica origin; callers cannot change
+workspace scope, upstream or key. Keys are controller-only, redacted values.
+A rotated key applies to new attempts; running grants keep their original key.
 
-- static: `workspace_id` → `gateway` + controller-only `key_file`, re-read for
-  each new attempt;
-- external: an authenticated resolver receives
-  `{version: 1, workspace: {server, workspace_id}}` and returns the echoed
-  `workspace` and `target: {gateway, key}`.
+Each attempt receives an opaque `inf_relay_` credential. OpenCode uses the relay
+URL and that credential; the relay substitutes the real key for the configured
+gateway. It forwards only chat completions, Responses, Messages and token counting.
+Caller credentials and attribution are stripped. Trusted workspace/agent/task
+attribution is derived from the claim. Native provider errors retain their HTTP
+status but withhold bodies, headers and trailers that may contain credentials.
+Cleanup or controller restart revokes the grant and cancels in-flight requests.
+The gateway stays off attempt networks.
 
-`server` comes from controller configuration and `workspace_id` from the claim.
-Agent IDs, URLs, headers and request bodies never select the upstream or the key.
-Gateways are checked for URL shape, not against an allow-list (ADR 0022, which
-also adds the workspace's Multica env as a source). Keys are a redacted type
-that never formats, marshals or logs.
+Trusted claim model and thinking selections map to OpenCode's native providers:
+chat to `managed-inference`, Responses to `inference-codex`, Messages to
+`inference-claude`. Native APIs retain provider caching/reasoning. Only the
+selected model is projected. An explicit safe model absent from discovery still
+reaches the gateway, which decides whether the key may use it; catalog data is
+preparation metadata, not permission.
 
-At attempt start, the adapter resolves the binding and issues one opaque
-`inf_relay_<64 hex>` credential bound to the gateway origin, the key and trusted
-attribution. OpenCode receives it as the managed provider's `apiKey`, with
-`baseURL` set to the relay's peer alias plus `/v1`. Nothing rotates. Cleanup revokes
-the grant before the agent process is joined, which cancels in-flight streams.
-A controller restart loses every grant and fails closed. A changed key applies to
-new attempts only.
+Use at most one catalog source: static `catalogs`, `catalog_external`, or
+`gateway_catalog`. Static values are explicit operator overrides. Context/output
+are optional; absent values are omitted from OpenCode configuration rather than
+inventing numbers or sending zeros that disable native compaction. OpenCode owns
+the fallback for unknown metadata.
 
-The inference relay forwards only `/v1/chat/completions`, `/v1/responses`,
-`/v1/messages` and `/v1/messages/count_tokens` and waits up to the
-adapter's 10-minute idle bound for response headers. It keeps SSE flushing and the
-shared body, in-flight and redirect limits. The opaque credential arrives as a bearer
-token or, from Anthropic clients, as `X-Api-Key`. It replaces `Authorization`, removes
-`X-Api-Key`/`Api-Key` and removes
-every caller `x-litellm-*` header. It strips
-`x-litellm-*` response headers, which carry spend and provider details. Upstream
-error bodies are replaced by a fixed JSON body with the same status, so key
-fragments in gateway errors do not reach the workload. The Multica relay keeps
-passing API errors through.
+Gateway discovery uses the same workspace key, caches results for a TTL and
+retains the last good catalog when refresh fails:
 
-**Trusted attribution.** The relay sets `X-Litellm-End-User-Id:
-<workspace_id>/<agent_id>/<task_id>` from the claim. LiteLLM reads its standard
-customer headers before the body `user`, `litellm_metadata.user` and
-`metadata.user_id` fields. It checks `x-litellm-customer-id` first, which the
-relay strips together with other caller `x-litellm-*` headers. LiteLLM records the
-value as `end_user` (`LiteLLM_EndUserTable`, `LiteLLM_DailyEndUserSpend`, spend
-logs), next to the workspace key hash. Callers cannot spoof it.
+- `format: litellm` (default) reads `/v1/model/info`. Native provider identity,
+  limits, reasoning levels and prices are mapped; deployment parameters are not.
+- `format: cliproxy` joins `/v1/models` with `/v1/models?client_version=`.
+  The empty query selects CLIProxyAPI's existing rich client response. Match exact
+  IDs, preserving pool aliases. Ordinary ownership selects the wire API; rich
+  `context_window`, `max_tokens` and reasoning supply effective preparation
+  metadata. Skip hidden/unsupported entries and discard provider instructions.
 
-Model selection is unchanged from #30/#34: trusted claim `agent.model` /
-`agent.thinking_level` map to the native model and `reasoningEffort` variant.
-Catalogs stay advisory and workspace-scoped (`catalogs[].workspace_id`), so the
-Multica picker lists what the workspace key may use. Native APIs keep provider
-prompt caching and reasoning state between turns, which chat completions lose:
-a model's `api` (`chat`, `responses`, `messages`) selects the OpenCode provider
-(`managed-inference` with `@ai-sdk/openai-compatible`, `inference-codex` with
-`@ai-sdk/openai`, `inference-claude` with `@ai-sdk/anthropic`) and so the picker ID
-prefix. Only the selected model is projected. `gateway_catalog` reads LiteLLM
-`/v1/model/info` with the workspace key (Anthropic models use Messages, OpenAI
-models Responses) and caches it for a TTL. The gateway refuses ungranted
-models or exhausted budgets. Multica shows the numeric status without model
-substitution.
+Neither format requires a management key, gateway fork or separate model registry.
+A catalog outage does not invalidate an explicit selection or inference binding.
+Gateway discovery returns at most 512 entries; static overrides retain their
+existing bound. These bounds keep discovery usable rather than granting models.
+
+OpenCode performs compaction. Optional `opencode.compaction_max_tokens` uses its
+native buffer to cap the trigger while preserving true model metadata and earlier
+small-model thresholds. The deployment defaults to 400k; 0 keeps native behavior.
+This requires verified 2.x semantics and is not a spending/request quota. Tool
+output can overshoot and summarization consumes tokens. Older images reject a
+positive cap rather than silently ignoring it.
 
 ## Consequences
 
-The controller holds workspace keys in memory during attempts and is the only
-inference egress for workloads. It is an approved peer on attempt networks, and
-the gateway stays off them. Production egress policy and TLS remain
-deployment-owned. Keycloak and attempt leases remain for MCP (ADR 0011) only.
-Per-agent inference grants are not expressible; a deployment that needs them
-must split agents across workspaces.
+New gateway models and changed limits no longer require a per-model deployment
+edit. The provider/gateway registry owns capabilities. Pool aliases remain exact
+so two subscriptions are not silently substituted. Unknown metadata uses native
+OpenCode behavior, which can differ between verified releases.
 
-Removed without compatibility: controller-issued inference JWTs and renewal,
-`inference_url` attempt grants, the OpenCode auth plugin, `inference-token.json`,
-the `auth.json` marker and their projection paths, the separate inference
-identity file and the JWT/Keycloak/custom-auth fixtures.
+The controller still holds the gateway key and requires trusted origins and
+network placement. Catalog metadata cannot grant model access or establish an
+accurate billing report. Gateway auth-stage refusals may not be attributed to a
+specific end user. Native retries and HTTP status reporting remain unchanged.
 
-Verified at Multica v0.5.2 (first at `b4ca5b4`) with LiteLLM v1.104.0
-(Postgres-backed virtual keys) and OpenCode 1.18.34 and 1.18.35:
+**Verification.**
 
-- unit: cross-workspace grants, ended, forged and upstream credentials, restart,
-  caller attribution stripping, error and header withholding, SSE flushing and
-  revocation of in-flight streams, key re-read and redaction;
-- `VERIFY_INFERENCE=1`: native OpenCode through the relay to real LiteLLM. It
-  covers two workspaces with distinct keys and spoofing through headers and body.
-  Another workspace's credential is refused a model only this workspace's key
-  grants. Upstream, master, provider, forged and ended credentials are denied.
-  Keys stay out of attempt env and files, and LiteLLM is unreachable from the
-  attempt. A key change to a zero-budget key yields HTTP 422 for new attempts
-  while the running one continues. Revocation ends both relay and gateway streams.
-  An explicit model absent from the catalog is forwarded; an ungranted model
-  fails with HTTP 403;
-- `VERIFY_SERVICE=1 VERIFY_OPENCODE=1 VERIFY_INFERENCE=1`: a real Multica claim
-  through the Compose controller, the upstream CLI and LiteLLM. It also covers
-  usage attribution, key absence from logs, transcript, comments and results,
-  runtime discovery with model/reasoning selection, HTTP 403/422 refusals and a
-  controller restart that revokes a live grant.
-
-LiteLLM does not record auth-stage refusals (ungranted model, exhausted budget
-before a call) per end user. Fixtures check that no other model was attributed.
-Model entries in upstream discovery still lack context/output metadata, and
-agent-specific pickers would need upstream request/cache/UI scoping. Neither is
-needed now (#29).
+Unit contracts cover catalog scoping, cache/outage behavior, malformed and partial
+metadata, redirects, hidden models, exact aliases and discarded instructions.
+Native OpenCode/LiteLLM fixtures cover workspace-key isolation, unknown explicit
+models, quota refusals, usage attribution, missing limits and grant revocation.
+No provider credentials or paid generation are needed by deterministic fixtures.
+Actual deployment acceptance checks gateway metadata and configured role models
+without modifying owner business tasks.
 
 ## References
 
-- [Claim assembly](https://github.com/multica-ai/multica/blob/d45aba1cd7582bef9210b921bbb7dc198b48e1ee/server/internal/handler/daemon.go)
-- [Discovery requests and model entries](https://github.com/multica-ai/multica/blob/d45aba1cd7582bef9210b921bbb7dc198b48e1ee/server/internal/handler/runtime_models.go)
-- [Runtime catalog cache](https://github.com/multica-ai/multica/blob/d45aba1cd7582bef9210b921bbb7dc198b48e1ee/server/internal/handler/runtime_model_catalog.go)
-- [OpenCode selection mapping](https://github.com/multica-ai/multica/blob/d45aba1cd7582bef9210b921bbb7dc198b48e1ee/server/pkg/agent/opencode.go)
-- [OpenAI-compatible effort option](https://github.com/vercel/ai/blob/%40ai-sdk%2Fopenai-compatible%402.0.41/packages/openai-compatible/src/chat/openai-compatible-chat-options.ts)
+- [CLIProxyAPI catalog selection](https://github.com/router-for-me/CLIProxyAPI/blob/ef9e71201e0ca72b03a540d9b6e0862f8c053347/sdk/api/handlers/openai/openai_handlers.go)
+- [OpenCode native model defaults](https://github.com/anomalyco/opencode/blob/v2.2.2/packages/schema/src/model.ts)
 - [LiteLLM virtual keys](https://docs.litellm.ai/docs/proxy/virtual_keys)
-- [LiteLLM customer/end-user tracking](https://docs.litellm.ai/docs/proxy/users)
+- `internal/inference`, `internal/opencode/selection.go`, `scripts/test-inference.sh`

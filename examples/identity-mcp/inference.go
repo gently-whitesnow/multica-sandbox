@@ -171,11 +171,23 @@ func (f *inferenceFixture) probe(ctx context.Context) (string, error) {
 	var config struct {
 		Provider map[string]struct {
 			Options map[string]string `json:"options"`
+			Models  map[string]struct {
+				Limit struct {
+					Context int `json:"context"`
+				} `json:"limit"`
+			} `json:"models"`
 		} `json:"provider"`
+		Compaction struct {
+			Auto   bool `json:"auto"`
+			Buffer int  `json:"buffer"`
+		} `json:"compaction"`
 	}
 	raw, err := exec.CommandContext(ctx, "docker", "exec", container, "cat", "/workspace/opencode.json").Output()
 	if err != nil || json.Unmarshal(raw, &config) != nil {
 		return "", fmt.Errorf("attempt configuration unreadable")
+	}
+	if !config.Compaction.Auto || config.Compaction.Buffer != 600000 || config.Provider["managed-inference"].Models["fixture"].Limit.Context != 1000000 {
+		return "", fmt.Errorf("native compaction cap or accurate model window missing")
 	}
 	opaque := config.Provider["managed-inference"].Options["apiKey"]
 	if !strings.HasPrefix(opaque, inference.RelayPrefix) {
@@ -208,7 +220,7 @@ func inferenceScenario() error {
 	if err = errors.Join(f.bind(inferenceWorkspaces[0], "a"), f.bind(inferenceWorkspaces[1], "b")); err != nil {
 		return err
 	}
-	catalog := inference.Catalog{DefaultModel: "fixture", Models: map[string]inference.Model{"fixture": {Label: "Fixture", Context: 64000, Output: 4096, Thinking: &inference.Thinking{DefaultLevel: "medium", SupportedLevels: []inference.ThinkingLevel{{Value: "medium", Label: "Medium"}, {Value: "high", Label: "High"}}}}}}
+	catalog := inference.Catalog{DefaultModel: "fixture", Models: map[string]inference.Model{"fixture": {Label: "Fixture", Context: 1000000, Output: 128000, Thinking: &inference.Thinking{DefaultLevel: "medium", SupportedLevels: []inference.ThinkingLevel{{Value: "medium", Label: "Medium"}, {Value: "high", Label: "High"}}}}}}
 	config := inference.Config{Version: 1, AllowHTTP: true}
 	for _, ws := range inferenceWorkspaces {
 		config.Bindings = append(config.Bindings, inference.Binding{WorkspaceID: ws, Gateway: gatewayOrigin, KeyFile: filepath.Join("/tmp/keys", ws)})
@@ -238,7 +250,7 @@ func inferenceScenario() error {
 	if err = authority.Apply(ctx, attempt.Grant{Controller: f.owner, Action: "recover"}); err != nil {
 		return err
 	}
-	f.adapter = &opencode.Adapter{Server: fixtureServer, Controller: f.owner, Issuer: noMCP{}, Authority: authority, Status: f.states, Workloads: backend, Inference: source, InferenceRelay: grants, InferenceRelayURL: "http://inference-relay:8092"}
+	f.adapter = &opencode.Adapter{Server: fixtureServer, Controller: f.owner, Issuer: noMCP{}, Authority: authority, Status: f.states, Workloads: backend, Inference: source, InferenceRelay: grants, InferenceRelayURL: "http://inference-relay:8092", CompactionMaxTokens: 400000}
 	if err = f.workspaceTasks(ctx); err != nil {
 		return err
 	}

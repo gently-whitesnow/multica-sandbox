@@ -117,6 +117,9 @@ func openCodeAdapter(ctx context.Context, c Config, stateDir string, api *multic
 
 func newOpenCodeAdapter(ctx context.Context, c Config, stateDir string, api *multica.Client, backend *docker.Backend) (*opencode.Adapter, *docker.Projected, error) {
 	log := c.logger()
+	if err := c.OpenCode.validateCompaction(); err != nil {
+		return nil, nil, err
+	}
 	publicProxy, err := opencode.ParseMCPPublicProxy(c.OpenCode.MCPPublicProxy)
 	if err != nil {
 		return nil, nil, err
@@ -190,6 +193,9 @@ func newOpenCodeAdapter(ctx context.Context, c Config, stateDir string, api *mul
 	if err = opencode.CheckImageRevision(report, revision, git); err != nil {
 		return nil, nil, err
 	}
+	if err = opencode.CheckCompactionImage(report, c.OpenCode.CompactionMaxTokens); err != nil {
+		return nil, nil, err
+	}
 	if workloads.Runtime == docker.Sysbox {
 		if err = opencode.CheckEngine(report); err != nil {
 			return nil, nil, err
@@ -208,7 +214,7 @@ func newOpenCodeAdapter(ctx context.Context, c Config, stateDir string, api *mul
 	if err = workloads.ValidateNetwork(ctx); err != nil {
 		return nil, nil, err
 	}
-	adapter := &opencode.Adapter{Server: strings.TrimRight(c.Server, "/"), Controller: c.Daemon, Issuer: issuer, Authority: authority, Status: api, Reporter: api, Workloads: workloads, Command: c.Command, EnvAllow: c.OpenCode.EnvAllow, IdleWatchdog: watchdog, MCPPublicProxy: publicProxy}
+	adapter := &opencode.Adapter{Server: strings.TrimRight(c.Server, "/"), Controller: c.Daemon, Issuer: issuer, Authority: authority, Status: api, Reporter: api, Workloads: workloads, Command: c.Command, EnvAllow: c.OpenCode.EnvAllow, IdleWatchdog: watchdog, MCPPublicProxy: publicProxy, CompactionMaxTokens: c.OpenCode.CompactionMaxTokens}
 	if issuer != nil || publicProxy != nil {
 		adapter.MCPRelay = opencode.NewMCPRelay()
 		policy := relay.Policy{Allow: opencode.MCPRelayPath, Reserved: opencode.MCPReservedHeaders, HeaderTimeout: opencode.MCPHeaderTimeout}
