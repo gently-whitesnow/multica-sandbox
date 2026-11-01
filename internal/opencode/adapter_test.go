@@ -209,6 +209,31 @@ func TestStatusGateRidesOutTransientErrorsWithinLease(t *testing.T) {
 	}
 }
 
+// Once the controller feeds the status, the adapter stops polling and follows it.
+func TestFedStatusReplacesThePoll(t *testing.T) {
+	status := &scriptedStatus{state: "running"}
+	a := Adapter{Issuer: &stubIssuer{}, MCPRelay: NewMCPRelay(), Authority: &stubAuthority{}, Workloads: &stubWorkload{}, Status: status}
+	run, err := a.Start(context.Background(), safeTask())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer run.Remove(context.Background())
+	fed := run.(interface{ TaskStatus(string, error) })
+	for range 25 {
+		fed.TaskStatus("running", nil)
+		time.Sleep(100 * time.Millisecond)
+	}
+	if polls := status.polls(); polls != 1 {
+		t.Fatalf("adapter polled %d times beside the controller", polls)
+	}
+	fed.TaskStatus("cancelled", nil)
+	wait, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := run.Wait(wait); !errors.Is(err, ErrDenied) {
+		t.Fatalf("fed cancellation did not stop renewal: %v", err)
+	}
+}
+
 func TestInitialDenialNeverStartsWorkload(t *testing.T) {
 	workload := &stubWorkload{}
 	authority := &stubAuthority{deny: true}

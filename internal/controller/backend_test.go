@@ -242,3 +242,40 @@ func TestOnlyStandaloneAttemptsHeartbeat(t *testing.T) {
 		}
 	}
 }
+
+// fedRun records the status polls the controller passes to it.
+type fedRun struct {
+	*testBackend
+	fed []string
+}
+
+func (r *fedRun) TaskStatus(status string, err error) { r.fed = append(r.fed, status) }
+
+// One status request per tick serves both the controller and the run's renewal gate.
+func TestStatusPollFeedsTheRun(t *testing.T) {
+	events := []string{}
+	run := &fedRun{testBackend: &testBackend{events: &events, running: true}}
+	p := Probe{API: lifecycleAPI{events: &events, status: "running"}, Duration: time.Second, Launch: func(context.Context, multica.Task) (execution.Run, error) {
+		return run, nil
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	ticks := make(chan time.Time)
+	go func() {
+		for range 3 {
+			ticks <- time.Now()
+		}
+		cancel()
+	}()
+	if err := p.execute(ctx, multica.Task{ID: id}, ticks, false); !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+	polls := 0
+	for _, event := range events {
+		if event == "status" {
+			polls++
+		}
+	}
+	if polls != 3 || !reflect.DeepEqual(run.fed, []string{"running", "running", "running"}) {
+		t.Fatalf("polls=%d fed=%v", polls, run.fed)
+	}
+}

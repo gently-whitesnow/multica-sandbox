@@ -83,9 +83,11 @@ type running struct {
 	public    map[string]bool
 	workload  execution.ProjectedRun
 	// mu guards tokens, which the MCP relay reads while the renewal loop replaces them,
-	// and confirmed, when Multica last reported the task running.
+	// and the task status: confirmed is when Multica last reported it running, ended
+	// a final answer, fed that the controller's poll replaced the adapter's own.
 	mu           sync.Mutex
 	confirmed    time.Time
+	ended, fed   bool
 	tokens       map[string]identity.AccessToken
 	httpServices map[string]identity.HTTPService
 	httpTokens   map[string]identity.AccessToken
@@ -294,17 +296,42 @@ func (r *running) grant(action string) attempt.Grant {
 	return attempt.Grant{Controller: r.adapter.Controller, Attempt: r.task.AttemptKey(), Server: r.adapter.Server, Workspace: r.task.WorkspaceID, Agent: r.task.AgentID, Task: r.task.ID, Action: action}
 }
 
-// confirm gates renewal on Multica reporting the task running (ADR 0011). Like the
-// controller it rides out transient status errors, but only within the attempt lease;
-// denial, absence and any other state end renewal at once.
-func (r *running) confirm(ctx context.Context) error {
-	status, err := r.adapter.Status.Status(ctx, r.task.ID)
+// TaskStatus takes the controller's poll of the task status in place of the adapter's
+// own, so one poller serves the attempt.
+func (r *running) TaskStatus(status string, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.fed = true
+	r.observe(status, err)
+}
+
+// observe records a status answer; the caller holds mu.
+func (r *running) observe(status string, err error) {
 	switch {
 	case err == nil && status == "running":
 		r.confirmed = time.Now()
-	case !multica.Transient(err) || time.Since(r.confirmed) > attemptLease:
+	case !multica.Transient(err):
+		r.ended = true
+	}
+}
+
+// confirm gates renewal on Multica reporting the task running (ADR 0011). Like the
+// controller it rides out transient status errors, but only within the attempt lease;
+// denial, absence and any other state end renewal at once. It polls only until the
+// controller feeds it.
+func (r *running) confirm(ctx context.Context) error {
+	r.mu.Lock()
+	fed := r.fed
+	r.mu.Unlock()
+	if !fed {
+		status, err := r.adapter.Status.Status(ctx, r.task.ID)
+		r.mu.Lock()
+		r.observe(status, err)
+		r.mu.Unlock()
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.ended || time.Since(r.confirmed) > attemptLease {
 		return fmt.Errorf("task status: %w", ErrDenied)
 	}
 	return nil
