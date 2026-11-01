@@ -123,7 +123,8 @@ func (b *Backend) name(attempt string) string {
 }
 func (b *Backend) Start(ctx context.Context, attempt string) (execution.Run, error) {
 	if err := b.Validate(ctx); err != nil {
-		return nil, err
+		// Nothing exists yet: only this task fails.
+		return nil, &execution.RejectedError{Err: err}
 	}
 	r := &run{name: b.name(attempt)}
 	if _, err := command(ctx, b.createArgs(r.name, probeResources)...); err != nil {

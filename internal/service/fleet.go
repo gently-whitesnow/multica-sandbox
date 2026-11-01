@@ -281,6 +281,10 @@ func (f *fleet) tolerate(stage string, err error, attrs ...any) error {
 	return nil
 }
 
+// completed stops the controller only for an attempt that may leave host state behind:
+// a failed cleanup, a backend error (start failures join raw cleanup errors) or a task
+// left running in Multica. Restart reconciles resources and recovers orphans (ADR 0006).
+// Rejected tasks never arrive here: they are reported as failures.
 func (f *fleet) completed(done completion) error {
 	if done.err == nil || done.err == context.Canceled {
 		return nil
@@ -292,9 +296,9 @@ func (f *fleet) completed(done completion) error {
 	if f.tolerate("attempt", done.err, "runtime", done.runtime) == nil {
 		return nil
 	}
-	// A refused task, for example one deleted between claim and start, ends only its
-	// attempt; a revoked runtime is removed by its heartbeat (beat).
-	if inaccessible(done.err) {
+	// A task refused or settled elsewhere, for example deleted between claim and start,
+	// ends only its attempt; a revoked runtime is removed by its heartbeat (beat).
+	if inaccessible(done.err) || multica.Conflict(done.err) {
 		f.log.Warn("attempt ended", "runtime", done.runtime, "error", done.err.Error())
 		return nil
 	}

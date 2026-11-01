@@ -228,7 +228,7 @@ func TestRefusedTaskEndsOnlyItsAttempt(t *testing.T) {
 	f := newFleet(t, &fleetFake{})
 	f.ready["ws"] = "rt"
 	peer := f.attempt("peer", "rt")
-	for _, status := range []int{403, 404} {
+	for _, status := range []int{403, 404, 409} {
 		// For example the task was deleted between claim and start.
 		denied := &multica.HTTPError{Status: status}
 		if err := f.completed(completion{"attempt", "rt", denied}); err != nil || f.ready["ws"] != "rt" || peer.Err() != nil {
@@ -238,6 +238,10 @@ func TestRefusedTaskEndsOnlyItsAttempt(t *testing.T) {
 		if f.completed(completion{"attempt", "rt", err}) == nil {
 			t.Fatal("ignored failed cleanup")
 		}
+	}
+	// A backend start error may join a failed removal and leaves the task running in Multica.
+	if f.completed(completion{"attempt", "rt", errors.New("docker start failed")}) == nil {
+		t.Fatal("backend failure with uncertain host state ignored")
 	}
 }
 

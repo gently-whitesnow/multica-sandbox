@@ -121,35 +121,11 @@ func (b *Projected) ValidateNetwork(ctx context.Context) error {
 }
 
 // Start creates an attempt; a Workdir with a conversation asks for its retained session volume.
+// Failures before the attempt network exists leave no resources and reject only the task.
 func (b *Projected) Start(ctx context.Context, attempt string, w execution.Workdir) (execution.ProjectedRun, error) {
-	bundles, path, err := b.prepare(ctx)
+	bundles, path, err := b.admit(ctx)
 	if err != nil {
-		return nil, err
-	}
-	if err := b.ValidateNetwork(ctx); err != nil {
-		return nil, err
-	}
-	if b.Helper != "" {
-		targets := []string{b.Forward}
-		if b.ForgeForward != "" {
-			targets = append(targets, b.ForgeForward)
-		}
-		for _, target := range targets {
-			if _, port, err := net.SplitHostPort(target); err != nil || port == "" || strings.ContainsAny(target, " \t\r\n") {
-				return nil, fmt.Errorf("helper forward targets must be host:port")
-			}
-		}
-	}
-	if (b.ForgeForward == "") != (len(b.ForgeHosts) == 0) || (b.ForgeForward != "" && b.Helper == "") {
-		return nil, fmt.Errorf("forge hosts and forward target require each other and the helper")
-	}
-	for _, name := range b.ForgeHosts {
-		if !hostPattern.MatchString(name) {
-			return nil, fmt.Errorf("invalid forge host name")
-		}
-	}
-	if b.Runtime == Sysbox && b.Helper == "" {
-		return nil, fmt.Errorf("sysbox attempts require the helper")
+		return nil, &execution.RejectedError{Err: err}
 	}
 	r := &run{name: b.name(attempt)}
 	isolated, err := b.isolate(ctx, r.name+"-net")
@@ -215,6 +191,40 @@ func (b *Projected) Start(ctx context.Context, attempt string, w execution.Workd
 		}
 	}
 	return projection, nil
+}
+
+// admit checks the host, images, template network and configuration; it creates nothing.
+func (b *Projected) admit(ctx context.Context) ([]string, string, error) {
+	bundles, path, err := b.prepare(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	if err := b.ValidateNetwork(ctx); err != nil {
+		return nil, "", err
+	}
+	if b.Helper != "" {
+		targets := []string{b.Forward}
+		if b.ForgeForward != "" {
+			targets = append(targets, b.ForgeForward)
+		}
+		for _, target := range targets {
+			if _, port, err := net.SplitHostPort(target); err != nil || port == "" || strings.ContainsAny(target, " \t\r\n") {
+				return nil, "", fmt.Errorf("helper forward targets must be host:port")
+			}
+		}
+	}
+	if (b.ForgeForward == "") != (len(b.ForgeHosts) == 0) || (b.ForgeForward != "" && b.Helper == "") {
+		return nil, "", fmt.Errorf("forge hosts and forward target require each other and the helper")
+	}
+	for _, name := range b.ForgeHosts {
+		if !hostPattern.MatchString(name) {
+			return nil, "", fmt.Errorf("invalid forge host name")
+		}
+	}
+	if b.Runtime == Sysbox && b.Helper == "" {
+		return nil, "", fmt.Errorf("sysbox attempts require the helper")
+	}
+	return bundles, path, nil
 }
 
 // errEngine marks a nested engine that did not become ready: the task is rejected.

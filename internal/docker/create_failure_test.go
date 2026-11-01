@@ -109,3 +109,33 @@ exit 2
 		}
 	}
 }
+
+// A daemon failure before the attempt network exists rejects only the task.
+func TestDaemonFailureBeforeResourcesIsRejected(t *testing.T) {
+	for _, failing := range []string{"info", "image", "network inspect"} {
+		dir := t.TempDir()
+		t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+		t.Setenv("DOCKER_TEST_EVENTS", filepath.Join(dir, "events"))
+		t.Setenv("DOCKER_TEST_FAIL", failing)
+		script := `#!/bin/sh
+printf '%s\n' "$*" >> "$DOCKER_TEST_EVENTS"
+case "$1 $2" in "$DOCKER_TEST_FAIL"*) exit 1 ;; esac
+case "$1" in
+info) printf '%s' '{"Architecture":"x86_64","OSType":"linux","CgroupVersion":"2","MemoryLimit":true,"SwapLimit":true,"PidsLimit":true,"CpuCfsPeriod":true,"CpuCfsQuota":true,"SecurityOptions":["name=seccomp,profile=builtin"]}' ;;
+image) printf '%s' '{"Os":"linux","Architecture":"amd64"}' ;;
+*) exit 2 ;;
+esac
+`
+		if err := os.WriteFile(filepath.Join(dir, "docker"), []byte(script), 0700); err != nil {
+			t.Fatal(err)
+		}
+		b := &Projected{Backend: Backend{Owner: "90000000-0000-4000-8000-000000000001", Image: "example.invalid/test@sha256:" + strings.Repeat("a", 64), Command: []string{"/bin/true"}},
+			Network: "template", Peers: []string{"peer"}}
+		_, err := b.Start(context.Background(), "attempt", execution.Workdir{})
+		var rejected *execution.RejectedError
+		events, _ := os.ReadFile(filepath.Join(dir, "events"))
+		if !errors.As(err, &rejected) || strings.Contains(string(events), "create") {
+			t.Fatalf("%s: %v; events %q", failing, err, events)
+		}
+	}
+}
