@@ -29,19 +29,20 @@ Both sources are opt-in and precede the existing configuration:
   endpoint with the controller token, for each attempt and catalog refresh. The
   claim is not used: there an agent value overrides the workspace one, and model
   discovery has no claim.
-- Identity `agent_env: true` reads `IDP_IAM_CLIENT_ID` and `IDP_IAM_CLIENT_SECRET`
+- Identity `agent_env: true` reads `IAM_CLIENT_ID` and `IAM_CLIENT_SECRET`
   from the claim's agent `custom_env`. The attempt keeps that snapshot for renewal.
 
 Both names present select the env connection. Neither name, or a server without
 workspace env (404), falls back to bindings or the resolver. One name alone, a base
 URL without `/v1` or an unreadable env deny the attempt, never another key.
-`env_allow` cannot name these four variables, so they never reach attempts.
+These four connection credentials are consumed by the controller and never reach
+attempts. ADR 0030 removes the ordinary process-ENV allowlist.
 
 Allow-lists go: inference has no `gateways` list, only URL shape checks. Identity
 has one `issuer`; bindings and resolver replies name only `client_id`. The controller
 verifies the token's signature against the issuer's JWKS, issuer, `typ`, `azp` and
-bounded lifetime, not its subject. `mcp` remains the exact URLs that receive the
-agent's token.
+bounded lifetime, not its subject. ADR 0030 replaces the exact MCP recipient list with an explicit
+`Authorization: Bearer {iam:access_token}` header in native MCP configuration.
 
 ## Consequences
 
@@ -49,7 +50,7 @@ The controller token user must be owner or admin of each workspace that uses
 workspace env; every read adds an audit entry. Multica stores the values in plain
 text and shows them to workspace admins and agent owners. Native runtimes of the
 same agents receive them as process env, so the variables suit managed sandbox
-runtimes only. With PR 4521, workspace `IDP_IAM_*` values reach every agent claim.
+runtimes only. With PR 4521, workspace `IAM_*` values reach every agent claim.
 
 A workspace admin can send that workspace's key to any HTTPS gateway; the key is
 the workspace's own. A client secret copied into another agent works there:

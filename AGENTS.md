@@ -25,6 +25,8 @@ from verified behavior.
   reusable identity sources and automatically sized execution resources.
 - `adrs/0029-dynamic-http-mcp.md`: native remote MCP selection, controller-held
   headers/agent ENV and public proxy transport without per-endpoint rollout.
+- `adrs/0030-native-env-and-explicit-iam.md`: native Environment, common IAM keys
+  and explicit MCP header selection without per-agent recipient bindings.
 - `examples/end-to-end/`: opt-in real Multica/OpenCode/inference lab.
 - `examples/identity-mcp/`: disposable identity and MCP contract fixture.
 - `internal/inference/`: workspace gateway bindings, relay policy and advisory model catalogs.

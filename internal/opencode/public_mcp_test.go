@@ -121,28 +121,32 @@ func TestPublicMCPHTTPSProxyDenial(t *testing.T) {
 	}
 }
 
-type managedStubIssuer struct {
-	stubIssuer
-	selected string
-}
-
-func (s *managedStubIssuer) ManagedMCP(endpoint string) bool { return endpoint == s.selected }
-
-func TestPublicMCPNeverBorrowsManagedIdentity(t *testing.T) {
-	issuer := &managedStubIssuer{selected: "https://eco.example.invalid/mcp"}
-	a := &Adapter{Issuer: issuer, Status: stubStatus{}, MCPPublicProxy: &url.URL{Scheme: "http", Host: "egress:3128"}}
+func TestPublicMCPUsesOnlyExplicitIdentityAndAlwaysDeploymentProxy(t *testing.T) {
+	issuer := &stubIssuer{}
+	proxy := &url.URL{Scheme: "http", Host: "egress:3128"}
+	a := &Adapter{Issuer: issuer, Status: stubStatus{}, MCPPublicProxy: proxy}
 	connections := map[string]Remote{
-		"managed":  {URL: issuer.selected},
-		"unknown":  {URL: "https://new.public.invalid/mcp"},
-		"explicit": {URL: issuer.selected, headers: map[string]string{"Authorization": "Bearer own-key"}},
+		"managed":  {URL: "https://eco.example.invalid/mcp", identity: true},
+		"unknown":  {URL: "https://eco.example.invalid/mcp"},
+		"explicit": {URL: "https://eco.example.invalid/mcp", headers: map[string]string{"Authorization": "Bearer own-key"}},
 	}
 	anonymous, public, err := a.mcpModes(connections)
-	if err != nil || anonymous["managed"] || public["managed"] || !anonymous["unknown"] || !public["unknown"] || !anonymous["explicit"] || !public["explicit"] {
-		t.Fatal("managed identity crossed into public or user-header connections")
+	if err != nil || anonymous["managed"] || !public["managed"] || !anonymous["unknown"] || !public["unknown"] || !anonymous["explicit"] || !public["explicit"] {
+		t.Fatal("IAM selection or deployment transport changed")
 	}
 	r := &running{adapter: a, task: safeTask(), connections: connections, anonymous: anonymous, public: public, tokens: map[string]identity.AccessToken{}}
 	if err = r.refresh(context.Background()); err != nil || issuer.calls != 1 {
-		t.Fatalf("unexpected managed token issuance: calls=%d err=%v", issuer.calls, err)
+		t.Fatalf("unexpected issuance calls=%d err=%v", issuer.calls, err)
+	}
+	for name := range connections {
+		target, ok := r.mcpUpstream(name)
+		if !ok || target.proxy != proxy {
+			t.Fatal("IAM bypassed deployment proxy")
+		}
+	}
+	a.Issuer = nil
+	if _, _, err = a.mcpModes(connections); err == nil {
+		t.Fatal("IAM silently downgraded without issuer")
 	}
 }
 
@@ -153,7 +157,7 @@ func TestPublicMCPNeedsNoIdentityFileAndKeepsHeaderEnvOutsideAttempt(t *testing.
 		t.Fatal(err)
 	}
 	workload := &stubWorkload{files: map[string][]byte{}, envs: make(chan map[string]string, 1)}
-	a := &Adapter{MCPPublicProxy: &url.URL{Scheme: "http", Host: "egress:3128"}, MCPRelay: NewMCPRelay(), MCPRelayURL: "http://mcp-relay:8095", EnvAllow: []string{"MCP_KEY"}, Workloads: workload, Status: stubStatus{}}
+	a := &Adapter{MCPPublicProxy: &url.URL{Scheme: "http", Host: "egress:3128"}, MCPRelay: NewMCPRelay(), MCPRelayURL: "http://mcp-relay:8095", Workloads: workload, Status: stubStatus{}}
 	run, err := a.Start(context.Background(), task)
 	if err != nil {
 		t.Fatal(err)
@@ -255,32 +259,12 @@ func TestPublicMCPAttemptCredentialsStaySeparate(t *testing.T) {
 	}
 }
 
-func TestPublicMCPPreservesExplicitAnonymousPrivateRecipient(t *testing.T) {
-	privateURL := "http://10.8.0.2/private-mcp"
-	issuer := &managedStubIssuer{stubIssuer: stubIssuer{anonymous: privateURL}, selected: "https://eco.example.invalid/mcp"}
+func TestPrivateMCPHasNoImplicitDirectRoute(t *testing.T) {
 	proxy := &url.URL{Scheme: "http", Host: "egress:3128"}
-	a := &Adapter{Issuer: issuer, MCPPublicProxy: proxy}
-	connections := map[string]Remote{
-		"approved":  {URL: privateURL},
-		"unknown":   {URL: "https://new.public.invalid/mcp"},
-		"user-auth": {URL: privateURL, headers: map[string]string{"Authorization": "Bearer user-key"}},
-	}
+	a := &Adapter{Issuer: &stubIssuer{}, MCPPublicProxy: proxy}
+	connections := map[string]Remote{"anonymous": {URL: "http://10.8.0.2/private-mcp"}, "iam": {URL: "http://10.8.0.2/private-mcp", identity: true}}
 	anonymous, public, err := a.mcpModes(connections)
-	if err != nil {
-		t.Fatal(err)
-	}
-	r := &running{adapter: a, connections: connections, anonymous: anonymous, public: public, tokens: map[string]identity.AccessToken{}}
-	for _, name := range []string{"approved", "unknown", "user-auth"} {
-		target, allowed := r.mcpUpstream(name)
-		if !allowed || !anonymous[name] || target.bearer != "" {
-			t.Fatal("anonymous or explicit-auth MCP borrowed managed identity")
-		}
-		if name == "approved" {
-			if public[name] || target.proxy != nil || target.origin.Host != "10.8.0.2" {
-				t.Fatal("approved private anonymous recipient lost its direct route")
-			}
-		} else if !public[name] || target.proxy != proxy {
-			t.Fatal("unapproved recipient or user auth bypassed public egress")
-		}
+	if err != nil || !anonymous["anonymous"] || anonymous["iam"] || !public["anonymous"] || !public["iam"] {
+		t.Fatal("private URL changed explicit auth/transport policy")
 	}
 }

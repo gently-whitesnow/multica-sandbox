@@ -39,32 +39,36 @@ func (s baoSource) request(ctx context.Context, address, method, token string, i
 	return nil
 }
 
-func (s baoSource) Token(ctx context.Context, c Credentials) (bearer string, err error) {
+func (s baoSource) Token(ctx context.Context, c Credentials) (issued tokenResult, err error) {
 	if len(c.request.Scopes) != 0 || c.request.Resource != "" {
-		return "", ErrDenied
+		return tokenResult{}, ErrDenied
 	}
 	var login struct {
 		Auth struct {
 			ClientToken string `json:"client_token"`
+			EntityID    string `json:"entity_id"`
 		} `json:"auth"`
 	}
 	if s.request(ctx, s.config.LoginURL, http.MethodPost, "", map[string]string{"role_id": c.ClientID, "secret_id": c.secret}, &login) != nil || !text(login.Auth.ClientToken, 8192) {
-		return "", ErrDenied
+		return tokenResult{}, ErrDenied
 	}
 	// Revoke the short-lived login token even if issuance was cancelled. It never
 	// reaches an attempt, disk, logs, or the MCP recipient.
 	defer func() {
 		if s.request(context.WithoutCancel(ctx), s.config.RevokeURL, http.MethodPost, login.Auth.ClientToken, nil, nil) != nil {
-			bearer, err = "", ErrDenied
+			issued, err = tokenResult{}, ErrDenied
 		}
 	}()
+	if !text(login.Auth.EntityID, 256) {
+		return tokenResult{}, ErrDenied
+	}
 	var result struct {
 		Data struct {
 			Token string `json:"token"`
 		} `json:"data"`
 	}
 	if s.request(ctx, s.config.TokenURL, http.MethodGet, login.Auth.ClientToken, nil, &result) != nil || !text(result.Data.Token, 16384) {
-		return "", ErrDenied
+		return tokenResult{}, ErrDenied
 	}
-	return result.Data.Token, nil
+	return tokenResult{bearer: result.Data.Token, expectedSubject: login.Auth.EntityID}, nil
 }

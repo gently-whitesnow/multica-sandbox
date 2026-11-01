@@ -7,10 +7,33 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/gently-whitesnow/multica-sandbox/internal/identity"
 	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
 )
 
 var mcpEnvName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
+
+// IAMAuthorization explicitly selects the current agent's managed identity.
+const IAMAuthorization = "Bearer {iam:access_token}"
+
+func containsIAMTemplate(value string) bool { return strings.Contains(strings.ToLower(value), "{iam") }
+
+// selectIAMHeader consumes only the literal trusted configuration marker. Values
+// produced by ENV expansion cannot select an identity or expose a template upstream.
+func selectIAMHeader(headers map[string]string) (bool, error) {
+	managed := false
+	for name, value := range headers {
+		if !containsIAMTemplate(value) {
+			continue
+		}
+		if name != "Authorization" || value != IAMAuthorization {
+			return false, fmt.Errorf("IAM requires Authorization: %s", IAMAuthorization)
+		}
+		managed = true
+		delete(headers, name)
+	}
+	return managed, nil
+}
 
 func mcpHeaders(raw map[string]string) (map[string]string, error) {
 	if len(raw) > 32 {
@@ -80,6 +103,9 @@ func resolveRemoteHeaders(connections map[string]Remote, env multica.SecretEnv) 
 			if err != nil {
 				return nil, fmt.Errorf("%w: MCP server %q header %q: %s", ErrDenied, name, header, err)
 			}
+			if containsIAMTemplate(value) {
+				return nil, fmt.Errorf("%w: MCP server %q header %q has an unresolved IAM template", ErrDenied, name, header)
+			}
 			headers[header] = value
 			names = append(names, used...)
 		}
@@ -107,6 +133,9 @@ func mcpHeaderENV(template string, env multica.SecretEnv) (string, []string, err
 		name, suffix, closed := strings.Cut(rest, "}")
 		if !closed || !mcpEnvName.MatchString(name) {
 			return "", nil, fmt.Errorf("malformed {env:NAME} reference")
+		}
+		if name == identity.EnvClientID || name == identity.EnvClientSecret {
+			return "", nil, fmt.Errorf("IAM credentials cannot be referenced in MCP headers; use %s", IAMAuthorization)
 		}
 		secret, exists := env.Allowed([]string{name})[name]
 		if !exists || secret == "" {

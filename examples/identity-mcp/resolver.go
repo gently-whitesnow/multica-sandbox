@@ -17,7 +17,7 @@ const fixtureServer = "https://multica.example.invalid"
 const serviceSubject = "30000000-0000-4000-8000-000000000001"
 
 func resolverConfig() identity.Config {
-	return identity.Config{Version: 1, AllowHTTP: true, Issuer: identity.IssuerConfig{URL: issuer, TokenURL: issuer + "/protocol/openid-connect/token", JWKSURL: issuer + "/protocol/openid-connect/certs", MaxTTLSeconds: 180, Profile: "keycloak", Audience: "sandbox-mcp"}, MCP: []string{"http://gateway:8080/mcp"}, Bindings: []identity.Binding{{WorkspaceID: "10000000-0000-4000-8000-000000000001", AgentID: "20000000-0000-4000-8000-000000000001", ClientID: "example-agent", SecretFile: "/secrets/client"}}}
+	return identity.Config{Version: 1, AllowHTTP: true, Issuer: identity.IssuerConfig{URL: issuer, TokenURL: issuer + "/protocol/openid-connect/token", JWKSURL: issuer + "/protocol/openid-connect/certs", MaxTTLSeconds: 180, Profile: "keycloak", Audience: "sandbox-mcp"}, Bindings: []identity.Binding{{WorkspaceID: "10000000-0000-4000-8000-000000000001", AgentID: "20000000-0000-4000-8000-000000000001", ClientID: "example-agent", SecretFile: "/secrets/client"}}}
 }
 
 // Every credential source must obtain and verify a real Keycloak token of the client.
@@ -61,8 +61,8 @@ func checkResolvers(ctx context.Context) error {
 	if _, err = external.AcquireForMCP(ctx, ref, nil, "http://gateway:8080/mcp"); err != nil {
 		return fmt.Errorf("external identity issuance failed")
 	}
-	if _, err = external.AcquireForMCP(ctx, ref, nil, "http://unapproved:8080/mcp"); err != identity.ErrDenied {
-		return fmt.Errorf("unapproved MCP delivery accepted")
+	if _, err = external.AcquireForMCP(ctx, ref, nil, "http://bad.invalid/mcp#fragment"); err != identity.ErrDenied {
+		return fmt.Errorf("malformed MCP recipient accepted")
 	}
 	envConfig := resolverConfig()
 	envConfig.Bindings, envConfig.AgentEnv = nil, true
@@ -87,6 +87,6 @@ func checkResolvers(ctx context.Context) error {
 	if _, err = wrong.AcquireForMCP(ctx, ref, nil, "http://gateway:8080/mcp"); err == nil {
 		return fmt.Errorf("wrong Keycloak client accepted")
 	}
-	fmt.Println("PASS static/external/agent-env sources verified real Keycloak identity; wrong client and unapproved MCP denied")
+	fmt.Println("PASS static/external/agent-env sources verified real Keycloak identity; wrong client and malformed MCP recipient denied")
 	return nil
 }

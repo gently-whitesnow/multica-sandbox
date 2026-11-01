@@ -97,7 +97,7 @@ func TestMCPQueryAndHeadersStayControllerOnly(t *testing.T) {
 	}
 	for _, target := range []string{"https://tools.example.invalid/mcp?token={env:SECRET_TOKEN}", "https://tools.example.invalid/mcp?token=%7Benv%3ASECRET_TOKEN%7D"} {
 		task.Agent.MCPConfig = json.RawMessage(`{"mcpServers":{"docs":{"url":"` + target + `"}}}`)
-		if _, err := Select(task); err == nil || !strings.Contains(err.Error(), "URL cannot reference ENV") || strings.Contains(err.Error(), "SECRET_TOKEN") {
+		if _, err := Select(task); err == nil || !strings.Contains(err.Error(), "URL cannot contain credential templates") || strings.Contains(err.Error(), "SECRET_TOKEN") {
 			t.Fatalf("URL ENV substitution not rejected safely: %v", err)
 		}
 	}

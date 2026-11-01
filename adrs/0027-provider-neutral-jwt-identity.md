@@ -28,8 +28,9 @@ Both verify RS256/ES256 signature, exact issuer, nonempty subject, bounded lifet
 expiry, issuance time and optional not-before. Configured audience is checked by
 the controller as well as by the recipient. The original Keycloak profile without
 an audience retains recipient-owned validation for configuration compatibility.
-The `jwt` profile cannot use `agent_env`: its credential pair has no independently
-trusted expected principal. This refines ADR 0022's claim-only binding.
+For OpenBao `agent_env`, ADR 0030 verifies the JWT subject against the entity ID
+from authenticated AppRole login. Static/resolver bindings retain the independent
+expected principal.
 
 OpenBao uses fixed same-origin login, identity-token and revoke-self endpoints.
 Its temporary login token remains controller-only and is revoked after issuance,
@@ -38,7 +39,8 @@ AppRole policy authorizes only the identity signing role and self-revocation;
 the signing role supplies audience, principal template and TTL. The sandbox has
 no knowledge of consumer names, scopes or grant catalogues.
 
-Identity delivery still checks the selected exact MCP URL before issuance.
+ADR 0030 selects identity through the explicit header in native MCP configuration,
+rather than a deployment list of exact MCP URLs.
 The existing per-attempt opaque MCP relay credential, rotation, lease/revocation,
 request cancellation and resource checks remain unchanged. A persistent logical
 agent principal can span many isolated attempts without exposing its bootstrap

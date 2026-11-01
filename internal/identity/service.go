@@ -14,12 +14,11 @@ type Service struct {
 	server   string
 	agentEnv bool
 	// resolver is nil when only the agent env supplies credentials.
-	resolver Resolver
-	issuer   *issuer
-	mcp      map[string]bool
-	anon     map[string]bool
-	http     map[string]HTTPService
-	debug    Debug
+	resolver  Resolver
+	issuer    *issuer
+	allowHTTP bool
+	http      map[string]HTTPService
+	debug     Debug
 }
 
 func New(c Config, server string) (*Service, error) {
@@ -32,9 +31,9 @@ func New(c Config, server string) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Service{server: server, agentEnv: c.AgentEnv, issuer: issued}
-	if c.AgentEnv && issued.config.Profile == "jwt" {
-		// A claim's credential pair cannot choose its own trusted expected principal.
+	s := &Service{server: server, agentEnv: c.AgentEnv, issuer: issued, allowHTTP: c.AllowHTTP}
+	if c.AgentEnv && issued.config.Profile == "jwt" && c.TokenSource.Type != "openbao_approle" {
+		// Generic ENV identities require a trusted subject proof from the exchange.
 		return nil, ErrDenied
 	}
 	switch {
@@ -47,9 +46,6 @@ func New(c Config, server string) (*Service, error) {
 		if s.resolver, err = s.static(c.Bindings); err != nil {
 			return nil, err
 		}
-	}
-	if err := s.configureMCP(c.MCP, c.MCPAnonymous, c.AllowHTTP); err != nil {
-		return nil, err
 	}
 	if err := s.configureHTTP(c.HTTPServices, c.AllowHTTP); err != nil {
 		return nil, err

@@ -86,6 +86,19 @@ path "auth/token/revoke-self" { capabilities=["update"] }`})
 		}
 		previous = token
 	}
+	envConfig := c
+	envConfig.AgentEnv, envConfig.Bindings = true, nil
+	fromEnv, e := New(envConfig, identityTestServer)
+	if e != nil {
+		t.Fatal("real OpenBao ENV configuration", e)
+	}
+	secret := api("POST", "auth/approle/role/fixture/secret-id", nil)["data"].(map[string]any)["secret_id"].(string)
+	env := agentEnv{EnvClientID: roleID, EnvClientSecret: secret}
+	for _, agent := range []string{agentA, agentB} {
+		if _, e = fromEnv.Acquire(context.Background(), Ref{identityTestServer, workspaceA, agent}, env); e != nil {
+			t.Fatal("real OpenBao ENV identity without UUID bindings", e)
+		}
+	}
 	c.Bindings[0].Principal = "other-agent"
 	wrong, _ := New(c, identityTestServer)
 	if _, e = wrong.Acquire(context.Background(), ref(c), nil); e != ErrDenied {
@@ -106,5 +119,5 @@ path "auth/token/revoke-self" { capabilities=["update"] }`})
 	if !previous.ExpiresAt.After(time.Now()) {
 		t.Fatal("token already expired")
 	}
-	fmt.Println("PASS disposable OpenBao AppRole → identity JWT; file rotation, principal/audience/credential denial")
+	fmt.Println("PASS disposable OpenBao AppRole → identity JWT; file rotation, agent ENV without UUID bindings, principal/audience/credential denial")
 }

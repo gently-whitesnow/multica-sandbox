@@ -101,7 +101,7 @@ func multicaRelayService(t *testing.T, api *multica.Client, agentImage string, n
 	issue := fmt.Sprintf("a2000000-0000-4000-8000-%012d", n)
 	id := fmt.Sprintf("a3000000-0000-4000-8000-%012d", n)
 	issuer := "http://keycloak:8080/realms/sandbox-example"
-	writeJSON(t, filepath.Join(dir, "identity.json"), identity.Config{Version: 1, AllowHTTP: true, Issuer: identity.IssuerConfig{URL: issuer, TokenURL: issuer + "/protocol/openid-connect/token", JWKSURL: issuer + "/protocol/openid-connect/certs", MaxTTLSeconds: 30}, Bindings: []identity.Binding{{WorkspaceID: workspace, AgentID: agent, ClientID: "example-agent", SecretFile: "/identity-secrets/client"}}, MCP: []string{"http://gateway:8080/mcp"}})
+	writeJSON(t, filepath.Join(dir, "identity.json"), identity.Config{Version: 1, AllowHTTP: true, Issuer: identity.IssuerConfig{URL: issuer, TokenURL: issuer + "/protocol/openid-connect/token", JWKSURL: issuer + "/protocol/openid-connect/certs", MaxTTLSeconds: 30}, Bindings: []identity.Binding{{WorkspaceID: workspace, AgentID: agent, ClientID: "example-agent", SecretFile: "/identity-secrets/client"}}})
 	command := `OPENCODE_CONFIG_CONTENT='{"model":"fixture/fixture","enabled_providers":["fixture"],"provider":{"fixture":{"npm":"@ai-sdk/openai-compatible","name":"Fixture","options":{"baseURL":"http://provider:8080/v1"},"models":{"fixture":{"name":"Fixture","limit":{"context":64000,"output":4096}}}}}}' exec opencode acp`
 	f := serviceFixture{fmt.Sprintf("sandbox-relay-controller-%d", stamp), filepath.Join(dir, "controller.json"), t}
 	controllerName := f.project + "-controller-1"

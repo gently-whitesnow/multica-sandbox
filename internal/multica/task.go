@@ -14,7 +14,7 @@ type Agent struct {
 	Name          string          `json:"name"`
 	Instructions  string          `json:"instructions"`
 	MCPConfig     json.RawMessage `json:"mcp_config"`
-	// CustomEnv reaches attempts only for names the deployment allows (opencode.env_allow).
+	// CustomEnv contains trusted agent environment; controller-owned credentials stay outside attempts.
 	CustomEnv SecretEnv `json:"custom_env"`
 	// Skills are inline: the controller does not advertise skill-bundles-v1.
 	Skills []Skill `json:"skills"`
@@ -54,6 +54,15 @@ func (SecretEnv) MarshalJSON() ([]byte, error) { return []byte(`null`), nil }
 func (SecretEnv) String() string               { return "[redacted]" }
 func (SecretEnv) GoString() string             { return "[redacted]" }
 func (SecretEnv) Format(f fmt.State, _ rune)   { _, _ = io.WriteString(f, "[redacted]") }
+
+// Values returns a copy for runtime projection; callers exclude controller-owned keys.
+func (e SecretEnv) Values() map[string]string {
+	out := make(map[string]string, len(e.values))
+	for name, value := range e.values {
+		out[name] = value
+	}
+	return out
+}
 
 // Allowed returns the values of the allowed names the agent sets.
 func (e SecretEnv) Allowed(names []string) map[string]string {

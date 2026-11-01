@@ -20,7 +20,7 @@ func TestHTTPPathCredentialIsolationRotationAndImmutablePolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 	foreign := Ref{identityTestServer, workspaceA, agentB}
-	if len(s.HTTPServicesFor(foreign)) != 0 {
+	if len(s.HTTPServicesFor(foreign, nil)) != 0 {
 		t.Fatal("foreign agent discovered credential service")
 	}
 	if _, err = s.AcquireForHTTP(context.Background(), foreign, nil, "messenger"); err != ErrDenied {

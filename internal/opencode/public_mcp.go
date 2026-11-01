@@ -18,32 +18,16 @@ func ParseMCPPublicProxy(raw string) (*url.URL, error) {
 	return u, nil
 }
 
-// managedMCP is optional so an existing issuer keeps its closed legacy contract
-// unless the deployment explicitly enables public MCP egress.
-type managedMCP interface{ ManagedMCP(string) bool }
-
+// mcpModes uses explicit native MCP authorization. Routing belongs to deployment,
+// so IAM connections use the same proxy as anonymous/static-header connections.
 func (a *Adapter) mcpModes(connections map[string]Remote) (map[string]bool, map[string]bool, error) {
 	anonymous, public := map[string]bool{}, map[string]bool{}
 	for name, connection := range connections {
-		if len(connection.headers) == 0 && a.Issuer != nil {
-			managed, known := a.Issuer.(managedMCP)
-			if known && managed.ManagedMCP(connection.URL) {
-				continue
-			}
-			// An explicitly approved anonymous endpoint keeps its operator-owned
-			// direct route, including private services, when public egress is enabled.
-			if a.Issuer.AnonymousMCP(connection.URL) {
-				anonymous[name] = true
-				continue
-			}
-			if !known && a.MCPPublicProxy == nil {
-				continue
-			}
+		if connection.identity && a.Issuer == nil {
+			return nil, nil, fmt.Errorf("MCP server %q requests IAM but identity_file is not configured: %w", name, ErrDenied)
 		}
-		if a.MCPPublicProxy == nil {
-			return nil, nil, fmt.Errorf("selected MCP requires mcp_public_proxy or managed identity: %w", ErrDenied)
-		}
-		anonymous[name], public[name] = true, true
+		anonymous[name] = !connection.identity
+		public[name] = a.MCPPublicProxy != nil
 	}
 	return anonymous, public, nil
 }

@@ -106,7 +106,7 @@ type mcpTarget struct {
 }
 
 // mcpUpstream binds the exact selected endpoint, credentials and deployment egress.
-// Public connections never borrow an issuer token or choose their own proxy.
+// Only explicit IAM connections receive issuer tokens; deployment owns proxy routing.
 func (r *running) mcpUpstream(name string) (mcpTarget, bool) {
 	connection, ok := r.connections[name]
 	r.mu.Lock()
@@ -126,12 +126,15 @@ func (r *running) mcpUpstream(name string) (mcpTarget, bool) {
 		}
 		target.proxy, target.withhold = r.adapter.MCPPublicProxy, true
 	}
+	target.withhold = true
 	if len(connection.headers) != 0 {
 		target.header = http.Header{}
 		for name, value := range connection.headers {
 			target.header.Set(name, value)
 		}
-		target.bearer, target.withhold = "", true
+		if !connection.identity {
+			target.bearer = ""
+		}
 	}
 	return target, true
 }

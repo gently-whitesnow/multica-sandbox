@@ -199,23 +199,22 @@ func values(m map[string]string) []string {
 
 func TestAllowedCustomEnvReachesAttempt(t *testing.T) {
 	task := relayTask(t)
-	if err := json.Unmarshal([]byte(`{"FEED_URL":"https://feed.example.invalid","API_KEY":"withheld","BAD_VALUE":"a\nb","MULTICA_TOKEN":"forged"}`), &task.Agent.CustomEnv); err != nil {
+	if err := json.Unmarshal([]byte(`{"FEED_URL":"https://feed.example.invalid","API_KEY":"withheld","MULTILINE":"a\nb", "lower":"ordinary", "BAD_VALUE":"a\u0000b", "IAM_CLIENT_ID":"issuer-client", "IAM_CLIENT_SECRET":"issuer-bootstrap","MULTICA_TOKEN":"forged"}`), &task.Agent.CustomEnv); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(fmt.Sprintf("%v %+v %#v", task, task, task.Agent), "withheld") {
 		t.Fatal("custom_env value formatted")
 	}
 	workload := &stubWorkload{files: map[string][]byte{}, envs: make(chan map[string]string, 1)}
-	a := Adapter{Server: "https://multica.example.invalid", Issuer: &stubIssuer{}, MCPRelay: NewMCPRelay(), Authority: &stubAuthority{}, Workloads: workload, Status: stubStatus{}, Relay: relay.NewGrants(multica.RelayPrefix), RelayURL: "http://multica-relay:8091",
-		EnvAllow: []string{"FEED_URL", "BAD_VALUE", "UNSET"}}
+	a := Adapter{Server: "https://multica.example.invalid", Issuer: &stubIssuer{}, MCPRelay: NewMCPRelay(), Authority: &stubAuthority{}, Workloads: workload, Status: stubStatus{}, Relay: relay.NewGrants(multica.RelayPrefix), RelayURL: "http://multica-relay:8091"}
 	run, err := a.Start(context.Background(), task)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer run.Remove(context.Background())
 	env := <-workload.envs
-	if env["FEED_URL"] != "https://feed.example.invalid" || env["API_KEY"] != "" || env["MULTICA_TOKEN"] == "forged" {
-		t.Fatalf("custom_env not filtered by the allowlist: %v", env)
+	if env["FEED_URL"] != "https://feed.example.invalid" || env["API_KEY"] != "withheld" || env["MULTILINE"] != "a\nb" || env["lower"] != "ordinary" || env["IAM_CLIENT_ID"] != "" || env["IAM_CLIENT_SECRET"] != "" || env["MULTICA_TOKEN"] == "forged" {
+		t.Fatalf("ordinary custom_env not projected or runtime credential overridden: %v", env)
 	}
 	if _, ok := env["BAD_VALUE"]; ok {
 		t.Fatal("unsafe value passed")
@@ -225,20 +224,15 @@ func TestAllowedCustomEnvReachesAttempt(t *testing.T) {
 	}
 }
 
-func TestEnvAllowRejectsControllerNames(t *testing.T) {
-	if err := ValidEnvAllow([]string{"FEED_URL", "NUGET_SOURCE"}); err != nil {
-		t.Fatal(err)
-	}
-	for _, names := range [][]string{{"MULTICA_TOKEN"}, {"HOME"}, {"GH_TOKEN"}, {"XDG_CONFIG_HOME"}, {"lower"}, {"A", "A"}, {"OPENCODE_CONFIG_CONTENT"}, {"GITLAB_TOKEN"}, {"INFERENCE_API_KEY"}, {"INFERENCE_BASE_URL"}, {"IDP_IAM_CLIENT_ID"}, {"IDP_IAM_CLIENT_SECRET"}} {
-		if ValidEnvAllow(names) == nil {
-			t.Errorf("accepted %v", names)
+func TestNativeEnvironmentKeepsRuntimeNamesReserved(t *testing.T) {
+	for _, name := range []string{"FEED_URL", "NUGET_SOURCE", "lower", "_TOKEN", "A"} {
+		if !validProcessEnvName(name) {
+			t.Errorf("ordinary variable %s blocked", name)
 		}
 	}
-	many := make([]string, 33)
-	for i := range many {
-		many[i] = fmt.Sprintf("NAME_%d", i)
-	}
-	if ValidEnvAllow(many) == nil {
-		t.Error("accepted more than 32 names")
+	for _, name := range []string{"MULTICA_TOKEN", "HOME", "GH_TOKEN", "XDG_CONFIG_HOME", "OPENCODE_CONFIG_CONTENT", "GITLAB_TOKEN", "INFERENCE_API_KEY", "INFERENCE_BASE_URL", "IAM_CLIENT_ID", "IAM_CLIENT_SECRET", "SANDBOX_HTTP_CONTROL_TOKEN", "DOCKER_HOST", "DOCKER_CONFIG", "http_proxy", "https_proxy", "no_proxy", "all_proxy", "BAD=NAME", "", "1TOKEN"} {
+		if validProcessEnvName(name) {
+			t.Errorf("reserved/invalid variable %s admitted", name)
+		}
 	}
 }

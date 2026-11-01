@@ -25,7 +25,7 @@ import (
 )
 
 var networkPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
-var envPattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,63}$`)
+var envPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 var hostPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$`)
 var projectionPaths = map[string]bool{"/workspace/opencode.json": true, "/workspace/AGENTS.md": true, repo.CAPath: true,
 	repo.WorkDir + "/.multica/project/resources.json": true}
@@ -688,7 +688,7 @@ func (r *projectedRun) exec(ctx context.Context, args []string, env map[string]s
 	execArgs := append([]string{"exec", "--user", AttemptUser, "--workdir", repo.WorkDir}, flags...)
 	environ := os.Environ()
 	for name, value := range env {
-		if !envPattern.MatchString(name) || strings.ContainsAny(value, "\x00\r\n") || len(value) > 4096 {
+		if !envPattern.MatchString(name) || strings.ContainsRune(value, 0) || strings.HasPrefix(name, "DOCKER_") {
 			return nil, fmt.Errorf("invalid agent environment")
 		}
 		execArgs = append(execArgs, "--env", name)

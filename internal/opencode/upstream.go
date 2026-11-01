@@ -21,12 +21,12 @@ import (
 const BriefPath = "/workspace/AGENTS.md"
 
 // Environment mirrors upstream taskMulticaEnvironment without daemon ports or host paths,
-// on top of the agent's custom_env for the names the deployment allows.
+// on top of ordinary agent custom_env, excluding controller/image-owned names.
 func (r *running) environment() map[string]string {
 	env := map[string]string{}
-	for name, value := range r.task.Agent.CustomEnv.Allowed(r.adapter.EnvAllow) {
+	for name, value := range r.task.Agent.CustomEnv.Values() {
 		// Values the attempt exec would refuse are dropped instead of failing the task.
-		if len(value) <= 4096 && !strings.ContainsAny(value, "\x00\r\n") {
+		if validProcessEnvName(name) && !strings.ContainsRune(value, 0) {
 			env[name] = value
 		}
 	}
@@ -66,31 +66,28 @@ func (r *running) environment() map[string]string {
 // reservedEnv are names and prefixes the controller or the attempt image owns, including
 // the connection and identity credentials only the controller consumes (ADR 0022).
 var reservedEnv = []string{"HOME", "PATH", "USER", "SHELL", "TERM", "TMPDIR", "TMP", "TEMP", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY",
-	"MULTICA_", "OPENCODE_", "SANDBOX_HTTP_", "XDG_", "GIT_", "GH_", "GITLAB_", "SSL_CERT_", "LD_",
+	"DOCKER_", "MULTICA_", "OPENCODE_", "SANDBOX_HTTP_", "XDG_", "GIT_", "GH_", "GITLAB_", "SSL_CERT_", "LD_",
 	inference.EnvBaseURL, inference.EnvAPIKey, identity.EnvClientID, identity.EnvClientSecret}
 
-// ValidEnvAllow checks a custom_env allowlist: at most 32 distinct names the controller
-// does not own (upstream also blocks MULTICA_* and the process basics).
-func ValidEnvAllow(names []string) error {
-	seen := map[string]bool{}
-	for _, name := range names {
-		if !envName.MatchString(name) || seen[name] {
-			return fmt.Errorf("env_allow names must be distinct upper-case environment names")
-		}
-		for _, reserved := range reservedEnv {
-			if name == reserved || strings.HasSuffix(reserved, "_") && strings.HasPrefix(name, reserved) {
-				return fmt.Errorf("env_allow name %s is reserved", name)
-			}
-		}
-		seen[name] = true
+// validProcessEnvName leaves runtime paths, proxy routing and controller credentials owned
+// by the image/controller while accepting ordinary native Multica Environment names.
+func validProcessEnvName(name string) bool {
+	if !envName.MatchString(name) {
+		return false
 	}
-	if len(names) > 32 {
-		return fmt.Errorf("env_allow holds at most 32 names")
+	switch strings.ToUpper(name) {
+	case "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY":
+		return false
 	}
-	return nil
+	for _, reserved := range reservedEnv {
+		if name == reserved || strings.HasSuffix(reserved, "_") && strings.HasPrefix(name, reserved) {
+			return false
+		}
+	}
+	return true
 }
 
-var envName = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,63}$`)
+var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // upstreamTask reports whether the claim is an issue task the upstream CLI workflow covers.
 func upstreamTask(t multica.Task) bool {

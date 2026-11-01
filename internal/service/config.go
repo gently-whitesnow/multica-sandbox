@@ -133,7 +133,6 @@ type OpenCodeConfig struct {
 	ForgeRelay *RelayConfig `json:"forge_relay,omitempty"`
 	// Sessions, with the helper, retains issue workdirs and resumes sessions (ADR 0015).
 	Sessions     *SessionsConfig `json:"sessions,omitempty"`
-	EnvAllow     []string        `json:"env_allow,omitempty"`
 	IdleWatchdog string          `json:"idle_watchdog,omitempty"`
 	// CompactionMaxTokens is an optional native compaction trigger cap for verified OpenCode 2.x.
 	CompactionMaxTokens int                  `json:"compaction_max_tokens,omitempty"`

@@ -94,14 +94,22 @@ func (s *Service) HTTPServices() []HTTPService {
 	return result
 }
 
-// HTTPServicesFor filters delivery by the trusted task's agent; undisclosed
-// services produce no attempt environment or relay route for another agent.
-func (s *Service) HTTPServicesFor(r Ref) []HTTPService {
+// HTTPServicesFor filters by agent and configured credential availability.
+// ENV-only agents without IAM names do not receive JWT-backed HTTP helpers;
+// partial pairs remain selected so normal credential validation fails explicitly.
+func (s *Service) HTTPServicesFor(r Ref, env Env) []HTTPService {
 	if !validRef(r, s.server) {
 		return nil
 	}
+	configured := s.resolver != nil
+	if s.agentEnv && env != nil && len(env.Allowed([]string{EnvClientID, EnvClientSecret})) > 0 {
+		configured = true
+	}
 	result := []HTTPService{}
 	for _, service := range s.HTTPServices() {
+		if service.BearerFile == "" && service.PathCredential == nil && !configured {
+			continue
+		}
 		if len(service.AgentIDs) == 0 || slices.Contains(service.AgentIDs, r.AgentID) {
 			result = append(result, service)
 		}

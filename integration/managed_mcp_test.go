@@ -44,10 +44,10 @@ func managedMCPService(t *testing.T, api *multica.Client) {
 	id := "70000000-0000-4000-8000-000000000001"
 	issue := "80000000-0000-4000-8000-000000000001"
 	issuer := "http://keycloak:8080/realms/sandbox-example"
-	binding := identity.Config{Version: 1, AllowHTTP: true, Issuer: identity.IssuerConfig{URL: issuer, TokenURL: issuer + "/protocol/openid-connect/token", JWKSURL: issuer + "/protocol/openid-connect/certs", MaxTTLSeconds: 30}, Bindings: []identity.Binding{{WorkspaceID: workspace, AgentID: agent, ClientID: "example-agent", SecretFile: "/identity-secrets/client"}}, MCP: []string{"http://gateway:8080/mcp"}}
+	binding := identity.Config{Version: 1, AllowHTTP: true, Issuer: identity.IssuerConfig{URL: issuer, TokenURL: issuer + "/protocol/openid-connect/token", JWKSURL: issuer + "/protocol/openid-connect/certs", MaxTTLSeconds: 30}, AgentEnv: true}
 	writeJSON(t, filepath.Join(dir, "identity.json"), binding)
 	// This credential-free mock model is trusted fixture configuration, outside claim data.
-	command := `OPENCODE_CONFIG_CONTENT='{"model":"fixture/fixture","enabled_providers":["fixture"],"provider":{"fixture":{"npm":"@ai-sdk/openai-compatible","name":"Fixture","options":{"baseURL":"http://provider:8080/v1"},"models":{"fixture":{"name":"Fixture","limit":{"context":64000,"output":4096}}}}}}' exec opencode acp`
+	command := `test "$USER_SETTING" = native-env-delivered && test -z "${IAM_CLIENT_ID+x}" && test -z "${IAM_CLIENT_SECRET+x}" || exit 91; OPENCODE_CONFIG_CONTENT='{"model":"fixture/fixture","enabled_providers":["fixture"],"provider":{"fixture":{"npm":"@ai-sdk/openai-compatible","name":"Fixture","options":{"baseURL":"http://provider:8080/v1"},"models":{"fixture":{"name":"Fixture","limit":{"context":64000,"output":4096}}}}}}' exec opencode acp`
 	f := serviceFixture{fmt.Sprintf("sandbox-agent-service-%d", time.Now().UnixNano()), filepath.Join(dir, "controller.json"), t}
 	// Attempts reach the mock model on the provider and MCP only through the controller relay.
 	mcpRelay := &service.RelayConfig{Listen: ":8095", URL: "http://mcp-relay:8095"}
@@ -59,9 +59,14 @@ func managedMCPService(t *testing.T, api *multica.Client) {
 	if runtime == "" {
 		t.Fatal("OpenCode runtime absent")
 	}
-	sql(t, fmt.Sprintf(`INSERT INTO agent(id,workspace_id,name,runtime_mode,runtime_id,owner_id,status,instructions,mcp_config,custom_env) VALUES('%s','%s','MCP fixture','local','%s','%s','idle','Read document repeatedly using fixture MCP. workspace-two','{"mcpServers":{"fixture":{"url":"http://gateway:8080/mcp"}}}','{"DO_NOT_PROJECT":"claim-secret-sentinel"}');
+	credential := strings.TrimSpace(dockerTest(t, "run", "--rm", "--network=none", "--entrypoint", "cat", "-v", project+"_credentials:/identity-secrets:ro", image, "/identity-secrets/client"))
+	environment, err := json.Marshal(map[string]string{identity.EnvClientID: "example-agent", identity.EnvClientSecret: credential, "USER_SETTING": "native-env-delivered"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql(t, fmt.Sprintf(`INSERT INTO agent(id,workspace_id,name,runtime_mode,runtime_id,owner_id,status,instructions,mcp_config,custom_env) VALUES('%s','%s','MCP fixture','local','%s','%s','idle','Read document repeatedly using fixture MCP. workspace-two','{"mcpServers":{"fixture":{"url":"http://gateway:8080/mcp","headers":{"Authorization":"Bearer {iam:access_token}"}}}}','%s');
  INSERT INTO issue(id,workspace_id,title,status,creator_type,creator_id,number,assignee_type,assignee_id) VALUES('%s','%s','Managed MCP fixture','in_progress','member','%s',99999,'agent','%s');
- INSERT INTO agent_task_queue(id,agent_id,runtime_id,issue_id,status,max_attempts,originator_user_id,accountable_user_id) VALUES('%s','%s','%s','%s','queued',1,'%s','%s');`, agent, workspace, runtime, user, issue, workspace, user, agent, id, agent, runtime, issue, user, user))
+ INSERT INTO agent_task_queue(id,agent_id,runtime_id,issue_id,status,max_attempts,originator_user_id,accountable_user_id) VALUES('%s','%s','%s','%s','queued',1,'%s','%s');`, agent, workspace, runtime, user, strings.ReplaceAll(string(environment), "'", "''"), issue, workspace, user, agent, id, agent, runtime, issue, user, user))
 	started := dockerTest(t, "inspect", "--format", "{{.State.StartedAt}}", cid)
 	observedSession := ""
 	deadline := time.Now().Add(150 * time.Second)
@@ -107,7 +112,7 @@ func managedMCPService(t *testing.T, api *multica.Client) {
 
 	assertNativeReports(t, id)
 	f.compose("stop")
-	t.Log("real Multica claim -> persistent Compose controller -> native OpenCode task -> real Keycloak/MCP rotations -> cleanup; inference is a deterministic mock")
+	t.Log("real Multica claim IAM credentials -> controller without agent bindings -> native OpenCode environment/nonprojection -> explicit-header Keycloak/MCP rotations -> cleanup; inference is a deterministic mock")
 }
 
 // providerService serves the mock model alone on the attempt template: the controller
