@@ -51,6 +51,7 @@ type Projected struct {
 	// Pool reads the slice of Resources.Pool (ADR 0020); Preflight records its memory.max.
 	Pool    *pool.Pool
 	poolMax int64
+	facts   hostFacts
 }
 
 // DinD configures the nested engine of sysbox attempts (ADR 0019).
@@ -199,7 +200,7 @@ func (b *Projected) admit(ctx context.Context) ([]string, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	if err := b.ValidateNetwork(ctx); err != nil {
+	if err := b.templateNetwork(ctx); err != nil {
 		return nil, "", err
 	}
 	if b.Helper != "" {
