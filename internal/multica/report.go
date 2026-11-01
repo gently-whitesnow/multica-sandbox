@@ -17,6 +17,8 @@ type Message struct {
 	CreatedAt time.Time      `json:"created_at"`
 	// OutputTruncated follows the upstream 8 KiB tool-output preview.
 	OutputTruncated *bool `json:"output_truncated,omitempty"`
+	// IdempotencyKey gives a resent row the same task-scoped ID, so Multica stores it once.
+	IdempotencyKey string `json:"idempotency_key,omitempty"`
 }
 type Usage struct {
 	Provider   string `json:"provider"`

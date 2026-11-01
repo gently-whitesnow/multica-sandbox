@@ -3,8 +3,10 @@ package opencode
 import (
 	"cmp"
 	"context"
+	"crypto/rand"
 	"errors"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -50,6 +52,10 @@ type eventStream struct {
 	usage   multica.Usage
 	seq     int
 	batch   []multica.Message
+	// sent counts the leading batch rows already offered to Multica; they stay unchanged.
+	sent int
+	// keys prefixes the rows' idempotency keys, unique to this stream.
+	keys    string
 	pending string
 	// unreported is turn usage a transient failure kept for the next report.
 	unreported *multica.Usage
@@ -65,7 +71,7 @@ func (s *eventStream) chunk(kind, text string) {
 	if kind == "text" {
 		s.output.WriteString(text)
 	}
-	if n := len(s.batch); n > 0 && s.batch[n-1].Type == kind {
+	if n := len(s.batch); n > s.sent && s.batch[n-1].Type == kind {
 		s.batch[n-1].Content += text
 		s.mu.Unlock()
 		return
@@ -106,13 +112,18 @@ func (s *eventStream) idle(window time.Duration) bool {
 	return s.running.Load() == 0 && time.Since(time.Unix(0, s.active.Load())) > window
 }
 
-// add sequences transcript rows; seq 1 is the controller's start message.
+// add sequences transcript rows; seq 1 is the controller's start message. Each row
+// gets a stable idempotency key, so a report resent after a lost answer stores it once.
 func (s *eventStream) add(messages ...multica.Message) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.keys == "" {
+		s.keys = rand.Text()
+	}
 	for _, m := range messages {
 		s.seq++
 		m.Seq = s.seq + 1
+		m.IdempotencyKey = s.keys + ":" + strconv.Itoa(m.Seq)
 		s.batch = append(s.batch, m)
 	}
 }
@@ -140,7 +151,7 @@ func (s *eventStream) flushEvery(interval time.Duration) func() {
 		if err := s.flush(); err != nil {
 			s.mu.Lock()
 			rows, usage := len(s.batch), s.unreported != nil
-			s.batch, s.pending, s.unreported = nil, "", nil
+			s.batch, s.sent, s.pending, s.unreported = nil, 0, "", nil
 			s.mu.Unlock()
 			s.dropped(rows, usage, err)
 		}
@@ -158,7 +169,7 @@ func retryable(err error) bool {
 func (s *eventStream) flush() (kept error) {
 	s.mu.Lock()
 	session, batch, usage := s.pending, s.batch, s.unreported
-	s.pending, s.batch, s.unreported = "", nil, nil
+	s.pending, s.batch, s.sent, s.unreported = "", nil, 0, nil
 	s.mu.Unlock()
 	if s.reporter == nil {
 		return nil
@@ -189,10 +200,11 @@ func (s *eventStream) flush() (kept error) {
 		s.dropped(len(batch), false, err)
 		return kept
 	}
+	// Multica may have stored the batch: resend it unchanged, after which new text starts a row.
 	s.mu.Lock()
 	s.batch = append(batch, s.batch...)
 	excess := max(len(s.batch)-pendingLimit, 0)
-	s.batch = s.batch[excess:]
+	s.batch, s.sent = s.batch[excess:], max(len(batch)-excess, 0)
 	s.mu.Unlock()
 	s.dropped(excess, false, err)
 	return err

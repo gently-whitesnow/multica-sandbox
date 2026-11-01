@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -78,6 +79,55 @@ func TestTransientReportFailuresRetryInOrder(t *testing.T) {
 	if len(reporter.messages) != 2 || reporter.messages[0].Content != "a" || reporter.messages[0].Seq != 2 || reporter.messages[1].Seq != 3 ||
 		len(reporter.usage) != 1 || len(reporter.sessions) != 1 || logs.Len() != 0 {
 		t.Fatalf("messages=%+v usage=%v sessions=%v logs=%s", reporter.messages, reporter.usage, reporter.sessions, logs)
+	}
+}
+
+// lostAck stores every batch like Multica but loses the first answer.
+type lostAck struct {
+	reportStub
+	calls [][]multica.Message
+}
+
+func (r *lostAck) ReportMessages(_ context.Context, _ string, m []multica.Message) error {
+	r.calls = append(r.calls, append([]multica.Message(nil), m...))
+	if len(r.calls) == 1 {
+		return context.DeadlineExceeded
+	}
+	return nil
+}
+
+func TestResentReportIsIdempotentAndUnchanged(t *testing.T) {
+	reporter := &lostAck{}
+	s, _ := loggedStream(reporter)
+	s.chunk("text", "a")
+	if s.flush() == nil {
+		t.Fatal("lost answer not kept")
+	}
+	// Multica may hold row 2 already: new text must not change it.
+	s.chunk("text", "b")
+	if err := s.flush(); err != nil {
+		t.Fatal(err)
+	}
+	first, second := reporter.calls[0], reporter.calls[1]
+	if len(first) != 1 || len(second) != 2 || !reflect.DeepEqual(second[0], first[0]) || second[1].Content != "b" || second[1].Seq != 3 {
+		t.Fatalf("resent rows changed: %+v then %+v", first, second)
+	}
+	// Multica derives the row ID from the key: the replay stores nothing new.
+	stored := map[string]string{}
+	for _, call := range reporter.calls {
+		for _, m := range call {
+			if _, ok := stored[m.IdempotencyKey]; !ok && m.IdempotencyKey != "" {
+				stored[m.IdempotencyKey] = m.Content
+			}
+		}
+	}
+	if len(stored) != 2 || stored[first[0].IdempotencyKey]+stored[second[1].IdempotencyKey] != "ab" {
+		t.Fatalf("stored transcript %v", stored)
+	}
+	other, _ := loggedStream(&reportStub{})
+	other.add(multica.Message{Type: "text"})
+	if other.batch[0].IdempotencyKey == first[0].IdempotencyKey {
+		t.Fatal("keys collide across attempts")
 	}
 }
 
