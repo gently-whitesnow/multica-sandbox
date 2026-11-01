@@ -348,20 +348,28 @@ func TestACPRefusedLoadRunsFreshOnce(t *testing.T) {
 }
 
 func TestACPSessionNamesMCPRelayOnly(t *testing.T) {
-	agent := &fakeAgent{version: "2.2.2", stop: "end_turn", usage: map[string]any{"inputTokens": 1, "outputTokens": 1, "totalTokens": 2}}
-	r := &running{adapter: &Adapter{MCPRelayURL: "http://mcp-relay:8095"}, mcpToken: MCPRelayPrefix + strings.Repeat("a", 64), connections: map[string]Remote{"docs": {Type: "remote", URL: "https://docs.example.invalid/mcp"}}}
-	if err := turnWith(t, context.Background(), agent, r); err != nil {
-		t.Fatal(err)
-	}
-	params, _ := agent.called("session/new")
-	if !strings.Contains(string(params), `"url":"http://mcp-relay:8095/docs"`) || !strings.Contains(string(params), "Bearer "+r.mcpToken) || strings.Contains(string(params), "docs.example.invalid") {
-		t.Fatalf("session/new MCP: %s", params)
-	}
-	agent.mu.Lock()
-	settled := agent.at["session/prompt"].Sub(agent.at["session/new"])
-	agent.mu.Unlock()
-	if settled < mcpSettle {
-		t.Fatalf("prompt %s after session/new; 2.x needs %s to register MCP tools", settled, mcpSettle)
+	for _, resume := range []string{"", "ses_prior"} {
+		method := "session/new"
+		if resume != "" {
+			method = "session/load"
+		}
+		t.Run(method, func(t *testing.T) {
+			agent := &fakeAgent{version: "2.2.2", stop: "end_turn", usage: map[string]any{"inputTokens": 1, "outputTokens": 1, "totalTokens": 2}}
+			r := &running{resume: resume, adapter: &Adapter{MCPRelayURL: "http://mcp-relay:8095"}, mcpToken: MCPRelayPrefix + strings.Repeat("a", 64), connections: map[string]Remote{"docs": {Type: "remote", URL: "https://docs.example.invalid/mcp"}}}
+			if err := turnWith(t, context.Background(), agent, r); err != nil {
+				t.Fatal(err)
+			}
+			params, _ := agent.called(method)
+			if !strings.Contains(string(params), `"url":"http://mcp-relay:8095/docs"`) || !strings.Contains(string(params), "Bearer "+r.mcpToken) || strings.Contains(string(params), "docs.example.invalid") {
+				t.Fatalf("%s MCP: %s", method, params)
+			}
+			agent.mu.Lock()
+			settled := agent.at["session/prompt"].Sub(agent.at[method])
+			agent.mu.Unlock()
+			if settled < mcpSettle {
+				t.Fatalf("prompt %s after %s; 2.x needs %s to register MCP tools", settled, method, mcpSettle)
+			}
+		})
 	}
 }
 

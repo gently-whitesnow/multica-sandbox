@@ -1,12 +1,9 @@
 package opencode
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/url"
-	"regexp"
 	"strings"
 
 	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
@@ -14,50 +11,6 @@ import (
 )
 
 var ErrDenied = errors.New("OpenCode task projection denied")
-var namePattern = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_-]{0,63}$`)
-
-type Connection struct {
-	URL     string            `json:"url"`
-	Type    string            `json:"type,omitempty"`
-	Headers map[string]string `json:"headers,omitempty"`
-}
-
-type Remote struct {
-	Type string `json:"type"`
-	URL  string `json:"url"`
-}
-
-func Select(t multica.Task) (map[string]Remote, error) {
-	if !t.ValidAttempt() || len(t.RemoteMCPConnections) != 0 || len(t.Agent.MCPConfig) > 65536 {
-		return nil, ErrDenied
-	}
-	// Multica omits mcp_config for agents without MCP; an absent or null document selects none.
-	if raw := bytes.TrimSpace(t.Agent.MCPConfig); len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
-		return map[string]Remote{}, nil
-	}
-	var document struct {
-		Servers map[string]Connection `json:"mcpServers"`
-	}
-	dec := json.NewDecoder(bytes.NewReader(t.Agent.MCPConfig))
-	dec.DisallowUnknownFields()
-	if dec.Decode(&document) != nil || len(document.Servers) > 16 {
-		return nil, ErrDenied
-	}
-	var extra any
-	if dec.Decode(&extra) != io.EOF {
-		return nil, ErrDenied
-	}
-	out := map[string]Remote{}
-	for name, c := range document.Servers {
-		// The MCP relay carries streamable HTTP only; legacy SSE endpoints are refused.
-		if !namePattern.MatchString(name) || !validMCPURL(c.URL) || (c.Type != "" && c.Type != "http") || len(c.Headers) != 0 {
-			return nil, ErrDenied
-		}
-		// No user headers: API keys and authorization aliases are credentials too.
-		out[name] = Remote{Type: "remote", URL: c.URL}
-	}
-	return out, nil
-}
 
 // unattended are the permissions native OpenCode would ask a person about; under ACP a
 // request is refused, so they are denied up front.

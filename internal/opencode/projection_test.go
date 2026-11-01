@@ -12,8 +12,6 @@ func safeTask() multica.Task {
 }
 func TestProjectionDeniesClaimCredentials(t *testing.T) {
 	for _, config := range []string{
-		`{"mcpServers":{"x":{"url":"https://tools/mcp","headers":{"aUtHoRiZaTiOn":"Bearer private"}}}}`,
-		`{"mcpServers":{"x":{"url":"https://tools/mcp","headers":{"x-api-key":"private"}}}}`,
 		`{"mcpServers":{"x":{"command":"/bin/sh","args":["-c","evil"]}}}`,
 		`{"mcpServers":{"x":{"url":"https://tools/mcp","oauth":{"clientSecret":"private"}}}}`,
 		`{"mcpServers":{"x":{"url":"https://tools/mcp","env":{"SECRET":"private"}}}}`,
@@ -74,7 +72,6 @@ func TestLocalPermissions(t *testing.T) {
 func TestSelectAdmitsOnlyRelayableEndpoints(t *testing.T) {
 	for _, server := range []string{
 		`{"url":"https://tools.example.invalid/mcp","type":"sse"}`,
-		`{"url":"https://tools.example.invalid/mcp?token=x"}`,
 		`{"url":"https://user@tools.example.invalid/mcp"}`,
 		`{"url":"https://tools.example.invalid/a%2Fb"}`,
 		`{"url":"ftp://tools.example.invalid/mcp"}`,

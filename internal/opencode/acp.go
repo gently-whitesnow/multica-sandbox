@@ -29,7 +29,7 @@ const (
 	exportTimeout = 30 * time.Second
 )
 
-// mcpSettle covers 2.x registering session MCP tools after session/new answers: a
+// mcpSettle covers 2.x registering MCP tools after session/new or session/load answers: a
 // prompt sent at once runs its first step without them (observed below 100 ms on 2.2.2).
 var mcpSettle = 2 * time.Second
 
@@ -77,7 +77,7 @@ func (r *running) open(ctx context.Context, conn *acp.ClientSideConnection, clie
 			client.replay(false)
 		}
 		if err == nil {
-			return r.opened(client, acp.SessionId(r.resume))
+			return r.opened(ctx, client, acp.SessionId(r.resume))
 		}
 		if ctx.Err() != nil {
 			return "", err
@@ -97,21 +97,21 @@ func (r *running) open(ctx context.Context, conn *acp.ClientSideConnection, clie
 	if err != nil {
 		return "", err
 	}
+	return r.opened(ctx, client, created.SessionId)
+}
+
+var errNoLoad = errors.New("agent cannot load sessions")
+
+func (r *running) opened(ctx context.Context, client *acpClient, id acp.SessionId) (acp.SessionId, error) {
+	if !sessionID.MatchString(string(id)) {
+		return "", &execution.AgentFailure{Message: "opencode returned an invalid session ID"}
+	}
 	if r.v2 && len(r.connections) != 0 {
 		select {
 		case <-time.After(mcpSettle):
 		case <-ctx.Done():
 			return "", ctx.Err()
 		}
-	}
-	return r.opened(client, created.SessionId)
-}
-
-var errNoLoad = errors.New("agent cannot load sessions")
-
-func (r *running) opened(client *acpClient, id acp.SessionId) (acp.SessionId, error) {
-	if !sessionID.MatchString(string(id)) {
-		return "", &execution.AgentFailure{Message: "opencode returned an invalid session ID"}
 	}
 	client.follow(id)
 	r.events.begin(string(id))

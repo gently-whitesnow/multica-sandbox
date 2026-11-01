@@ -19,6 +19,9 @@ func (s *Service) configureMCP(urls, anonymous []string, allowHTTP bool) error {
 	return nil
 }
 
+// ManagedMCP identifies exact recipients approved for automatic identity delivery.
+func (s *Service) ManagedMCP(selectedURL string) bool { return s.mcp[selectedURL] }
+
 // AnonymousMCP reports whether a selected URL is approved without the agent's token.
 func (s *Service) AnonymousMCP(selectedURL string) bool { return s.anon[selectedURL] }
 

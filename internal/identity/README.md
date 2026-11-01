@@ -116,6 +116,10 @@ resolver owns agent/client consistency and cannot supply credential endpoints.
 or tool. `mcp_anonymous` approves disjoint exact URLs that receive no token.
 `AcquireForMCP` checks the recipient before contacting the source. Ongoing renewal,
 status checks and cleanup belong to the adapter, not a background issuer loop.
+With `opencode.mcp_public_proxy`, other native-selected remote MCPs can use
+anonymous access or user headers through egress without this issuer. They never
+borrow the managed JWT. Explicit `mcp_anonymous` URLs retain their direct route.
+See ADR 0029 for dynamic connection configuration.
 
 `http_services` separately names operator-approved HTTP recipients and method/path
 routes. An origin may have a clean base path, never a query. Each route has an exact `path` or a slash-ended

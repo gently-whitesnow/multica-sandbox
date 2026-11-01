@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -60,6 +61,8 @@ type Adapter struct {
 	// tokens (ADR 0023); agents selecting MCP need them.
 	MCPRelay    *MCPRelay
 	MCPRelayURL string
+	// MCPPublicProxy is deployment-owned egress for arbitrary selected public MCPs.
+	MCPPublicProxy *url.URL
 	// InferenceRelay and InferenceRelayURL carry workspace-key inference (ADR 0012).
 	InferenceRelay    Grants
 	InferenceRelayURL string
@@ -67,7 +70,6 @@ type Adapter struct {
 	// the Multica relay and a workload with a workdir volume.
 	GitRelay *repo.Relay
 	Checkout *repo.Checkout
-	// EnvAllow names the agent custom_env variables attempts receive (ValidEnvAllow).
 	EnvAllow []string
 	// IdleWatchdog fails a run without native events for this long (default 10m, upstream's).
 	IdleWatchdog time.Duration
@@ -81,6 +83,7 @@ type running struct {
 	connections map[string]Remote
 	// anonymous names selected connections approved without the agent's token.
 	anonymous map[string]bool
+	public    map[string]bool
 	workload  execution.ProjectedRun
 	// mu guards tokens, which the MCP relay reads while the renewal loop replaces them.
 	mu           sync.Mutex
@@ -124,8 +127,11 @@ func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, 
 	if err != nil {
 		return nil, &execution.RejectedError{Err: err}
 	}
-	if len(connections) != 0 && a.Issuer == nil {
-		return nil, &execution.RejectedError{Err: fmt.Errorf("MCP connections require identity_file: %w", ErrDenied)}
+	if connections, err = resolveRemoteHeaders(connections, task.Agent.CustomEnv); err != nil {
+		return nil, &execution.RejectedError{Err: err}
+	}
+	if len(connections) != 0 && a.Issuer == nil && a.MCPPublicProxy == nil {
+		return nil, &execution.RejectedError{Err: fmt.Errorf("MCP connections require identity_file or mcp_public_proxy: %w", ErrDenied)}
 	}
 	if len(connections) != 0 && a.MCPRelay == nil {
 		return nil, &execution.RejectedError{Err: fmt.Errorf("MCP connections require mcp_relay: %w", ErrDenied)}
@@ -146,11 +152,11 @@ func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, 
 			return nil, &execution.RejectedError{Err: err}
 		}
 	}
-	anonymous := map[string]bool{}
-	for name, connection := range connections {
-		anonymous[name] = a.Issuer.AnonymousMCP(connection.URL)
+	anonymous, public, err := a.mcpModes(connections)
+	if err != nil {
+		return nil, &execution.RejectedError{Err: err}
 	}
-	r := &running{adapter: a, task: task, connections: connections, anonymous: anonymous, tokens: map[string]identity.AccessToken{}, done: make(chan error, 1), exited: make(chan struct{}), skills: skills}
+	r := &running{adapter: a, task: task, connections: connections, anonymous: anonymous, public: public, tokens: map[string]identity.AccessToken{}, done: make(chan error, 1), exited: make(chan struct{}), skills: skills}
 	if err := r.configureHTTP(); err != nil {
 		return nil, &execution.RejectedError{Err: err}
 	}

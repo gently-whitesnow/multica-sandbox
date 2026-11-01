@@ -39,6 +39,8 @@ func main() {
 		err = printEvidence()
 	case "inference":
 		err = inferenceScenario()
+	case "dynamic-mcp":
+		err = dynamicMCP()
 	case "rotation":
 		err = rotation()
 	case "scenario":

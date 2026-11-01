@@ -107,12 +107,14 @@ const (
 )
 
 type OpenCodeConfig struct {
-	IdentityFile string         `json:"identity_file,omitempty"`
-	MCPRelay     *RelayConfig   `json:"mcp_relay,omitempty"`
-	Authority    attempt.Config `json:"authority"`
-	Network      string         `json:"network"`
-	Peers        []string       `json:"peers"`
-	MulticaRelay *RelayConfig   `json:"multica_relay,omitempty"`
+	IdentityFile string       `json:"identity_file,omitempty"`
+	MCPRelay     *RelayConfig `json:"mcp_relay,omitempty"`
+	// MCPPublicProxy enables arbitrary selected public MCP endpoints through trusted egress.
+	MCPPublicProxy string         `json:"mcp_public_proxy,omitempty"`
+	Authority      attempt.Config `json:"authority"`
+	Network        string         `json:"network"`
+	Peers          []string       `json:"peers"`
+	MulticaRelay   *RelayConfig   `json:"multica_relay,omitempty"`
 	// MulticaCLI is the digest-pinned CLI artifact the relay requires (deploy/multica-cli.Dockerfile).
 	MulticaCLI string `json:"multica_cli,omitempty"`
 	// MulticaCLIRevision is the commit the CLI artifact was built from (default multica.UpstreamRevision).

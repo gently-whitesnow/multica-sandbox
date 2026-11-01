@@ -23,6 +23,8 @@ from verified behavior.
 - `adrs/0026-multica-072-and-task-capabilities.md`, `0027-provider-neutral-jwt-identity.md`
   and `0028-auto-host-resources.md`: current upstream, native task API permissions,
   reusable identity sources and automatically sized execution resources.
+- `adrs/0029-dynamic-http-mcp.md`: native remote MCP selection, controller-held
+  headers/agent ENV and public proxy transport without per-endpoint rollout.
 - `examples/end-to-end/`: opt-in real Multica/OpenCode/inference lab.
 - `examples/identity-mcp/`: disposable identity and MCP contract fixture.
 - `internal/inference/`: workspace gateway bindings, relay policy and advisory model catalogs.
@@ -83,6 +85,8 @@ available. Run `VERIFY_CONTAINERS=1 ./verify.sh` for backend changes and
 `VERIFY_SERVICE=1 ./verify.sh` for service/packaging changes. Never run test commands
 against production tasks. Keep fixture data generic.
 Run `VERIFY_IDENTITY=1 ./verify.sh` for identity/MCP fixture changes.
+Run `VERIFY_DYNAMIC_MCP=1 ./verify.sh` for public remote MCP selection/transport;
+the fixture verifies real OpenCode tools, secret isolation and retained changes.
 Run `VERIFY_INFERENCE=1 ./verify.sh` for native OpenCode/relay/LiteLLM workspace-key
 checks; add `VERIFY_SERVICE=1 VERIFY_OPENCODE=1` for real controller inference.
 The end-to-end lab uses `scripts/e2e.sh`; real inference requires explicit local
