@@ -81,18 +81,20 @@ type running struct {
 	anonymous map[string]bool
 	workload  execution.ProjectedRun
 	// mu guards tokens, which the MCP relay reads while the renewal loop replaces them.
-	mu         sync.Mutex
-	tokens     map[string]identity.AccessToken
-	cancel     context.CancelFunc
-	done       chan error
-	exited     chan struct{}
-	started    bool
-	once       sync.Once
-	cleanupErr error
-	events     *eventStream
-	model      string
-	effort     string
-	relayToken string
+	mu           sync.Mutex
+	tokens       map[string]identity.AccessToken
+	httpServices map[string]identity.HTTPService
+	httpTokens   map[string]identity.AccessToken
+	cancel       context.CancelFunc
+	done         chan error
+	exited       chan struct{}
+	started      bool
+	once         sync.Once
+	cleanupErr   error
+	events       *eventStream
+	model        string
+	effort       string
+	relayToken   string
 	// mcpToken is the opaque MCP relay credential named in session/new.
 	mcpToken string
 	// prompt is the turn's message; v2 marks an OpenCode 2.x agent.
@@ -147,6 +149,9 @@ func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, 
 		anonymous[name] = a.Issuer.AnonymousMCP(connection.URL)
 	}
 	r := &running{adapter: a, task: task, connections: connections, anonymous: anonymous, tokens: map[string]identity.AccessToken{}, done: make(chan error, 1), exited: make(chan struct{}), skills: skills}
+	if err := r.configureHTTP(); err != nil {
+		return nil, &execution.RejectedError{Err: err}
+	}
 	runCtx, cancel := context.WithCancel(ctx)
 	r.cancel = cancel
 	if a.Relay != nil {
@@ -158,7 +163,7 @@ func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, 
 			return nil, r.reject(fmt.Errorf("Multica relay grant: %w", ErrDenied))
 		}
 	}
-	if len(connections) != 0 {
+	if len(connections) != 0 || len(r.httpServices) != 0 {
 		if r.mcpToken, err = a.MCPRelay.issue(r); err != nil {
 			return nil, r.reject(fmt.Errorf("MCP relay grant: %w", ErrDenied))
 		}
@@ -314,6 +319,9 @@ func (r *running) refresh(ctx context.Context) error {
 		r.tokens[name] = token
 		r.mu.Unlock()
 	}
+	if err := r.refreshHTTP(ctx, ref); err != nil {
+		return err
+	}
 	return ctx.Err()
 }
 
@@ -437,6 +445,7 @@ func (r *running) Remove(ctx context.Context) error {
 		}
 		r.mu.Lock()
 		clear(r.tokens)
+		clear(r.httpTokens)
 		r.mu.Unlock()
 	})
 	return r.cleanupErr

@@ -20,6 +20,9 @@ from verified behavior.
   inference connection and agent identity from Multica env (0022),
   OpenCode over ACP and the MCP relay (0023), the in-house credential relay (0024),
   quality metrics and structured logs (0025).
+- `adrs/0026-multica-072-and-task-capabilities.md`, `0027-provider-neutral-jwt-identity.md`
+  and `0028-auto-host-resources.md`: current upstream, bounded task API,
+  reusable identity sources and automatically sized execution resources.
 - `examples/end-to-end/`: opt-in real Multica/OpenCode/inference lab.
 - `examples/identity-mcp/`: disposable identity and MCP contract fixture.
 - `internal/inference/`: workspace gateway bindings, relay policy and advisory model catalogs.

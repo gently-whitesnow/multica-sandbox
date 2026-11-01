@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -87,5 +88,26 @@ func TestTreeArchiveHoldsOnlyCleanRelativeFiles(t *testing.T) {
 	}
 	if writeTar(io.Discard, map[string][]byte{"a": make([]byte, 11)}, 10) == nil {
 		t.Error("oversized tree accepted")
+	}
+}
+
+func TestSharedCPUIsExplicitAndHasNoPerAttemptQuota(t *testing.T) {
+	r, err := (&ResourceSpec{CPUMode: "shared"}).Resolve(Sysbox)
+	if err != nil || r.NanoCPUs != 0 {
+		t.Fatal(r, err)
+	}
+	for _, arg := range r.args() {
+		if strings.HasPrefix(arg, "--cpus=") {
+			t.Fatal("shared CPU has a quota", arg)
+		}
+	}
+	if _, err := (&ResourceSpec{CPUMode: "shared", CPUs: 2}).Resolve(Sysbox); err == nil {
+		t.Fatal("conflicting CPU modes accepted")
+	}
+	if _, err := (&ResourceSpec{CPUMode: "automatic"}).Resolve(Sysbox); err == nil {
+		t.Fatal("unknown CPU mode accepted")
+	}
+	if r, _ := (*ResourceSpec)(nil).Resolve(Sysbox); r.NanoCPUs != 2e9 {
+		t.Fatal("legacy CPU default changed")
 	}
 }

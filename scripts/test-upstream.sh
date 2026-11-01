@@ -3,7 +3,7 @@
 set -eu
 ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)
 cd "$ROOT"
-REV=d45aba1cd7582bef9210b921bbb7dc198b48e1ee # v0.5.2
+REV=f05a525ac8e82f5e9169ad078e44f166fad6d5c8 # v0.7.2
 TMP=$(mktemp -d)
 NAME="multica-sandbox-contract-$$"
 DB="$NAME-db"

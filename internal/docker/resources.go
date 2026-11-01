@@ -46,13 +46,15 @@ const (
 
 // ResourceSpec is the configured form; empty fields keep the defaults.
 type ResourceSpec struct {
-	CPUs          float64 `json:"cpus,omitempty"`
-	Memory        string  `json:"memory,omitempty"`
-	Pids          int     `json:"pids,omitempty"`
-	NoFile        int     `json:"nofile,omitempty"`
-	WorkspaceSize string  `json:"workspace_size,omitempty"`
-	TmpSize       string  `json:"tmp_size,omitempty"`
-	ShmSize       string  `json:"shm_size,omitempty"`
+	CPUs float64 `json:"cpus,omitempty"`
+	// CPUMode shared removes per-attempt quotas; the host scheduler shares CPUs.
+	CPUMode       string `json:"cpu_mode,omitempty"`
+	Memory        string `json:"memory,omitempty"`
+	Pids          int    `json:"pids,omitempty"`
+	NoFile        int    `json:"nofile,omitempty"`
+	WorkspaceSize string `json:"workspace_size,omitempty"`
+	TmpSize       string `json:"tmp_size,omitempty"`
+	ShmSize       string `json:"shm_size,omitempty"`
 }
 
 // Resolve applies a spec over the runtime's defaults within sane bounds.
@@ -63,6 +65,15 @@ func (s *ResourceSpec) Resolve(runtime string) (Resources, error) {
 	}
 	if s == nil {
 		return r, nil
+	}
+	if s.CPUMode != "" && s.CPUMode != "shared" {
+		return r, fmt.Errorf("resources.cpu_mode must be shared or omitted")
+	}
+	if s.CPUMode == "shared" {
+		if s.CPUs != 0 {
+			return r, fmt.Errorf("resources.cpus conflicts with cpu_mode shared")
+		}
+		r.NanoCPUs = 0
 	}
 	if s.CPUs != 0 {
 		if s.CPUs < 0.1 || s.CPUs > 256 {
@@ -151,7 +162,10 @@ func (r Resources) args() []string {
 	if r.Memory > 0 {
 		args = append(args, "--memory="+strconv.FormatInt(r.Memory, 10), "--memory-swap="+strconv.FormatInt(r.swap(), 10))
 	}
-	return append(args, "--cpus="+strconv.FormatFloat(float64(r.NanoCPUs)/1e9, 'f', -1, 64),
+	if r.NanoCPUs > 0 {
+		args = append(args, "--cpus="+strconv.FormatFloat(float64(r.NanoCPUs)/1e9, 'f', -1, 64))
+	}
+	return append(args,
 		"--pids-limit="+strconv.Itoa(r.Pids), fmt.Sprintf("--ulimit=nofile=%d:%d", r.NoFile, r.NoFile),
 		"--tmpfs=/workspace:"+r.workspaceTmpfs(), "--tmpfs=/tmp:"+r.tmpTmpfs(), "--shm-size="+strconv.FormatInt(r.Shm, 10))
 }

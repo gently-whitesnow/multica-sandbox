@@ -18,9 +18,10 @@ var uuid = regexp.MustCompile(`^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-
 // Config has one issuer (realm) for every agent. Credentials come from the agent's
 // custom_env when AgentEnv is set and it names them, otherwise from Bindings or External.
 type Config struct {
-	Version   int          `json:"version"`
-	AllowHTTP bool         `json:"allow_http,omitempty"`
-	Issuer    IssuerConfig `json:"issuer"`
+	Version     int               `json:"version"`
+	AllowHTTP   bool              `json:"allow_http,omitempty"`
+	Issuer      IssuerConfig      `json:"issuer"`
+	TokenSource TokenSourceConfig `json:"token_source,omitempty"`
 	// AgentEnv reads EnvClientID and EnvClientSecret from the claim's agent custom_env first.
 	AgentEnv bool            `json:"agent_env,omitempty"`
 	Bindings []Binding       `json:"bindings,omitempty"`
@@ -29,13 +30,27 @@ type Config struct {
 	MCP []string `json:"mcp,omitempty"`
 	// MCPAnonymous lists exact MCP URLs the relay reaches without any token, for servers
 	// that authenticate on their own or not at all.
-	MCPAnonymous []string `json:"mcp_anonymous,omitempty"`
+	MCPAnonymous []string      `json:"mcp_anonymous,omitempty"`
+	HTTPServices []HTTPService `json:"http_services,omitempty"`
 }
 type IssuerConfig struct {
 	URL           string `json:"url"`
 	TokenURL      string `json:"token_url"`
 	JWKSURL       string `json:"jwks_url"`
 	MaxTTLSeconds int    `json:"max_ttl_seconds,omitempty"`
+	// Empty profile retains the original Keycloak service-account contract.
+	Profile        string `json:"profile,omitempty"`
+	Audience       string `json:"audience,omitempty"`
+	PrincipalClaim string `json:"principal_claim,omitempty"`
+}
+
+// TokenSourceConfig names only operator-owned endpoints; credentials cannot select them.
+type TokenSourceConfig struct {
+	Type       string `json:"type,omitempty"`
+	AuthMethod string `json:"auth_method,omitempty"`
+	TokenURL   string `json:"token_url,omitempty"`
+	LoginURL   string `json:"login_url,omitempty"`
+	RevokeURL  string `json:"revoke_url,omitempty"`
 }
 
 // TokenRequest contains OAuth issuance parameters, not tool permissions.
@@ -50,6 +65,7 @@ type Binding struct {
 	ClientID    string       `json:"client_id"`
 	SecretFile  string       `json:"secret_file"`
 	Token       TokenRequest `json:"token,omitempty"`
+	Principal   string       `json:"principal,omitempty"`
 }
 type ExternalConfig struct {
 	URL        string `json:"url"`

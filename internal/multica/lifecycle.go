@@ -17,30 +17,32 @@ type Runtime struct {
 
 // Task excludes arbitrary claim payloads; AuthToken stays redacted and in memory (ADR 0014).
 type Task struct {
-	AuthToken             Secret            `json:"auth_token"`
-	TriggerCommentID      string            `json:"trigger_comment_id"`
-	TriggerThreadID       string            `json:"trigger_thread_id"`
-	TriggerAuthorType     string            `json:"trigger_author_type"`
-	TriggerAuthorName     string            `json:"trigger_author_name"`
-	AgentID               string            `json:"agent_id"`
-	Agent                 *Agent            `json:"agent"`
-	IssueID               string            `json:"issue_id"`
-	WorkspaceContext      string            `json:"workspace_context"`
-	ChatMessage           string            `json:"chat_message"`
-	ProjectID             string            `json:"project_id"`
-	ProjectTitle          string            `json:"project_title"`
-	ProjectDescription    string            `json:"project_description"`
-	ProjectResources      []ProjectResource `json:"project_resources"`
-	Repos                 []Repository      `json:"repos"`
-	PriorSessionID        string            `json:"prior_session_id"`
-	PriorWorkDir          string            `json:"prior_work_dir"`
-	TriggerCommentContent string            `json:"trigger_comment_content"`
-	RemoteMCPConnections  []json.RawMessage `json:"remote_mcp_connections"`
-	WorkspaceID           string            `json:"workspace_id"`
-	ID                    string            `json:"id"`
-	RuntimeID             string            `json:"runtime_id"`
-	DispatchedAt          string            `json:"dispatched_at"`
-	StartClaimSupported   bool              `json:"start_claim_supported"`
+	AuthToken              Secret            `json:"auth_token"`
+	TriggerCommentID       string            `json:"trigger_comment_id"`
+	TriggerThreadID        string            `json:"trigger_thread_id"`
+	TriggerAuthorType      string            `json:"trigger_author_type"`
+	TriggerAuthorName      string            `json:"trigger_author_name"`
+	AgentID                string            `json:"agent_id"`
+	Agent                  *Agent            `json:"agent"`
+	IssueID                string            `json:"issue_id"`
+	WorkspaceContext       string            `json:"workspace_context"`
+	ChatMessage            string            `json:"chat_message"`
+	ProjectID              string            `json:"project_id"`
+	ProjectTitle           string            `json:"project_title"`
+	ProjectDescription     string            `json:"project_description"`
+	ProjectResources       []ProjectResource `json:"project_resources"`
+	Repos                  []Repository      `json:"repos"`
+	PriorSessionID         string            `json:"prior_session_id"`
+	PriorWorkDir           string            `json:"prior_work_dir"`
+	TriggerCommentEditedAt string            `json:"trigger_comment_edited_at"`
+	TriggerCommentRevision int64             `json:"trigger_comment_revision"`
+	TriggerCommentContent  string            `json:"trigger_comment_content"`
+	RemoteMCPConnections   []json.RawMessage `json:"remote_mcp_connections"`
+	WorkspaceID            string            `json:"workspace_id"`
+	ID                     string            `json:"id"`
+	RuntimeID              string            `json:"runtime_id"`
+	DispatchedAt           string            `json:"dispatched_at"`
+	StartClaimSupported    bool              `json:"start_claim_supported"`
 
 	// Resume deltas and coalesced comments feed the upstream per-turn hints.
 	CoalescedComments             []Comment `json:"coalesced_comments"`
@@ -55,12 +57,33 @@ type Task struct {
 	IssueStateDeltaKnown          bool      `json:"issue_state_delta_known"`
 	PriorSessionResumeUnavailable bool      `json:"prior_session_resume_unavailable"`
 
+	// Native run-only autopilot claims have no issue.
+	AutopilotRunID          string           `json:"autopilot_run_id"`
+	AutopilotID             string           `json:"autopilot_id"`
+	AutopilotTitle          string           `json:"autopilot_title"`
+	AutopilotDescription    string           `json:"autopilot_description"`
+	AutopilotSource         string           `json:"autopilot_source"`
+	AutopilotTriggerPayload json.RawMessage  `json:"autopilot_trigger_payload"`
+	WakeupID                string           `json:"wakeup_id"`
+	WakeupSystemRule        string           `json:"wakeup_system_rule"`
+	WakeupJoined            string           `json:"wakeup_joined"`
+	HandoffNote             string           `json:"handoff_note"`
+	InitiatorName           string           `json:"initiator_name"`
+	InitiatorEmail          string           `json:"initiator_email"`
+	ProjectWorkflow         *ProjectWorkflow `json:"project_workflow"`
+
 	// Chat claims carry the upstream chat prompt inputs (ADR 0017).
-	ChatSessionID          string       `json:"chat_session_id"`
-	ChatChannelType        string       `json:"chat_channel_type"`
-	ChatType               string       `json:"chat_type"`
-	ChatMessageAttachments []Attachment `json:"chat_message_attachments"`
-	ChatIntro              bool         `json:"chat_intro"`
+	ChatSessionID            string       `json:"chat_session_id"`
+	ChatChannelType          string       `json:"chat_channel_type"`
+	ChatInThread             bool         `json:"chat_in_thread"`
+	ChatChannelDeliversFiles bool         `json:"chat_channel_delivers_files"`
+	ChatType                 string       `json:"chat_type"`
+	ChatMessageAttachments   []Attachment `json:"chat_message_attachments"`
+	ChatIntro                bool         `json:"chat_intro"`
+}
+
+type ProjectWorkflow struct {
+	Brief string `json:"brief"`
 }
 
 type Recovery struct {
@@ -207,4 +230,6 @@ type Comment struct {
 	AuthorName string `json:"author_name"`
 	Content    string `json:"content"`
 	CreatedAt  string `json:"created_at"`
+	EditedAt   string `json:"edited_at"`
+	Revision   int64  `json:"revision"`
 }

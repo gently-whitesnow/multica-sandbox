@@ -18,6 +18,7 @@ type Service struct {
 	issuer   *issuer
 	mcp      map[string]bool
 	anon     map[string]bool
+	http     map[string]HTTPService
 	debug    Debug
 }
 
@@ -27,11 +28,15 @@ func New(c Config, server string) (*Service, error) {
 	if c.Version != 1 || !endpoint(server, c.AllowHTTP) || !baseurl.Path(parsed) || strings.HasSuffix(server, "/") || len(c.Bindings) > 0 && c.External != nil || !sources {
 		return nil, ErrDenied
 	}
-	issued, err := newIssuer(c.Issuer, c.AllowHTTP)
+	issued, err := newIssuer(c.Issuer, c.TokenSource, c.AllowHTTP)
 	if err != nil {
 		return nil, err
 	}
 	s := &Service{server: server, agentEnv: c.AgentEnv, issuer: issued}
+	if c.AgentEnv && issued.config.Profile == "jwt" {
+		// A claim's credential pair cannot choose its own trusted expected principal.
+		return nil, ErrDenied
+	}
 	switch {
 	case c.External != nil:
 		if !endpoint(c.External.URL, c.AllowHTTP) || !filepath.IsAbs(c.External.BearerFile) {
@@ -46,6 +51,9 @@ func New(c Config, server string) (*Service, error) {
 	if err := s.configureMCP(c.MCP, c.MCPAnonymous, c.AllowHTTP); err != nil {
 		return nil, err
 	}
+	if err := s.configureHTTP(c.HTTPServices, c.AllowHTTP); err != nil {
+		return nil, err
+	}
 	return s, nil
 }
 
@@ -56,6 +64,9 @@ func (s *Service) static(bindings []Binding) (Resolver, error) {
 	for _, b := range bindings {
 		ref := Ref{s.server, b.WorkspaceID, b.AgentID}
 		if !validRef(ref, s.server) || !text(b.ClientID, 256) || !filepath.IsAbs(b.SecretFile) || !validTokenRequest(b.Token) {
+			return nil, ErrDenied
+		}
+		if s.issuer.config.Profile == "jwt" && !text(b.Principal, 256) {
 			return nil, ErrDenied
 		}
 		if _, exists := r.bindings[ref]; exists {
@@ -95,7 +106,7 @@ func (s *Service) Resolve(ctx context.Context, r Ref, env Env) (Credentials, err
 		return Credentials{}, ErrDenied
 	}
 	credentials, err := s.resolver.Resolve(ctx, r)
-	if err != nil || !text(credentials.ClientID, 256) || !validTokenRequest(credentials.request) {
+	if err != nil || !text(credentials.ClientID, 256) || !validTokenRequest(credentials.request) || s.issuer.config.Profile == "jwt" && !text(credentials.principal, 256) {
 		s.debug.printf("identity denied agent=%s workspace=%s: no binding or resolver refused", r.AgentID, r.WorkspaceID)
 		return Credentials{}, ErrDenied
 	}

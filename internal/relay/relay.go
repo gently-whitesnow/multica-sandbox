@@ -29,8 +29,8 @@ type Lease struct {
 	// request path, and RawPath, when set, is its escaped form (encoded slashes).
 	Authorization, Path, RawPath string
 	Header                       http.Header
-	// DropQuery discards caller query parameters for an exact upstream endpoint.
-	DropQuery bool
+	// DropQuery discards caller parameters; WithholdErrors protects secret-bearing paths.
+	DropQuery, WithholdErrors bool
 	// Context ends when the grant is revoked, cancelling in-flight requests.
 	Context context.Context
 	Release func()
@@ -50,7 +50,9 @@ type responder interface {
 type Policy struct {
 	// Allow admits cleaned request paths.
 	Allow func(string) bool
-	Limit int64
+	// AllowRequest optionally narrows the admitted path by method or other request policy.
+	AllowRequest func(*http.Request) bool
+	Limit        int64
 	// Reserved lists lower-case header prefixes owned by the relay: caller values
 	// are removed before forwarding and upstream values before responding.
 	Reserved []string
@@ -85,6 +87,7 @@ var (
 	ErrPolicy     = errors.New("request not permitted")
 	ErrCredential = errors.New("invalid relay credential")
 	ErrRedirect   = errors.New("upstream redirect refused")
+	ErrUpstream   = errors.New("upstream unavailable")
 )
 
 // dropped never leave the relay: caller credentials, sessions and forwarding hints.
@@ -156,17 +159,21 @@ func New(auth Authorizer, p Policy) (*Relay, error) {
 					resp.Header.Del(name)
 				}
 			}
-			if p.Withhold && resp.StatusCode >= 400 {
+			if (p.Withhold || x.lease.WithholdErrors) && resp.StatusCode >= 400 {
 				_ = resp.Body.Close()
 				body := `{"error":{"message":"upstream refused the request","type":"upstream_error","code":"` + strconv.Itoa(resp.StatusCode) + `"}}`
 				resp.Body = io.NopCloser(strings.NewReader(body))
 				resp.ContentLength = int64(len(body))
+				resp.Trailer = nil
 				resp.Header = http.Header{"Content-Type": {"application/json"}, "Cache-Control": {"no-store"}, "Content-Length": {strconv.Itoa(len(body))}}
 			}
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, req *http.Request, err error) {
 			x := req.Context().Value(exchangeKey{}).(exchange)
+			if x.lease.WithholdErrors {
+				err = ErrUpstream
+			}
 			r.record(x.in, 0, err, x.start)
 			deny(w, http.StatusBadGateway, "upstream unavailable")
 		},
@@ -177,7 +184,7 @@ func New(auth Authorizer, p Policy) (*Relay, error) {
 func (r *Relay) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	start := time.Now()
 	absolute := req.URL.Scheme != "" || req.URL.Host != ""
-	if absolute != r.policy.Proxy || (absolute && (req.URL.Scheme != "http" || req.URL.User != nil)) || req.Method == http.MethodConnect || req.Header.Get("Upgrade") != "" || !cleanPath(req.URL, r.policy.EncodedSlash) || !r.policy.Allow(req.URL.Path) {
+	if absolute != r.policy.Proxy || (absolute && (req.URL.Scheme != "http" || req.URL.User != nil)) || req.Method == http.MethodConnect || req.Header.Get("Upgrade") != "" || !cleanPath(req.URL, r.policy.EncodedSlash) || !r.policy.Allow(req.URL.Path) || (r.policy.AllowRequest != nil && !r.policy.AllowRequest(req)) {
 		r.refuse(w, req, http.StatusForbidden, ErrPolicy, start)
 		return
 	}

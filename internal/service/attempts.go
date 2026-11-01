@@ -30,6 +30,10 @@ type DinDConfig struct {
 type PoolConfig struct {
 	CgroupParent string `json:"cgroup_parent"`
 	CgroupDir    string `json:"cgroup_dir"`
+	// AutoAdmission staggers cold starts and reserves estimated build headroom.
+	AutoAdmission bool `json:"auto_admission,omitempty"`
+	// DiskPath is a read-only mount of the host Docker/workdir backing filesystem.
+	DiskPath string `json:"disk_path,omitempty"`
 	// AttemptMemoryMax optionally caps one attempt: a size such as 6g or a percentage
 	// of the pool's memory.max such as 75%.
 	AttemptMemoryMax string `json:"attempt_memory_max,omitempty"`
@@ -91,6 +95,12 @@ func attemptPool(c *OpenCodeConfig, resources docker.Resources) (*pool.Pool, doc
 	}
 	if p.CgroupParent == "" || !filepath.IsAbs(p.CgroupDir) || filepath.Clean(p.CgroupDir) != p.CgroupDir {
 		return nil, resources, fmt.Errorf("pool requires cgroup_parent and an absolute cgroup_dir")
+	}
+	if p.AutoAdmission && (!filepath.IsAbs(p.DiskPath) || filepath.Clean(p.DiskPath) != p.DiskPath) {
+		return nil, resources, fmt.Errorf("auto admission requires an absolute disk_path")
+	}
+	if p.DiskPath != "" && !p.AutoAdmission {
+		return nil, resources, fmt.Errorf("disk_path requires auto_admission")
 	}
 	attempts := &pool.Pool{Parent: p.CgroupParent, Dir: p.CgroupDir, MaxPressure: p.MaxPressure, MaxWorkingSet: p.MaxWorkingSet}
 	if attempts.MaxPressure == 0 {

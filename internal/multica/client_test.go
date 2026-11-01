@@ -101,7 +101,7 @@ func TestClaimCarriesResumeDeltas(t *testing.T) {
 	api, _ := New(server.URL, "token")
 	task, err := api.Claim(context.Background(), testID)
 	if err != nil || task.NewCommentCount != 2 || !task.NewCommentsDeltaKnown || !task.IssueStateDeltaKnown || task.IssueChangedFields[0] != "title" ||
-		task.IssueStatus != "todo" || !task.PriorSessionResumeUnavailable || task.CoalescedComments[0] != (Comment{testID, testID, "member", "Member", "earlier", "2026-10-03T01:00:00Z"}) {
+		task.IssueStatus != "todo" || !task.PriorSessionResumeUnavailable || task.CoalescedComments[0] != (Comment{ID: testID, ThreadID: testID, AuthorType: "member", AuthorName: "Member", Content: "earlier", CreatedAt: "2026-10-03T01:00:00Z"}) {
 		t.Fatalf("claim deltas: %+v %v", task, err)
 	}
 }

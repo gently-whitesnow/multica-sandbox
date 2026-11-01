@@ -32,9 +32,10 @@ type Env interface {
 
 // Credentials cannot be serialized or formatted with their client secret.
 type Credentials struct {
-	ClientID string
-	secret   string
-	request  TokenRequest
+	ClientID  string
+	secret    string
+	request   TokenRequest
+	principal string
 }
 
 func (Credentials) Format(s fmt.State, _ rune)   { fmt.Fprint(s, "<identity credentials>") }
@@ -70,4 +71,5 @@ type resolveResponse struct {
 	ClientID     string       `json:"client_id"`
 	ClientSecret string       `json:"client_secret"`
 	Token        TokenRequest `json:"token,omitempty"`
+	Principal    string       `json:"principal,omitempty"`
 }

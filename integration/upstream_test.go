@@ -190,6 +190,8 @@ func TestUpstreamLifecycle(t *testing.T) {
 			}
 		}
 	})
+	t.Run("native-claims", func(t *testing.T) { nativeClaims(t, api, rt) })
+	t.Run("task-authority", func(t *testing.T) { taskAuthority(t, api, rt) })
 	t.Run("issue-gc-check", func(t *testing.T) { issueGCCheck(t, api) })
 	t.Run("process-crash", func(t *testing.T) { restartProcess(t, api, rt, false) })
 	t.Run("containers", func(t *testing.T) { containerLifecycle(t, api, rt) })

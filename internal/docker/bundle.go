@@ -55,7 +55,8 @@ func (b *Projected) prepare(ctx context.Context) ([]string, string, error) {
 			path = value
 		}
 	}
-	var args, dirs []string
+	args := forgeProxyBypass(image.Config.Env, b.ForgeHosts)
+	var dirs []string
 	seen := map[string]bool{}
 	for _, bundle := range bundles {
 		if (bundle.NoPath && len(bundle.Path) > 0) || !imagePattern.MatchString(bundle.Image) || !bundleTarget.MatchString(bundle.Target) || seen[bundle.Target] || len(bundle.Path) > 8 {

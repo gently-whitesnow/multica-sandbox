@@ -17,7 +17,7 @@ const fixtureServer = "https://multica.example.invalid"
 const serviceSubject = "30000000-0000-4000-8000-000000000001"
 
 func resolverConfig() identity.Config {
-	return identity.Config{Version: 1, AllowHTTP: true, Issuer: identity.IssuerConfig{URL: issuer, TokenURL: issuer + "/protocol/openid-connect/token", JWKSURL: issuer + "/protocol/openid-connect/certs", MaxTTLSeconds: 180}, MCP: []string{"http://gateway:8080/mcp"}, Bindings: []identity.Binding{{WorkspaceID: "10000000-0000-4000-8000-000000000001", AgentID: "20000000-0000-4000-8000-000000000001", ClientID: "example-agent", SecretFile: "/secrets/client"}}}
+	return identity.Config{Version: 1, AllowHTTP: true, Issuer: identity.IssuerConfig{URL: issuer, TokenURL: issuer + "/protocol/openid-connect/token", JWKSURL: issuer + "/protocol/openid-connect/certs", MaxTTLSeconds: 180, Profile: "keycloak", Audience: "sandbox-mcp"}, MCP: []string{"http://gateway:8080/mcp"}, Bindings: []identity.Binding{{WorkspaceID: "10000000-0000-4000-8000-000000000001", AgentID: "20000000-0000-4000-8000-000000000001", ClientID: "example-agent", SecretFile: "/secrets/client"}}}
 }
 
 // Every credential source must obtain and verify a real Keycloak token of the client.
