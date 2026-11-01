@@ -23,15 +23,10 @@ type Config struct {
 	Issuer      IssuerConfig      `json:"issuer"`
 	TokenSource TokenSourceConfig `json:"token_source,omitempty"`
 	// AgentEnv reads EnvClientID and EnvClientSecret from the claim's agent custom_env first.
-	AgentEnv bool            `json:"agent_env,omitempty"`
-	Bindings []Binding       `json:"bindings,omitempty"`
-	External *ExternalConfig `json:"external,omitempty"`
-	// MCP lists the exact MCP URLs that receive the agent's access token.
-	MCP []string `json:"mcp,omitempty"`
-	// MCPAnonymous lists exact MCP URLs the relay reaches without any token, for servers
-	// that authenticate on their own or not at all.
-	MCPAnonymous []string      `json:"mcp_anonymous,omitempty"`
-	HTTPServices []HTTPService `json:"http_services,omitempty"`
+	AgentEnv     bool            `json:"agent_env,omitempty"`
+	Bindings     []Binding       `json:"bindings,omitempty"`
+	External     *ExternalConfig `json:"external,omitempty"`
+	HTTPServices []HTTPService   `json:"http_services,omitempty"`
 }
 type IssuerConfig struct {
 	URL           string `json:"url"`

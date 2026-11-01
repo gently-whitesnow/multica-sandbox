@@ -1,15 +1,25 @@
 package identity
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
-func TestManagedMCPIsAnExactIdentityRecipient(t *testing.T) {
-	s := &Service{mcp: map[string]bool{"https://eco.example.invalid/mcp": true}, anon: map[string]bool{"https://docs.example.invalid/mcp": true}}
-	if !s.ManagedMCP("https://eco.example.invalid/mcp") {
-		t.Fatal("managed recipient not recognized")
+func TestMCPDeliveryUsesExplicitAdapterSelection(t *testing.T) {
+	fixture := newTokenFixture(t)
+	service, err := New(fixture.config(t), identityTestServer)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, endpoint := range []string{"https://eco.example.invalid/mcp/", "https://docs.example.invalid/mcp", "https://new.example.invalid/mcp"} {
-		if s.ManagedMCP(endpoint) {
-			t.Fatal("identity recipient broadened")
+	for _, endpoint := range []string{"https://tools.example/mcp", "https://new.example/mcp?project=one"} {
+		if _, err = service.AcquireForMCP(context.Background(), Ref{identityTestServer, workspaceA, agentA}, nil, endpoint); err != nil {
+			t.Fatal("selected MCP requires no infrastructure URL list", err)
+		}
+	}
+	for _, endpoint := range []string{"", "file:///tmp/mcp", "https://user:secret@tools.example/mcp", "https://tools.example/mcp#fragment", "https:///mcp"} {
+		fixture.gotSecret = ""
+		if _, err = service.AcquireForMCP(context.Background(), Ref{identityTestServer, workspaceA, agentA}, nil, endpoint); err != ErrDenied || fixture.gotSecret != "" {
+			t.Fatal("invalid MCP URL contacted issuer")
 		}
 	}
 }

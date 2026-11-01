@@ -13,7 +13,7 @@ import (
 // httpIdentity is optional; managed HTTP clients reuse the identity source and
 // lifecycle without adding connections to the agent's selected MCP tool catalogue.
 type httpIdentity interface {
-	HTTPServicesFor(identity.Ref) []identity.HTTPService
+	HTTPServicesFor(identity.Ref, identity.Env) []identity.HTTPService
 	AcquireForHTTP(context.Context, identity.Ref, identity.Env, string) (identity.AccessToken, error)
 }
 
@@ -25,7 +25,7 @@ func (r *running) configureHTTP() error {
 		return nil
 	}
 	ref := identity.Ref{Server: r.adapter.Server, WorkspaceID: r.task.WorkspaceID, AgentID: r.task.AgentID}
-	for _, service := range source.HTTPServicesFor(ref) {
+	for _, service := range source.HTTPServicesFor(ref, r.task.Agent.CustomEnv) {
 		r.httpServices[service.Name] = service
 	}
 	if len(r.httpServices) > 0 && (r.adapter.MCPRelay == nil || r.adapter.MCPRelayURL == "") {

@@ -1,84 +1,50 @@
 # ADR 0011: Managed MCP identity delivery
 
-Status: Accepted
+Status: Accepted; explicit selection refined by ADR 0030.
 Date: 2026-10-04
 
 ## Context
 
-Users select each agent's MCP connections in Multica. Long tasks need token
-rotation without exposing OIDC client secrets or maintaining a second tool catalog.
+Users select agent MCP connections in Multica. Long tasks need token rotation
+without exposing IAM bootstrap credentials or maintaining another tool catalog.
 
 ## Decision
 
-Use the effective MCP configuration delivered by Multica. Do not add connections
-from controller policy. Operators configure identity bindings by Multica server,
-workspace ID and agent ID; client ID is a resolved IAM attribute, not a selector
-supplied by the workload. Verify the issued token belongs to the bound client.
+Use effective MCP configuration delivered in a trusted Multica claim. An explicit
+`Authorization: Bearer {iam:access_token}` header selects the agent identity.
+Ordinary headers and anonymous connections do not implicitly receive it. ADR 0030
+removes the earlier deployment lists of exact identity and anonymous recipients.
 
-Define an identity resolver with static configuration and an authenticated external
-service implementation. Static bindings reference controller-only secret files;
-external resolution can obtain credentials from deployment-owned secret storage.
-Keep client secrets outside the workload and out of logs and persisted task state.
+Resolve credentials from native Agent Environment, an explicit static binding or
+an authenticated external resolver. The issuer and token-source endpoints belong
+to deployment configuration. Verify source/client identity and signed JWT claims
+before delivery. IAM owns audiences, roles and groups; MCP services filter
+`tools/list` and authorize every `tools/call` and concrete resource.
 
-Define MCP identity delivery rules, initially static, with an interface for future
-external resolution. Match exact approved server URLs, not
-user-selected connection names. IAM bindings carry optional OAuth issuance
-parameters. Do not require placeholder headers or per-tool scopes in Multica.
-IAM owns token audiences, roles and groups; MCP validates its intended audience
-and permissions. The controller has no corporate resource catalog. Never send corporate tokens to arbitrary URLs.
-Reject conflicting supplied authorization rather than silently overwriting it.
+The controller keeps source credentials and JWTs. Its relay grants the attempt
+an opaque per-attempt credential and forwards only its selected connection with
+the current upstream authorization. Reissue tokens while Multica confirms the
+task remains running. Revoke attempt grants and cancel streams on cleanup.
+Stopping renewal alone does not invalidate an upstream unexpired JWT.
 
-IAM supplies identity roles/groups. MCP services filter `tools/list` and authorize
-every `tools/call`, including its concrete resource. The controller does not own
-tool permissions. Preserve attempt authorization and revocation from ADR 0009;
-stopping renewal alone does not invalidate an unexpired token.
+An optional external authority may enforce attempt fingerprint leases (ADR 0009).
+Logical-agent identity is not task attestation; deployments must not assume every
+issuance produces a unique JWT. OpenBao subject proof and generic JWT validation
+are specified in ADR 0027 and ADR 0030.
 
-The controller obtains new access tokens while an attempt remains authorized.
-Agent adapters project them into a per-attempt token store. For OpenCode, use its
-native MCP OAuth store with access tokens, expiry and matching server URLs only;
-do not deliver client secrets or refresh tokens. Update atomically and remove
-the projection on cleanup. Runtime environment variables/static headers are not
-a refresh mechanism. No additional renewal process is required.
+All connections follow the deployment transport policy. When a public proxy is
+configured, identity connections use it too; selecting identity grants no direct
+network bypass. Credentials and caller query cannot redirect the selected target.
+Keep controller configuration outside the attempt and use mediated network access.
 
 ## Consequences
 
-The experimental persistent controller registers OpenCode (verified releases in `internal/opencode`) and consumes
-its effective remote `mcpServers` claim selection. It rejects unsupported broker
-connections, local commands, supplied headers/OAuth credentials and mismatched
-agent identity. Arbitrary claim environment and host paths are excluded.
+New connections and credentials are managed through existing Multica forms.
+No per-agent UUID or MCP recipient list is required in the ENV deployment mode.
+The same runtime supports Keycloak and OpenBao through existing token sources.
+Inference uses its own workspace-key relay (ADR 0012), not the agent identity.
 
-Tokens stay in the controller: its MCP relay forwards each attempt's requests to the
-exact approved URL with the current token (ADR 0023, replacing the native auth store
-projection). It renews during the attempt, checks Multica status every second, and
-stops on any issuer, resolver or authority failure. A separate external attempt
-integration registers fingerprints before the relay uses them and enforces a 15-second lease;
-cleanup revokes all fingerprints for that attempt. See ADR 0009. Refinement
-(2026-10-30): some approved servers must not receive the agent's token, for example one
-that forwards the caller's `Authorization` to its own backend. `mcp_anonymous` lists
-such exact URLs. They are disjoint from `mcp`, never trigger issuance or authority
-registration, and keep every other relay rule: the attempt's grant, the exact URL,
-dropped caller credentials and revocation on cleanup.
-
-The Docker path creates an internal network per attempt and attaches only operator
-approved MCP/gateway peers from a validated template. Issuers, resolvers and Multica
-stay outside those networks. Refinement (2026-10-30): attempt networks give the host
-no address (`inhibit_ipv4`) and disable IPv6, so host listeners and resolvers on the
-bridge gateway are unreachable; Docker's embedded resolver answers only peer aliases. OpenCode uses its native MCP transport and OAuth store.
-External deployment policy remains required. The global config directory
-is read-only to avoid startup package installation; images may provide their own tools.
-
-Maintained tests run two native OpenCode tasks with real Keycloak JWTs across
-multiple expiries, using a credential-free deterministic model fixture. They assert
-successful MCP calls, distinct token versions, workspace separation,
-issuer/resolver outages, cancellation and denial of still-unexpired ended tokens.
-The upstream fixture also exercises a real claim through the Compose controller.
-Inference does not use this identity; it goes through the workspace-key relay from ADR 0012.
-The first adapter maps native events/usage/session IDs and safe repository
-references as recorded in its README. Repository materialization and native
-session resume remain unsupported; this is not production adapter certification.
-
-## References
-
-- [OpenCode native MCP auth store](https://github.com/anomalyco/opencode/blob/aec0b9a6d8898f68f923aaf08b7306d931fd9d76/packages/opencode/src/mcp/auth.ts)
-- [OpenCode OAuth provider](https://github.com/anomalyco/opencode/blob/aec0b9a6d8898f68f923aaf08b7306d931fd9d76/packages/opencode/src/mcp/oauth-provider.ts)
-- [MCP authorization](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization)
+Maintained disposable tests exercise real Keycloak/OpenBao issuance and native
+OpenCode calls across expiries, issuer/resolver outages, cancellation, workspace
+separation, ended-grant rejection and retained connection updates. Full deployment
+acceptance also checks the actual network policy and native claim delivery.

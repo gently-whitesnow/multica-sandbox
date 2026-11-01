@@ -23,8 +23,6 @@ type Issuer interface {
 	// AcquireForMCP issues the agent's token for a selected MCP URL; env is the claim's
 	// agent custom_env, which may carry the agent's credentials (ADR 0022).
 	AcquireForMCP(context.Context, identity.Ref, identity.Env, string) (identity.AccessToken, error)
-	// AnonymousMCP approves a selected MCP URL that the relay reaches without a token.
-	AnonymousMCP(string) bool
 }
 type Authority interface {
 	Apply(context.Context, attempt.Grant) error
@@ -70,7 +68,6 @@ type Adapter struct {
 	// the Multica relay and a workload with a workdir volume.
 	GitRelay *repo.Relay
 	Checkout *repo.Checkout
-	EnvAllow []string
 	// IdleWatchdog fails a run without native events for this long (default 10m, upstream's).
 	IdleWatchdog time.Duration
 	// CompactionMaxTokens caps the native auto-compaction trigger; zero keeps native policy.
@@ -81,7 +78,7 @@ type running struct {
 	adapter     *Adapter
 	task        multica.Task
 	connections map[string]Remote
-	// anonymous names selected connections approved without the agent's token.
+	// anonymous names connections without explicit IAM authorization.
 	anonymous map[string]bool
 	public    map[string]bool
 	workload  execution.ProjectedRun
@@ -129,9 +126,6 @@ func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, 
 	}
 	if connections, err = resolveRemoteHeaders(connections, task.Agent.CustomEnv); err != nil {
 		return nil, &execution.RejectedError{Err: err}
-	}
-	if len(connections) != 0 && a.Issuer == nil && a.MCPPublicProxy == nil {
-		return nil, &execution.RejectedError{Err: fmt.Errorf("MCP connections require identity_file or mcp_public_proxy: %w", ErrDenied)}
 	}
 	if len(connections) != 0 && a.MCPRelay == nil {
 		return nil, &execution.RejectedError{Err: fmt.Errorf("MCP connections require mcp_relay: %w", ErrDenied)}

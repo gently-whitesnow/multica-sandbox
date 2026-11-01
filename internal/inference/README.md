@@ -30,7 +30,7 @@ authenticated `external` resolver, and optionally `workspace_env`:
   without the endpoint (404), falls back to the bindings or resolver; one alone,
   a base without `/v1` or another error deny. `workspace_env` may be the only
   source. The controller user must be a workspace owner or admin, and each read
-  (per attempt and catalog refresh) is audited. `env_allow` cannot name either
+  (per attempt and catalog refresh) is audited. The attempt environment excludes both
   variable.
 
 Gateways are not allow-listed: an HTTPS URL without credentials, query or fragment

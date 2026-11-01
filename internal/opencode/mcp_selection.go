@@ -33,6 +33,7 @@ type Remote struct {
 	URL       string `json:"url"`
 	headers   map[string]string
 	headerEnv []string
+	identity  bool
 }
 
 // Remote carries credentials only inside the controller, never through formatting or JSON.
@@ -121,8 +122,8 @@ func selectMCP(name string, c mcpConnection) (Remote, error) {
 		return Remote{}, fmt.Errorf("%w: MCP server %q: %s", ErrDenied, name, unsupported)
 	}
 	decodedURL, _ := url.QueryUnescape(c.URL)
-	if strings.Contains(c.URL, "{env:") || strings.Contains(decodedURL, "{env:") {
-		return Remote{}, fmt.Errorf("%w: MCP server %q URL cannot reference ENV; use {env:NAME} in HTTP headers", ErrDenied, name)
+	if strings.Contains(c.URL, "{env:") || strings.Contains(decodedURL, "{env:") || containsIAMTemplate(c.URL) || containsIAMTemplate(decodedURL) {
+		return Remote{}, fmt.Errorf("%w: MCP server %q URL cannot contain credential templates; use HTTP headers", ErrDenied, name)
 	}
 	if !validMCPURL(c.URL) {
 		return Remote{}, fmt.Errorf("%w: MCP server %q requires an HTTP(S) URL without user information or a fragment", ErrDenied, name)
@@ -131,7 +132,11 @@ func selectMCP(name string, c mcpConnection) (Remote, error) {
 	if err != nil {
 		return Remote{}, fmt.Errorf("%w: MCP server %q has invalid or reserved headers", ErrDenied, name)
 	}
-	return Remote{Type: "remote", URL: c.URL, headers: headers}, nil
+	managed, err := selectIAMHeader(headers)
+	if err != nil {
+		return Remote{}, fmt.Errorf("%w: MCP server %q: %s", ErrDenied, name, err)
+	}
+	return Remote{Type: "remote", URL: c.URL, headers: headers, identity: managed}, nil
 }
 
 func decodeMCP(raw []byte, target any) error {

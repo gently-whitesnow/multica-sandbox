@@ -21,8 +21,8 @@ type Ref struct {
 // Agent custom_env names of its identity (ADR 0022): the OAuth client ID of its
 // service-account client and that client's secret.
 const (
-	EnvClientID     = "IDP_IAM_CLIENT_ID"
-	EnvClientSecret = "IDP_IAM_CLIENT_SECRET"
+	EnvClientID     = "IAM_CLIENT_ID"
+	EnvClientSecret = "IAM_CLIENT_SECRET"
 )
 
 // Env is a redacted view of the agent's custom_env from the claim.

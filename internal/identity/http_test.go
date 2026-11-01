@@ -67,7 +67,7 @@ func TestHTTPServiceCredentialIsExplicitAndAgentScoped(t *testing.T) {
 		t.Fatal(err)
 	}
 	foreign := Ref{identityTestServer, workspaceA, agentB}
-	if len(service.HTTPServicesFor(foreign)) != 0 {
+	if len(service.HTTPServicesFor(foreign, nil)) != 0 {
 		t.Fatal("foreign agent discovered credential-backed service")
 	}
 	if _, err = service.AcquireForHTTP(context.Background(), foreign, nil, "tasks"); err != ErrDenied {

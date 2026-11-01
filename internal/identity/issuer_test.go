@@ -91,8 +91,8 @@ func TestVerifiedIssuanceAndCredentialRotation(t *testing.T) {
 		}
 	}
 	f.gotSecret = ""
-	if _, err = s.AcquireForMCP(context.Background(), ref(c), nil, "https://unapproved.example/mcp"); err != ErrDenied || f.gotSecret != "" {
-		t.Fatal("unapproved MCP contacted issuer")
+	if _, err = s.AcquireForMCP(context.Background(), ref(c), nil, "https://user:password@example/mcp"); err != ErrDenied || f.gotSecret != "" {
+		t.Fatal("invalid MCP URL contacted issuer")
 	}
 }
 func TestRejectInvalidAccessTokens(t *testing.T) {
@@ -159,16 +159,10 @@ func TestConcurrentWorkspaceBindings(t *testing.T) {
 func TestMCPDeliveryAndIAMParameters(t *testing.T) {
 	f := newTokenFixture(t)
 	c := f.config(t)
-	c.MCP = []string{"https://tools.example/mcp"}
 	c.Bindings[0].Token = TokenRequest{Scopes: []string{"profile"}, Resource: "https://tools.example"}
 	s, err := New(c, identityTestServer)
 	if err != nil {
 		t.Fatal(err)
-	}
-	for _, target := range []string{"https://other.example/mcp", "https://tools.example/mcp/", "https://tools.example/mcp?next=other", "https://tools.example/mcp/extra"} {
-		if _, err = s.AcquireForMCP(context.Background(), ref(c), nil, target); err != ErrDenied || f.gotSecret != "" {
-			t.Fatal("unapproved destination contacted issuer")
-		}
 	}
 	c.Bindings[0].Token.Scopes[0] = "mutated"
 	for _, aud := range []any{"another-recipient", nil} {
@@ -182,22 +176,6 @@ func TestMCPDeliveryAndIAMParameters(t *testing.T) {
 		if _, err = s.AcquireForMCP(context.Background(), ref(c), nil, "https://tools.example/mcp"); err != nil || f.gotScope != "profile" || f.gotResource != "https://tools.example" {
 			t.Fatal("delivery depends on recipient permissions or lost IAM parameters", err)
 		}
-	}
-}
-
-func TestAnonymousMCPNeverReceivesToken(t *testing.T) {
-	f := newTokenFixture(t)
-	c := f.config(t)
-	c.MCP, c.MCPAnonymous = []string{"https://tools.example/mcp"}, []string{"https://search.example/mcp"}
-	s, err := New(c, identityTestServer)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !s.AnonymousMCP("https://search.example/mcp") || s.AnonymousMCP("https://tools.example/mcp") || s.AnonymousMCP("https://search.example/mcp/") {
-		t.Fatal("anonymous approval is not exact")
-	}
-	if _, err = s.AcquireForMCP(context.Background(), ref(c), nil, "https://search.example/mcp"); err != ErrDenied || f.gotSecret != "" {
-		t.Fatal("anonymous MCP received the agent's token")
 	}
 }
 
@@ -261,7 +239,6 @@ func TestDebugNamesReasonsWithoutSecrets(t *testing.T) {
 	f := newTokenFixture(t)
 	c := f.config(t)
 	c.AgentEnv = true
-	c.MCP = []string{"https://tools.example/mcp"}
 	s, err := New(c, identityTestServer)
 	if err != nil {
 		t.Fatal(err)
@@ -278,9 +255,9 @@ func TestDebugNamesReasonsWithoutSecrets(t *testing.T) {
 	if _, err = s.AcquireForMCP(context.Background(), ref(c), env, "https://tools.example/mcp"); err != ErrDenied {
 		t.Fatal("foreign azp accepted")
 	}
-	_, _ = s.AcquireForMCP(context.Background(), ref(c), env, "https://other.example/mcp")
+	_, _ = s.AcquireForMCP(context.Background(), ref(c), env, "https://user:password@example/mcp")
 	all := strings.Join(lines, "\n")
-	for _, want := range []string{"source=agent_env", "client=client-env", "token issued", `azp "someone-else"`, "not in the mcp list"} {
+	for _, want := range []string{"source=agent_env", "client=client-env", "token issued", `azp "someone-else"`} {
 		if !strings.Contains(all, want) {
 			t.Errorf("debug lacks %q:\n%s", want, all)
 		}

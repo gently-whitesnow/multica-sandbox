@@ -25,8 +25,7 @@ Support Streamable HTTP first. An anonymous server needs its URL; an authenticat
 server can use normal headers such as Authorization, API key or Cookie. Optional
 `{env:NAME}` interpolation reads only the named agent ENV in the trusted claim,
 never controller process ENV. Missing variables produce safe errors naming the
-variable, not its value. Consumed variables are not projected into attempts even
-when an unrelated `env_allow` entry lists them. Per-server process ENV belongs to
+variable, not its value. Consumed variables are not projected into attempts while ordinary ENV passes without a controller allowlist (ADR 0030). Per-server process ENV belongs to
 future stdio support and is not silently treated as HTTP authorization.
 
 Keep real headers and the selected URL in the controller. OpenCode receives the
@@ -43,15 +42,10 @@ The proxy/network layer must deny host/private/metadata destinations and DNS
 rebinding, with only deployment-owned exceptions. A unique execution-network
 alias avoids selecting an isolated control-network endpoint by DNS.
 
-Automatic identity remains an explicit operator recipient contract:
-
-- An exact managed URL without user headers receives the configured short-lived
-  JWT directly, with existing renewal and issuer/audience/principal verification.
-- An exact operator `mcp_anonymous` URL without headers retains its approved
-  direct route, preserving existing private anonymous integrations.
-- Other anonymous URLs and user-header connections use public egress and receive
-  no managed JWT. User headers are an explicit credential mode, not an identity
-  issuance fallback.
+Identity is selected explicitly with `Authorization: Bearer {iam:access_token}`
+in native MCP headers (ADR 0030). Other anonymous URLs and user-header connections
+receive no managed JWT. All use the configured proxy; the identity marker does
+not change network reachability. Deployment recipient URL lists are removed.
 
 Public/static-header failures retain status while withholding upstream error
 bodies, headers, trailers and redirect locations. Revocation cancels streams and

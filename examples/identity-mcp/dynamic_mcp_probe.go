@@ -100,7 +100,7 @@ func dynamicNoSecrets(ctx context.Context, owner string) error {
 	if err != nil || len(containers) != 1 {
 		return fmt.Errorf("expected one native attempt")
 	}
-	command := `if cat /proc/[0-9]*/environ 2>/dev/null | tr '\0' '\n' | grep -qE 'PUBLIC_TOKEN=|fixture-static-token-round-1|fixture-env-token-round-1|fixture-query-token-round-1|fixture-cookie-token-round-1'; then exit 1; fi; if grep -raqE 'fixture-static-token-round-1|fixture-env-token-round-1|fixture-query-token-round-1|fixture-cookie-token-round-1|public-mcp.fixture.invalid' /workspace/opencode.json /workspace/work; then exit 2; fi`
+	command := `cat /proc/[0-9]*/environ 2>/dev/null | tr '\0' '\n' | grep -qx 'USER_SETTING=native-env-delivered' || exit 3; if cat /proc/[0-9]*/environ 2>/dev/null | tr '\0' '\n' | grep -qE 'IAM_CLIENT_ID=|IAM_CLIENT_SECRET=|fixture-iam-secret|fixture-iam-token|PUBLIC_TOKEN=|fixture-static-token-round-1|fixture-env-token-round-1|fixture-query-token-round-1|fixture-cookie-token-round-1'; then exit 1; fi; if grep -raqE 'fixture-iam-secret|fixture-iam-token|fixture-static-token-round-1|fixture-env-token-round-1|fixture-query-token-round-1|fixture-cookie-token-round-1|public-mcp.fixture.invalid' /workspace/opencode.json /workspace/work; then exit 2; fi`
 	output, err := exec.CommandContext(ctx, "docker", "exec", "--user", "65532:65532", containers[0], "sh", "-c", command).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("MCP secrets projected into native attempt: %v %.120s", err, output)

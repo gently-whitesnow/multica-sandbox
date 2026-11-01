@@ -25,7 +25,7 @@ func TestOpenBaoExchangeRotationAndCleanup(t *testing.T) {
 				w.WriteHeader(403)
 				return
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"auth": map[string]string{"client_token": "temporary-login"}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"auth": map[string]string{"client_token": "temporary-login", "entity_id": "subject-a"}})
 		case "/identity":
 			if r.Method != "GET" || r.Header.Get("X-Vault-Token") != "temporary-login" {
 				t.Error("wrong identity request")
@@ -162,7 +162,7 @@ func TestOpenBaoCancellationStillRevokesLogin(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/login":
-			_ = json.NewEncoder(w).Encode(map[string]any{"auth": map[string]string{"client_token": "temporary-login"}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"auth": map[string]string{"client_token": "temporary-login", "entity_id": "subject-a"}})
 		case "/identity":
 			close(issued)
 			<-r.Context().Done()

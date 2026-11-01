@@ -25,11 +25,13 @@ import (
 
 type dynamicIssuer struct{ calls atomic.Int32 }
 
-func (*dynamicIssuer) ManagedMCP(u string) bool { return u == "http://managed.fixture.invalid/mcp" }
-func (*dynamicIssuer) AnonymousMCP(string) bool { return false }
-func (i *dynamicIssuer) AcquireForMCP(context.Context, identity.Ref, identity.Env, string) (identity.AccessToken, error) {
+func (i *dynamicIssuer) AcquireForMCP(_ context.Context, _ identity.Ref, env identity.Env, selected string) (identity.AccessToken, error) {
 	i.calls.Add(1)
-	return identity.AccessToken{}, errors.New("public MCP requested managed identity")
+	values := env.Allowed([]string{identity.EnvClientID, identity.EnvClientSecret})
+	if values[identity.EnvClientID] != "fixture-iam-client" || values[identity.EnvClientSecret] != "fixture-iam-secret" || !strings.Contains(selected, "/identity?") {
+		return identity.AccessToken{}, errors.New("unexpected dynamic IAM issuance")
+	}
+	return identity.NewAccessToken("fixture-iam-token", time.Now().Add(time.Minute)), nil
 }
 
 type dynamicMCPFixture struct {
@@ -78,23 +80,24 @@ func dynamicMCP() error {
 	}()
 	states := &rotationStatus{states: map[string]string{}}
 	issuer := &dynamicIssuer{}
-	adapter := &opencode.Adapter{Server: fixtureServer, Controller: owner, Issuer: issuer, Status: states, Workloads: fixtureWorkloads{backend}, MCPRelay: mcpRelay, MCPRelayURL: "http://mcp-relay:8095", MCPPublicProxy: proxy, Relay: relay.NewGrants(multica.RelayPrefix), RelayURL: "http://mcp-relay:8091", EnvAllow: []string{"PUBLIC_TOKEN"}}
+	adapter := &opencode.Adapter{Server: fixtureServer, Controller: owner, Issuer: issuer, Status: states, Workloads: fixtureWorkloads{backend}, MCPRelay: mcpRelay, MCPRelayURL: "http://mcp-relay:8095", MCPPublicProxy: proxy, Relay: relay.NewGrants(multica.RelayPrefix), RelayURL: "http://mcp-relay:8091"}
 	var prior execution.Result
 	for round := 1; round <= 3; round++ {
+		calls := issuer.calls.Load()
 		prior, err = f.run(ctx, adapter, states, round, prior)
 		if err != nil {
 			return fmt.Errorf("dynamic MCP round %d: %w", round, err)
 		}
-	}
-	if issuer.calls.Load() != 0 {
-		return errors.New("public MCP requested managed JWT")
+		if round == 1 && issuer.calls.Load() <= calls || round > 1 && issuer.calls.Load() != calls {
+			return errors.New("IAM was not explicit per-turn selection")
+		}
 	}
 	f.Lock()
 	defer f.Unlock()
-	if f.problem != "" || len(f.tools) != 6 {
+	if f.problem != "" || len(f.tools) != 8 {
 		return fmt.Errorf("dynamic MCP evidence failed: %s, calls=%d", f.problem, len(f.tools))
 	}
-	fmt.Println("PASS native OpenCode: anonymous/static/ENV HTTP MCP via proxy; exact queries; no JWT or secret projection; changed connections resume; empty selection clears tools; old grants revoked")
+	fmt.Println("PASS native OpenCode: anonymous/static/ENV/IAM HTTP MCP via proxy; exact queries; ordinary ENV delivered, IAM credentials/tokens not projected; same-session IAM removal stops delivery; empty selection clears tools; old grants revoked")
 	return nil
 }
 
@@ -122,10 +125,13 @@ func (f *dynamicMCPFixture) serve(relayed http.Handler) ([]*http.Server, error) 
 
 func dynamicTask(round int, prior execution.Result) multica.Task {
 	connections := map[string]any{}
-	for _, name := range []string{"anonymous", "static", "environment"} {
+	for _, name := range []string{"anonymous", "static", "environment", "identity"} {
 		entry := map[string]any{"url": fmt.Sprintf("http://public-mcp.fixture.invalid/%s?route=round%d%%2Ffixed&token=fixture-query-token-round-%d", name, round, round)}
 		if name == "static" {
 			entry["headers"] = map[string]string{"Authorization": fmt.Sprintf("Bearer fixture-static-token-round-%d", round), "Cookie": fmt.Sprintf("selected=fixture-cookie-token-round-%d", round)}
+		}
+		if name == "identity" && round == 1 {
+			entry["headers"] = map[string]string{"Authorization": "Bearer {iam:access_token}"}
 		}
 		if name == "environment" {
 			entry["headers"] = map[string]string{"Authorization": "Bearer {env:PUBLIC_TOKEN}"}
@@ -138,6 +144,6 @@ func dynamicTask(round int, prior execution.Result) multica.Task {
 	config, _ := json.Marshal(map[string]any{"mcpServers": connections})
 	task := multica.Task{StartClaimSupported: true, WorkspaceID: "10000000-0000-4000-8000-000000000001", AgentID: "20000000-0000-4000-8000-000000000001", ID: fmt.Sprintf("40000000-0000-4000-8000-%012d", round), RuntimeID: "50000000-0000-4000-8000-000000000001", DispatchedAt: time.Now().UTC().Format(time.RFC3339Nano), ChatSessionID: "60000000-0000-4000-8000-000000000001", ChatMessage: "Run the isolated dynamic MCP probes.", PriorSessionID: prior.SessionID, PriorWorkDir: prior.WorkDir, Agent: &multica.Agent{ID: "20000000-0000-4000-8000-000000000001", MCPConfig: config}}
 	_ = json.Unmarshal([]byte(`"mat_0123456789abcdef0123456789abcdef01234567"`), &task.AuthToken)
-	_ = json.Unmarshal([]byte(fmt.Sprintf(`{"PUBLIC_TOKEN":"fixture-env-token-round-%d"}`, round)), &task.Agent.CustomEnv)
+	_ = json.Unmarshal([]byte(fmt.Sprintf(`{"PUBLIC_TOKEN":"fixture-env-token-round-%d","IAM_CLIENT_ID":"fixture-iam-client","IAM_CLIENT_SECRET":"fixture-iam-secret","USER_SETTING":"native-env-delivered"}`, round)), &task.Agent.CustomEnv)
 	return task
 }

@@ -8,7 +8,7 @@ import (
 )
 
 func safeTask() multica.Task {
-	return multica.Task{ID: "40000000-0000-4000-8000-000000000001", RuntimeID: "50000000-0000-4000-8000-000000000001", DispatchedAt: "2026-10-05T12:00:00Z", StartClaimSupported: true, WorkspaceID: "10000000-0000-4000-8000-000000000001", AgentID: "20000000-0000-4000-8000-000000000001", Agent: &multica.Agent{ID: "20000000-0000-4000-8000-000000000001", MCPConfig: json.RawMessage(`{"mcpServers":{"selected":{"url":"https://tools.example.invalid/mcp"}}}`)}}
+	return multica.Task{ID: "40000000-0000-4000-8000-000000000001", RuntimeID: "50000000-0000-4000-8000-000000000001", DispatchedAt: "2026-10-05T12:00:00Z", StartClaimSupported: true, WorkspaceID: "10000000-0000-4000-8000-000000000001", AgentID: "20000000-0000-4000-8000-000000000001", Agent: &multica.Agent{ID: "20000000-0000-4000-8000-000000000001", MCPConfig: json.RawMessage(`{"mcpServers":{"selected":{"url":"https://tools.example.invalid/mcp","headers":{"Authorization":"Bearer {iam:access_token}"}}}}`)}}
 }
 func TestProjectionDeniesClaimCredentials(t *testing.T) {
 	for _, config := range []string{

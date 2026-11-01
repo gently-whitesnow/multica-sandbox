@@ -1,29 +1,30 @@
 # Controller identity
 
-Resolves a trusted Multica server/workspace/agent reference, obtains a signed JWT
-and validates it before credential delivery. Long-lived credentials and JWTs stay
-outside attempts. The OpenCode adapter renews them while Multica reports the task
-running; attempts use opaque, revocable relay credentials.
+Resolve credentials from trusted Multica configuration, obtain a signed JWT and
+validate it before delivery. Long-lived credentials and JWTs stay in the controller.
+OpenCode receives opaque, revocable relay grants; the adapter renews identity while
+Multica reports the attempt running.
 
-## Configuration
+## Agent Environment
 
-`ReadConfig` parses strict version-1 JSON; `New(config, controllerServer)` validates
-policy. The server comes from controller configuration. Workloads cannot select
-issuers, secret files, principals or recipients. Endpoints must use HTTPS unless
-`allow_http` explicitly permits a private fixture or deployment network. Requests
-have a ten-second timeout and 64 KiB response bound; redirects and proxy ENV are
-disabled. Ordinary formatting redacts credentials; JSON serialization refuses them.
+With `agent_env: true`, read `IAM_CLIENT_ID` and `IAM_CLIENT_SECRET` from the
+claim's agent Environment. Both select that source; neither falls back to an
+optional configured binding/resolver; one alone denies. Running attempts retain
+their claim snapshot; changes apply to the next attempt. The controller consumes
+these variables, so they never enter the agent process. No alternate names exist.
 
-All agents in one identity service use one issuer/source profile. Bindings select
-a unique client per agent across workspaces. Secret files must be regular absolute
-paths, are bounded and are read on every issuance. Atomic replacement and projected
-secret symlinks support rotation. Secret values never belong in configuration JSON.
+For Keycloak, these values are the service-account client ID and secret. For
+OpenBao, they are the AppRole role ID and secret ID. Multica owns assigning
+credentials to agents. Copying the pair to another agent gives it the same
+external identity; ENV mode does not promise a unique identity per Multica UUID.
 
-An OpenBao installation uses only standard configuration:
+All agents in one service use one trusted issuer/source profile. A minimal OpenBao
+configuration needs no list of agents or MCP URLs:
 
 ```json
 {
   "version": 1,
+  "agent_env": true,
   "issuer": {
     "profile": "jwt",
     "url": "https://bao.example.com/v1/identity/oidc",
@@ -37,108 +38,79 @@ An OpenBao installation uses only standard configuration:
     "login_url": "https://bao.example.com/v1/auth/approle/login",
     "token_url": "https://bao.example.com/v1/identity/oidc/token/tools",
     "revoke_url": "https://bao.example.com/v1/auth/token/revoke-self"
-  },
-  "bindings": [{
-    "workspace_id": "10000000-0000-4000-8000-000000000001",
-    "agent_id": "20000000-0000-4000-8000-000000000001",
-    "client_id": "approle-role-id",
-    "secret_file": "/run/secrets/agent-secret-id",
-    "principal": "builder"
-  }],
-  "mcp": ["https://tools.example.com/mcp"],
-  "http_services": [{
-    "name": "control",
-    "origin": "https://control.example.com",
-    "routes": [
-      {"method": "GET", "path": "/api/v1/settings"},
-      {"method": "POST", "path_prefix": "/api/v1/deployment-access/"}
-    ]
-  }]
+  }
 }
 ```
 
-The source authenticates using JSON `role_id`/`secret_id`, requests the identity JWT,
-then revokes the temporary login token, including on issuance failure/cancellation.
-Failed cleanup denies delivery. All three endpoints must share an origin. The
-AppRole policy must allow the named identity role and `auth/token/revoke-self`.
-The signing role controls JWT claims, audience and TTL. Configure the exact JWT
-issuer from discovery, including its path; OpenBao's issuer-base setting differs.
-OAuth scope/resource request parameters are rejected for this source.
+`ReadConfig` accepts strict version-1 JSON. Endpoints require HTTPS unless
+`allow_http` explicitly permits a private deployment or fixture. Issuer endpoints,
+secret files and controller credentials never come from workload input. HTTP
+requests have a ten-second timeout and 64 KiB response bound, with redirects and
+proxy ENV disabled. Credential and token formatting/serialization redact values.
 
-## OAuth and JWT profiles
+## Token sources and verification
 
-`TokenSource` separates credential exchange from common verification. For OAuth,
-use `token_source.type: "oauth2_client_credentials"` and its `token_url`. Original
-`issuer.token_url` remains compatible; when both are present they must match.
-OpenBao must use only `token_source.token_url`. OAuth `auth_method` selects
-`client_secret_post` (legacy default) or `client_secret_basic`; unknown methods deny. OAuth obtains only `access_token`;
-there is no automatic ID-token substitution or opaque-token introspection.
+`TokenSource` separates credential exchange from common JWT validation. OAuth2
+client credentials obtain only `access_token`; there is no automatic ID-token
+substitution or opaque-token introspection. Configure `oauth2_client_credentials`
+and `token_url`; `auth_method` selects `client_secret_post` or `client_secret_basic`.
+The original `issuer.token_url` remains supported; when both URLs exist they must
+match. OAuth token parameters may carry scopes/resource, never tool permissions.
 
-`issuer.profile: "keycloak"` checks `azp == client_id` and `typ == Bearer`.
-Set `issuer.audience` explicitly. An omitted profile preserves the original
-Keycloak contract, including recipient-owned audience checking if it is absent.
-A Keycloak binding uses its service-client ID and a secret-file reference; it
-needs no `principal`. Optional binding `token` carries OAuth `scopes` and `resource`
-issuance parameters, never tool permissions.
+OpenBao AppRole exchange authenticates using JSON `role_id`/`secret_id`, obtains
+`auth.entity_id` from that authenticated login, requests the configured identity
+JWT and revokes the temporary login token. Cleanup runs after failure/cancellation;
+failed revocation denies delivery. All three endpoints must share an origin.
+The AppRole policy permits the identity signing role and self-revocation. That
+role owns audience, principal claims and TTL; OAuth scopes/resource are rejected.
 
-`issuer.profile: "jwt"` requires `audience`, `principal_claim` and a trusted
-binding/resolver `principal`. It assumes no Keycloak claims. Both profiles verify
-RS256/ES256 signature, exact issuer, nonempty subject, expiry, issuance time,
-optional not-before and bounded lifetime. `max_ttl_seconds` defaults to 300 and is
-at most 3600; it validates rather than changes issuer configuration. The receiving
-service still authorizes audiences, roles and concrete resources.
+The common verifier checks RS256/ES256 signature, exact issuer, nonempty subject,
+audience when configured, expiry, issuance time, optional not-before and bounded
+lifetime. `max_ttl_seconds` defaults to 300 and is at most 3600.
 
-A logical-agent JWT is not task attestation. In particular, OpenBao can issue
-identical JWTs for the same agent within one second. Attempt isolation uses opaque
-relay grants; an optional external fingerprint authority requires its own compatible
-identity contract and must not assume each issuance is unique.
+- `keycloak` checks `azp == client_id` and `typ == Bearer`. Set audience explicitly;
+  omitted audience preserves recipient-owned checking for existing deployments.
+- `jwt` requires audience and a named nonempty principal claim. A static binding or
+  resolver supplies its expected principal. OpenBao additionally requires
+  `JWT.sub == login.entity_id`; this trusted exchange proof permits ENV mode
+  without a static principal. A generic OAuth/JWT ENV source without such proof
+  is rejected. Principal claims are read only after signature validation.
 
-## Credential resolution
+A logical-agent JWT is not task attestation. OpenBao can issue identical JWTs for
+one entity in one second. Isolation and cancellation use per-attempt relay grants;
+optional fingerprint authority needs its own compatible identity contract.
 
-With `agent_env: true`, Keycloak credentials may come from trusted claim
-`IDP_IAM_CLIENT_ID` and `IDP_IAM_CLIENT_SECRET`. Both names select that source;
-neither falls back to the configured resolver; one alone denies. Renewal uses the
-attempt's snapshot. `env_allow` reserves these names. This mode is unavailable for
-`profile: "jwt"`: the pair supplies no independent expected principal.
+## Other credential sources
 
-Replace `bindings` with `external: {"url":"https://resolver.example/resolve",
-"bearer_file":"/run/secrets/resolver"}` for an authenticated resolver, with no
-fallback between static and external sources. The controller POSTs
-`{"version":1,"agent":{"server":"https://multica.example","workspace_id":"…","agent_id":"…"}}`.
-A 200 response must echo that exact reference and return `client_id`, `client_secret`,
-optional `principal` and optional `token` issuance parameters. Unknown fields,
-wrong references/versions, malformed credentials or non-200 responses deny. The
-resolver owns agent/client consistency and cannot supply credential endpoints.
+Static `bindings` select a unique client per Multica agent across workspaces and
+reference bounded regular absolute secret files, re-read on issuance. Generic
+JWT bindings also supply expected `principal`. Secret values do not belong in JSON.
 
-## Recipients and relay lifecycle
+Alternatively, `external: {"url":"https://resolver.example/resolve",
+"bearer_file":"/run/secrets/resolver"}` supplies an authenticated resolver. A POST
+contains version 1 and the trusted server/workspace/agent reference. A 200 response
+must echo that reference and return `client_id`, `client_secret`, optional expected
+`principal` and token parameters. Malformed responses, outages and mismatches deny;
+static and external sources do not silently fall back to one another.
 
-`mcp` approves exact URLs selected by native Multica claims; it adds no connection
-or tool. `mcp_anonymous` approves disjoint exact URLs that receive no token.
-`AcquireForMCP` checks the recipient before contacting the source. Ongoing renewal,
-status checks and cleanup belong to the adapter, not a background issuer loop.
-With `opencode.mcp_public_proxy`, other native-selected remote MCPs can use
-anonymous access or user headers through egress without this issuer. They never
-borrow the managed JWT. Explicit `mcp_anonymous` URLs retain their direct route.
-See ADR 0029 for dynamic connection configuration.
+## Delivery
 
-`http_services` separately names operator-approved HTTP recipients and method/path
-routes. An origin may have a clean base path, never a query. Each route has an exact `path` or a slash-ended
-`path_prefix`; whole-origin wildcards and CONNECT are unavailable. The shared MCP
-relay serves `/http/<name>/<path>` with the current agent JWT. It preserves API
-query parameters, strips caller credentials, rejects traversal/redirects and
-revokes in-flight access with the attempt. No source/JWT enters the workload.
-The attempt receives `SANDBOX_HTTP_<NAME>_URL` and `SANDBOX_HTTP_<NAME>_TOKEN` (opaque).
-These managed environment names cannot be overridden through `env_allow`.
-An explicit service `bearer_file` instead uses a controller-held static HTTP API
-credential. It requires an `agent_ids` allowlist; other agents receive no service
-environment/route and cannot acquire it. The file is re-read on renewal with a
-30-second internal lease. Missing files fail closed, without JWT fallback. Optional
-trusted `X-*` `headers` replace caller values. This mode is separate from JWT
-`TokenSource` verification and never places the service credential in an attempt.
-HTTP recipients work even when the agent selects no MCP connections. Recipient
-permissions remain server-owned; this route does not grant production access.
+An MCP explicitly selects identity through its ordinary native Multica header:
+`Authorization: Bearer {iam:access_token}`. The adapter recognizes this directive,
+then calls `AcquireForMCP`; identity policy keeps no endpoint list. The template
+is not sent upstream or exposed as a real JWT in the attempt. Anonymous and
+ordinary user-header connections never trigger identity issuance. Deployment
+proxy/network policy owns reachability independently of the selected auth mode.
 
-Run `go test -race ./internal/identity ./internal/opencode` for contracts and relay
-adversarial tests, `./scripts/test-identity.sh` for real Keycloak/MCP and
-`./scripts/test-openbao-identity.sh` for disposable OpenBao issuance and rotation.
-`VERIFY_OPENCODE=1 ./verify.sh` exercises native task renewal separately.
+`http_services` remains an operator-owned contract for non-MCP HTTP consumers.
+Services fix an origin and exact method/path routes, optionally a clean base path.
+The shared MCP relay serves `/http/<name>/<path>` with the current JWT. The attempt
+receives only opaque `SANDBOX_HTTP_<NAME>_URL/TOKEN`; no source credential or JWT.
+An explicit `bearer_file` selects a controller-only static service credential and
+requires an agent allowlist. `path_credential` supports APIs with credentials in
+the path, withholding upstream errors. HTTP services work without MCP selection.
+They do not grant recipient permissions, which the receiving service owns.
+
+Run `go test -race ./internal/identity ./internal/opencode`,
+`./scripts/test-identity.sh` for real Keycloak/MCP and
+`./scripts/test-openbao-identity.sh` for disposable OpenBao issuance/rotation.

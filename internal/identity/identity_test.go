@@ -54,7 +54,7 @@ func TestStaticBindingIsolationAndRotation(t *testing.T) {
 	if err != nil || next.secret == first.secret {
 		t.Fatal("secret not re-read")
 	}
-	for _, value := range []any{first, AccessToken{value: "private-sentinel"}} {
+	for _, value := range []any{first, AccessToken{value: "private-sentinel"}, tokenResult{bearer: "private-sentinel", expectedSubject: "subject-a"}} {
 		if strings.Contains(fmt.Sprintf("%v %+v %#v", value, value, value), "private-sentinel") {
 			t.Fatal("format exposed secret")
 		}
@@ -77,23 +77,17 @@ func TestInvalidConfiguration(t *testing.T) {
 			b.ClientID = "other-client"
 			c.Bindings = append(c.Bindings, b)
 		},
-		"missing source":  func(c *Config) { c.Bindings = nil },
-		"two sources":     func(c *Config) { c.External = &ExternalConfig{URL: "https://resolver.example", BearerFile: "/key"} },
-		"empty client":    func(c *Config) { c.Bindings[0].ClientID = "" },
-		"no issuer":       func(c *Config) { c.Issuer = IssuerConfig{} },
-		"relative secret": func(c *Config) { c.Bindings[0].SecretFile = "secret" },
-		"shared client":   func(c *Config) { b := c.Bindings[0]; b.AgentID = agentB; c.Bindings = append(c.Bindings, b) },
-		"duplicate MCP":   func(c *Config) { c.MCP = []string{"https://tools.example/mcp", "https://tools.example/mcp"} },
-		"insecure MCP":    func(c *Config) { c.AllowHTTP = false; c.MCP = []string{"http://tools.example/mcp"} },
-		"MCP in both lists": func(c *Config) {
-			c.MCP, c.MCPAnonymous = []string{"https://tools.example/mcp"}, []string{"https://tools.example/mcp"}
-		},
-		"anonymous MCP with query": func(c *Config) { c.MCPAnonymous = []string{"https://search.example/mcp?tenant=a"} },
-		"invalid scope":            func(c *Config) { c.Bindings[0].Token.Scopes = []string{"bad scope"} },
-		"invalid OAuth resource":   func(c *Config) { c.Bindings[0].Token.Resource = "https://user:secret@tools.example" },
-		"unbounded ttl":            func(c *Config) { c.Issuer.MaxTTLSeconds = 99999 },
-		"url credentials":          func(c *Config) { c.Issuer.TokenURL = "https://secret@issuer.example/token" },
-		"insecure endpoint":        func(c *Config) { c.AllowHTTP = false; c.Issuer.JWKSURL = "http://issuer.example/keys" },
+		"missing source":         func(c *Config) { c.Bindings = nil },
+		"two sources":            func(c *Config) { c.External = &ExternalConfig{URL: "https://resolver.example", BearerFile: "/key"} },
+		"empty client":           func(c *Config) { c.Bindings[0].ClientID = "" },
+		"no issuer":              func(c *Config) { c.Issuer = IssuerConfig{} },
+		"relative secret":        func(c *Config) { c.Bindings[0].SecretFile = "secret" },
+		"shared client":          func(c *Config) { b := c.Bindings[0]; b.AgentID = agentB; c.Bindings = append(c.Bindings, b) },
+		"invalid scope":          func(c *Config) { c.Bindings[0].Token.Scopes = []string{"bad scope"} },
+		"invalid OAuth resource": func(c *Config) { c.Bindings[0].Token.Resource = "https://user:secret@tools.example" },
+		"unbounded ttl":          func(c *Config) { c.Issuer.MaxTTLSeconds = 99999 },
+		"url credentials":        func(c *Config) { c.Issuer.TokenURL = "https://secret@issuer.example/token" },
+		"insecure endpoint":      func(c *Config) { c.AllowHTTP = false; c.Issuer.JWKSURL = "http://issuer.example/keys" },
 	}
 	for name, change := range tests {
 		t.Run(name, func(t *testing.T) {

@@ -3,9 +3,9 @@
 A disposable Keycloak + official MCP Go SDK example. Two attempts share one
 service client but receive distinct short-lived access tokens and resource grants.
 The base scenario is a protocol fixture. `./scripts/test-opencode.sh` adds native
-OpenCode 1.18.35 task containers and real JWT renewal through the controller adapter.
+verified native OpenCode task containers and real JWT renewal through the controller adapter.
 Neither fixture is a production gateway.
-It also exercises static/external identity resolution against real Keycloak through
+It also exercises static/external/agent-Environment identity resolution against real Keycloak through
 [the controller identity module](../../internal/identity/README.md).
 
 ## Intended boundary
@@ -25,8 +25,8 @@ flowchart LR
     F --> P[Model providers]
 ```
 
-The sandbox receives short-lived MCP identity and an opaque inference credential
-only. Tool, gateway and provider credentials stay in trusted services. Inference
+The sandbox receives opaque MCP and inference credentials. Real IAM credentials,
+JWTs, tool, gateway and provider credentials stay in trusted services. Inference
 uses an OpenAI-compatible HTTP contract through the relay (ADR 0012); tool
 operations use MCP. Network policy must enforce these destinations outside
 the sandbox. Multica public runtime visibility is not downstream authorization.
@@ -76,8 +76,9 @@ Revocation applies to new calls, not cancellation of already running operations.
 
 ## What we still need to integrate
 
-- Map a Keycloak client to a Multica agent; keep client authentication outside
-  sandboxes. This fixture restricts a single Keycloak client with `azp`.
+- Production enrollment and owner assignment of IAM credentials remain deployment
+  responsibilities. Native conformance reads `IAM_CLIENT_ID`/`IAM_CLIENT_SECRET`
+  from trusted claims and verifies Keycloak's `azp` without agent UUID bindings.
 - Bind grants to controller-authorized attempts; revoke on completion, cancellation
   and recovery. Define leases/fail-closed behavior during controller outages.
 - Deliver narrow identity to the correct workload using deployment attestation;
@@ -90,8 +91,11 @@ Revocation applies to new calls, not cancellation of already running operations.
 This fixture does not run Multica, a coding agent, LiteLLM or inference, and does
 not prove egress isolation, token-delivery security or production HA. The OpenCode variant uses two isolated task containers, 20-second real JWTs and
 24 MCP tool turns per task; inference responses are deterministic and use no account.
-It verifies at least three successfully used JWTs, multiple expiries,
-issuer/resolver outages and cancellation, then denies ended tokens before their expiry.
+It uses `IAM_CLIENT_ID`/`IAM_CLIENT_SECRET` from trusted claims and the explicit
+MCP header `Authorization: Bearer {iam:access_token}`. It verifies ordinary ENV
+inside native processes, absence of IAM credentials/JWTs from those processes and
+configuration, at least three successfully used JWTs and multiple expiries.
+Issuer/resolver outages and cancellation deny ended tokens before their expiry.
 It exposes no host ports. Only its trusted scenario mounts the Docker socket.
 `VERIFY_SERVICE=1 VERIFY_OPENCODE=1 ./verify.sh` also tests a real Multica claim
 through the persistent Compose controller. See [ADR 0009](../../adrs/0009-attempt-authorization.md).
@@ -111,3 +115,10 @@ on the stable fixture network. The generic `gateway` service name can resolve to
 an attempt network while peers are attached there; those addresses disappear on
 attempt cleanup and must not be retained by an upstream connection pool. Agent
 MCP calls keep the execution-network alias and remain isolated per attempt.
+
+`./scripts/test-dynamic-mcp.sh` runs native OpenCode with SDK MCP servers behind an
+isolated synthetic proxy. It verifies anonymous, static, ENV-header and IAM-header
+connections, exact saved queries and controller-only credentials. Removing the
+IAM marker from the same URL on the next retained turn stops token delivery;
+removing all MCPs clears native aliases. Ordinary ENV reaches the process while
+consumed header/IAM credentials stay outside it; old grants are revoked.

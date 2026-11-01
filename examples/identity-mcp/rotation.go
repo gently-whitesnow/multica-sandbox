@@ -86,7 +86,12 @@ func rotation() error {
 	config := resolverConfig()
 	second := config.Bindings[0]
 	second.WorkspaceID = "10000000-0000-4000-8000-000000000002"
-	config.Bindings = append(config.Bindings, second)
+	bindings := append(config.Bindings, second)
+	config.Bindings, config.AgentEnv = nil, true
+	secret, err := os.ReadFile("/secrets/client")
+	if err != nil {
+		return err
+	}
 	service, err := identity.New(config, fixtureServer)
 	if err != nil {
 		return err
@@ -119,8 +124,12 @@ func rotation() error {
 	states := &rotationStatus{states: map[string]string{}}
 	adapter := &opencode.Adapter{Server: fixtureServer, Controller: controller, Issuer: issuer, Authority: authority, Status: states, Workloads: fixtureWorkloads{backend}, MCPRelay: mcpRelay, MCPRelayURL: "http://mcp-relay:8095"}
 	tasks := []multica.Task{}
-	for i, binding := range config.Bindings {
-		task := multica.Task{StartClaimSupported: true, WorkspaceID: binding.WorkspaceID, AgentID: binding.AgentID, ID: fmt.Sprintf("40000000-0000-4000-8000-%012d", i+1), RuntimeID: fmt.Sprintf("50000000-0000-4000-8000-%012d", i+1), DispatchedAt: time.Now().UTC().Format(time.RFC3339Nano), Agent: &multica.Agent{ID: binding.AgentID, Instructions: "Read document repeatedly using fixture MCP.", MCPConfig: json.RawMessage(`{"mcpServers":{"fixture":{"url":"http://gateway:8080/mcp"}}}`)}}
+	for i, binding := range bindings {
+		task := multica.Task{StartClaimSupported: true, WorkspaceID: binding.WorkspaceID, AgentID: binding.AgentID, ID: fmt.Sprintf("40000000-0000-4000-8000-%012d", i+1), RuntimeID: fmt.Sprintf("50000000-0000-4000-8000-%012d", i+1), DispatchedAt: time.Now().UTC().Format(time.RFC3339Nano), Agent: &multica.Agent{ID: binding.AgentID, Instructions: "Read document repeatedly using fixture MCP.", MCPConfig: json.RawMessage(`{"mcpServers":{"fixture":{"url":"http://gateway:8080/mcp","headers":{"Authorization":"Bearer {iam:access_token}"}}}}`)}}
+		environment, _ := json.Marshal(map[string]string{identity.EnvClientID: "example-agent", identity.EnvClientSecret: string(secret), "USER_SETTING": "native-env-delivered"})
+		if err := json.Unmarshal(environment, &task.Agent.CustomEnv); err != nil {
+			return err
+		}
 		if i == 1 {
 			task.Agent.Instructions += " workspace-two"
 		}
@@ -146,6 +155,9 @@ func rotation() error {
 		if err := <-ready; err != nil {
 			cancel()
 		}
+	}
+	if err := rotationEnvironment(ctx, controller); err != nil {
+		return err
 	}
 	if err := checkCrossWorkspace(ctx, issuer, tasks); err != nil {
 		cancel()
@@ -185,7 +197,7 @@ func rotation() error {
 	if err := rotationLease(ctx, adapter, tasks[0]); err != nil {
 		return err
 	}
-	fmt.Println("PASS two same-process OpenCode tasks crossed multiple real JWT expiries through the MCP relay; workspace isolation, revocation and cleanup")
+	fmt.Println("PASS two native OpenCode tasks used claim IAM credentials and explicit headers across real Keycloak JWT expiries; ordinary ENV delivered, IAM/JWT not projected; workspace isolation, revocation and cleanup")
 	return nil
 }
 func errorsJoin(a, b error) error {

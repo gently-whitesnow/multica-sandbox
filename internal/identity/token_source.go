@@ -2,6 +2,7 @@ package identity
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"strings"
 
@@ -12,8 +13,18 @@ import (
 // TokenSource obtains a JWT using controller-owned credentials. Issuance alone is
 // insufficient: every result passes the configured issuer's shared JWT validator.
 type TokenSource interface {
-	Token(context.Context, Credentials) (string, error)
+	Token(context.Context, Credentials) (tokenResult, error)
 }
+
+// tokenResult keeps exchange evidence separate from untrusted JWT claims.
+// expectedSubject is supplied only by an authenticated provider response.
+type tokenResult struct {
+	bearer          string
+	expectedSubject string
+}
+
+func (tokenResult) Format(s fmt.State, _ rune)   { fmt.Fprint(s, "<issued identity>") }
+func (tokenResult) MarshalJSON() ([]byte, error) { return nil, ErrDenied }
 
 type oauthSource struct {
 	url  string
@@ -64,7 +75,7 @@ func newTokenSource(c TokenSourceConfig, legacyURL string, allowHTTP bool) (Toke
 	return nil, ErrDenied
 }
 
-func (s oauthSource) Token(ctx context.Context, c Credentials) (string, error) {
+func (s oauthSource) Token(ctx context.Context, c Credentials) (tokenResult, error) {
 	params := url.Values{}
 	if c.request.Resource != "" {
 		params.Set("resource", c.request.Resource)
@@ -72,7 +83,7 @@ func (s oauthSource) Token(ctx context.Context, c Credentials) (string, error) {
 	request := clientcredentials.Config{ClientID: c.ClientID, ClientSecret: c.secret, TokenURL: s.url, Scopes: c.request.Scopes, EndpointParams: params, AuthStyle: s.auth}
 	token, err := request.Token(context.WithValue(ctx, oauth2.HTTPClient, httpClient(s.url)))
 	if err != nil || !strings.EqualFold(token.TokenType, "Bearer") || token.AccessToken == "" {
-		return "", ErrDenied
+		return tokenResult{}, ErrDenied
 	}
-	return token.AccessToken, nil
+	return tokenResult{bearer: token.AccessToken}, nil
 }

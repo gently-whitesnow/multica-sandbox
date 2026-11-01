@@ -17,13 +17,10 @@ import (
 )
 
 type stubIssuer struct {
-	calls     int
-	denyAt    int
-	env       identity.Env
-	anonymous string
+	calls  int
+	denyAt int
+	env    identity.Env
 }
-
-func (s *stubIssuer) AnonymousMCP(url string) bool { return url == s.anonymous }
 
 func (s *stubIssuer) AcquireForMCP(_ context.Context, _ identity.Ref, env identity.Env, _ string) (identity.AccessToken, error) {
 	s.calls++
@@ -240,12 +237,12 @@ func (s *stubWorkload) Capture(_ context.Context, args []string, _ map[string]st
 }
 func (s *stubWorkload) Result() execution.Result { return execution.Result{} }
 
-func TestWithoutIdentityOnlyAgentsWithoutMCPRun(t *testing.T) {
+func TestWithoutRelayOnlyAgentsWithoutMCPRun(t *testing.T) {
 	workload := &stubWorkload{}
 	a := Adapter{Workloads: workload, Status: stubStatus{}}
 	var rejected *execution.RejectedError
 	if _, err := a.Start(context.Background(), safeTask()); !errors.As(err, &rejected) || workload.writes != 0 || workload.runs != 0 {
-		t.Fatalf("MCP selection without identity not refused: %v", err)
+		t.Fatalf("MCP selection without relay not refused: %v", err)
 	}
 	task := safeTask()
 	task.Agent.MCPConfig = nil
@@ -262,7 +259,7 @@ func TestIssuerReceivesClaimAgentEnv(t *testing.T) {
 	issuer := &stubIssuer{}
 	a := Adapter{Server: "https://multica.example.invalid", Controller: "controller", Issuer: issuer, MCPRelay: NewMCPRelay(), Authority: &stubAuthority{}, Workloads: &stubWorkload{}, Status: stubStatus{}}
 	task := safeTask()
-	if err := json.Unmarshal([]byte(`{"IDP_IAM_CLIENT_ID":"client-env","IDP_IAM_CLIENT_SECRET":"env-secret"}`), &task.Agent.CustomEnv); err != nil {
+	if err := json.Unmarshal([]byte(`{"IAM_CLIENT_ID":"client-env","IAM_CLIENT_SECRET":"env-secret"}`), &task.Agent.CustomEnv); err != nil {
 		t.Fatal(err)
 	}
 	run, err := a.Start(context.Background(), task)
@@ -276,9 +273,11 @@ func TestIssuerReceivesClaimAgentEnv(t *testing.T) {
 }
 
 func TestAnonymousMCPIssuesNoToken(t *testing.T) {
-	issuer, workload, authority := &stubIssuer{anonymous: "https://tools.example.invalid/mcp"}, &stubWorkload{}, &stubAuthority{}
+	issuer, workload, authority := &stubIssuer{}, &stubWorkload{}, &stubAuthority{}
 	a := Adapter{Server: "https://multica.example.invalid", Controller: "controller", Issuer: issuer, Authority: authority, MCPRelay: NewMCPRelay(), Workloads: workload, Status: stubStatus{}}
-	run, err := a.Start(context.Background(), safeTask())
+	task := safeTask()
+	task.Agent.MCPConfig = json.RawMessage(`{"mcpServers":{"selected":{"url":"https://tools.example.invalid/mcp"}}}`)
+	run, err := a.Start(context.Background(), task)
 	if err != nil {
 		t.Fatal(err)
 	}

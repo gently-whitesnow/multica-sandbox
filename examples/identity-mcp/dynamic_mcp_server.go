@@ -36,6 +36,10 @@ func (f *dynamicMCPFixture) proxy() http.Handler {
 		round := f.round
 		name := strings.TrimPrefix(r.URL.Path, "/")
 		want := map[string]string{"anonymous": "", "static": fmt.Sprintf("Bearer fixture-static-token-round-%d", round), "environment": fmt.Sprintf("Bearer fixture-env-token-round-%d", round)}
+		want["identity"] = ""
+		if round == 1 {
+			want["identity"] = "Bearer fixture-iam-token"
+		}
 		authorization, valid := want[name]
 		query := fmt.Sprintf("route=round%d%%2Ffixed&token=fixture-query-token-round-%d", round, round)
 		if round == 3 || !valid || r.Host != "public-mcp.fixture.invalid" || r.URL.RawQuery != query || r.Header.Get("Authorization") != authorization || strings.HasPrefix(authorization, "Bearer mcp_relay_") {
@@ -134,20 +138,20 @@ func (f *dynamicMCPFixture) turn(count int, result string, names []string, execu
 	if execute != "" {
 		if count == 0 {
 			tool = execute
-			args["code"] = `return [await tools.anonymous.probe_dynamic({}), await tools.environment.probe_dynamic({}), await tools.static.probe_dynamic({})]`
+			args["code"] = `return [await tools.anonymous.probe_dynamic({}), await tools.environment.probe_dynamic({}), await tools.static.probe_dynamic({}), await tools.identity.probe_dynamic({})]`
 			if f.round == 3 {
-				args["code"] = `return ["anonymous", "environment", "static"].some(x => Object.keys(tools).includes(x)) ? "MCP_SELECTION_STALE" : "MCP_SELECTION_EMPTY"`
+				args["code"] = `return ["anonymous", "environment", "static", "identity"].some(x => Object.keys(tools).includes(x)) ? "MCP_SELECTION_STALE" : "MCP_SELECTION_EMPTY"`
 			}
 		} else if f.round == 3 && !strings.Contains(result, "MCP_SELECTION_EMPTY") {
 			f.problem = "retained native session kept removed MCP aliases"
 		} else if f.round < 3 {
-			for _, name := range []string{"anonymous", "environment", "static"} {
+			for _, name := range []string{"anonymous", "environment", "static", "identity"} {
 				if f.tools[fmt.Sprintf("%d/%s", f.round, name)] == 0 {
 					f.problem = fmt.Sprintf("native Code Mode omitted selected MCP: %.500s", result)
 				}
 			}
 		}
-	} else if f.round != 3 && len(names) == 3 {
+	} else if f.round != 3 && len(names) == 4 {
 		if count < len(names) {
 			tool = names[count]
 		}
