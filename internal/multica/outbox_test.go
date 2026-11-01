@@ -86,7 +86,7 @@ func TestTerminalReportRetriesTransientErrorsOnly(t *testing.T) {
 
 func TestQueuedReportSurvivesOutageAndReplays(t *testing.T) {
 	instantRetries(t)
-	s := &terminalServer{status: []int{503, 503, 503, 503, 503, 503}}
+	s := &terminalServer{status: []int{503}}
 	c, dir := outboxClient(t, s)
 	err := c.Deliver(context.Background(), Terminal{Task: testID, Failed: true, Error: "opencode timed out after 1m0s", Reason: "timeout", Session: "ses_x", WorkDir: "volume", Retired: "ses_old"})
 	if !errors.Is(err, ErrDeferred) || queued(t, dir) != 1 {
@@ -102,6 +102,50 @@ func TestQueuedReportSurvivesOutageAndReplays(t *testing.T) {
 	last := s.bodies[len(s.bodies)-1]
 	if last["failure_reason"] != "timeout" || last["session_id"] != "ses_x" || last["work_dir"] != "volume" || last["retired_session_id"] != "ses_old" || last["session_rollout_missing"] != nil {
 		t.Fatalf("replayed payload changed: %v", last)
+	}
+}
+
+func TestQueuedReportDefersAfterOneAttemptAndReplaysWithBackoff(t *testing.T) {
+	sleep := retrySleep
+	retrySleep = func(context.Context, time.Duration) error {
+		t.Error("a durably queued report waited for online retries")
+		return nil
+	}
+	t.Cleanup(func() { retrySleep = sleep })
+	s := &terminalServer{status: []int{503, 502, 500, 429, 503, 503}}
+	c, dir := outboxClient(t, s)
+	now := time.Now()
+	c.outbox.now = func() time.Time { return now }
+	if err := c.Deliver(context.Background(), Terminal{Task: testID}); !errors.Is(err, ErrDeferred) || len(s.bodies) != 1 {
+		t.Fatalf("deferred=%v requests=%d", err, len(s.bodies))
+	}
+	// Replay keeps the upstream spacing: 5 s doubling, like the 4 s doubling online schedule.
+	for i, delay := range []time.Duration{5, 10, 20, 40, 80, 160} {
+		now = now.Add(delay*time.Second - time.Millisecond)
+		_, _ = c.Replay(context.Background())
+		if len(s.bodies) != i+1 {
+			t.Fatalf("replay %d before its %ds backoff", i+1, delay)
+		}
+		now = now.Add(time.Millisecond)
+		_, _ = c.Replay(context.Background())
+		if len(s.bodies) != i+2 {
+			t.Fatalf("replay %d not due after %ds", i+1, delay)
+		}
+	}
+	if queued(t, dir) != 0 {
+		t.Fatal("acknowledged report still queued")
+	}
+}
+
+func TestUnpersistedReportKeepsOnlineRetries(t *testing.T) {
+	instantRetries(t)
+	s := &terminalServer{status: []int{503, 503}}
+	c, dir := outboxClient(t, s)
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Deliver(context.Background(), Terminal{Task: testID}); err != nil || len(s.bodies) != 3 {
+		t.Fatalf("error=%v requests=%d", err, len(s.bodies))
 	}
 }
 
