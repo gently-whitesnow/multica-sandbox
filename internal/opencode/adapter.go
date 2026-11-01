@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/url"
 	"regexp"
 	"strings"
@@ -52,6 +53,8 @@ type Adapter struct {
 	// Command replaces the `opencode acp` argv; it must speak ACP on stdio.
 	Command  []string
 	Reporter Reporter
+	// Log records reports Multica never received; nil discards them.
+	Log *slog.Logger
 	// Relay and RelayURL enable upstream-equivalent Multica CLI access (ADR 0014).
 	Relay    Grants
 	RelayURL string
@@ -247,7 +250,7 @@ func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, 
 		// Retained checkouts follow the current setting before the agent commits.
 		a.Checkout.Refresh(runCtx, task.AttemptKey())
 	}
-	r.events = &eventStream{reporter: a.Reporter, task: task.ID, model: r.model, workDir: r.workDir}
+	r.events = &eventStream{reporter: a.Reporter, log: a.Log, task: task.ID, model: r.model, workDir: r.workDir}
 	r.events.touch()
 	r.started = true
 	go r.loop(runCtx)
