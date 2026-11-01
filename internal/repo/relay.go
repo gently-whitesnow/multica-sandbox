@@ -160,11 +160,13 @@ func (g *Relay) Authorize(r *http.Request) (relay.Lease, bool) {
 	if !ok {
 		return lease, false
 	}
-	g.mu.Lock()
-	a, granted := g.access[lease.Attempt]
-	g.mu.Unlock()
 	host := strings.ToLower(r.URL.Host)
 	repo, service := smartHTTP(r.URL.Path)
+	// Allow extends repos concurrently: read the set only under the lock.
+	g.mu.Lock()
+	a, granted := g.access[lease.Attempt]
+	granted = granted && a.repos[host+strings.TrimSuffix(repo, ".git")]
+	g.mu.Unlock()
 	if service == "info/refs" {
 		service = r.URL.Query().Get("service")
 		if len(r.URL.Query()) != 1 || r.Method != http.MethodGet {
@@ -174,7 +176,7 @@ func (g *Relay) Authorize(r *http.Request) (relay.Lease, bool) {
 		service = ""
 	}
 	origin, authorization, resolved := g.hosts.resolve(a.workspace, host)
-	if !granted || (service != "git-upload-pack" && service != "git-receive-pack") || !a.repos[host+strings.TrimSuffix(repo, ".git")] || !resolved {
+	if !granted || (service != "git-upload-pack" && service != "git-receive-pack") || !resolved {
 		lease.Release()
 		return relay.Lease{}, false
 	}
