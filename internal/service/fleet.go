@@ -99,6 +99,9 @@ func serveFleet(ctx context.Context, c Config, dir string, api fleetAPI, p *cont
 			workingSet = pool.DefaultMaxWorkingSet
 		}
 		f.autoAdmission = &pool.AutoAdmission{Pool: &pool.Pool{Dir: pc.CgroupDir, MaxPressure: pool.DefaultMaxPressure, MaxWorkingSet: workingSet}, DiskPath: pc.DiskPath}
+		if f.autoAdmission.AttemptMax, err = attemptCeiling(pc, f.autoAdmission.Pool); err != nil {
+			return err
+		}
 	}
 	return f.serve(ctx, c.Concurrency, p.Execute)
 }
@@ -176,7 +179,7 @@ func (f *fleet) serve(ctx context.Context, capacity int, execute func(context.Co
 // starve its peers; unused capacity is never pre-claimed and Multica keeps the queue.
 func (f *fleet) claim(ctx context.Context, capacity int, execute func(context.Context, multica.Task) error) error {
 	if f.autoAdmission != nil {
-		f.autoAdmission.Observe(len(f.active))
+		f.autoAdmission.Observe(len(f.active), f.clock())
 	}
 	claimed := false
 	for len(f.active) < capacity && f.admitted() {
@@ -229,19 +232,20 @@ func (f *fleet) admitted() bool {
 	if ok && f.autoAdmission != nil {
 		ok, status = f.autoAdmission.Admit(len(f.active), now)
 	}
-	if !ok {
+	// Warmup paces starts: it neither pauses claims nor restarts the cooldown.
+	if !ok && status != pool.Warmup {
 		f.refused = now
 	}
-	calm := ok && now.Sub(f.refused) >= admissionCooldown
+	calm := now.Sub(f.refused) >= admissionCooldown
 	switch {
 	case calm && f.paused:
 		f.log.Info("claims resumed", "pool", status)
-	case !ok && !f.paused:
+	case !calm && !f.paused:
 		f.log.Warn("claims paused", "pool", status)
 	}
 	f.paused = !calm
 	f.metrics.Paused(f.paused)
-	return calm
+	return ok && calm
 }
 
 // finish releases a completed attempt's slot.
@@ -277,6 +281,10 @@ func (f *fleet) tolerate(stage string, err error, attrs ...any) error {
 	return nil
 }
 
+// completed stops the controller only for an attempt that may leave host state behind:
+// a failed cleanup, a backend error (start failures join raw cleanup errors) or a task
+// left running in Multica. Restart reconciles resources and recovers orphans (ADR 0006).
+// Rejected tasks never arrive here: they are reported as failures.
 func (f *fleet) completed(done completion) error {
 	if done.err == nil || done.err == context.Canceled {
 		return nil
@@ -288,9 +296,9 @@ func (f *fleet) completed(done completion) error {
 	if f.tolerate("attempt", done.err, "runtime", done.runtime) == nil {
 		return nil
 	}
-	// A refused task, for example one deleted between claim and start, ends only its
-	// attempt; a revoked runtime is removed by its heartbeat (beat).
-	if inaccessible(done.err) {
+	// A task refused or settled elsewhere, for example deleted between claim and start,
+	// ends only its attempt; a revoked runtime is removed by its heartbeat (beat).
+	if inaccessible(done.err) || multica.Conflict(done.err) {
 		f.log.Warn("attempt ended", "runtime", done.runtime, "error", done.err.Error())
 		return nil
 	}

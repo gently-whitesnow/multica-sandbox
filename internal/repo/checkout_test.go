@@ -204,6 +204,9 @@ func (f *fakeTarget) Capture(ctx context.Context, args []string, env map[string]
 type fakeAuth string
 
 func (a fakeAuth) Authorize(r *http.Request) (relay.Lease, bool) {
+	if r.Header.Get("Authorization") == "Bearer busy" {
+		return relay.Lease{Busy: true}, false
+	}
 	if r.Header.Get("Authorization") != "Bearer "+string(a) {
 		return relay.Lease{}, false
 	}
@@ -292,6 +295,7 @@ func TestCheckoutHandler(t *testing.T) {
 		code   int
 	}{
 		"credential":   {"other", nil, 401},
+		"busy":         {"busy", nil, 429},
 		"workspace":    {"opaque", map[string]any{"workspace_id": "10000000-0000-4000-8000-000000000002"}, 403},
 		"task":         {"opaque", map[string]any{"task_id": ""}, 403},
 		"mode":         {"opaque", map[string]any{"checkout_mode": "linked"}, 400},

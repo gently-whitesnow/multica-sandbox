@@ -35,8 +35,18 @@ const Sysbox = "sysbox-runc"
 const AttemptUser = "65532:65532"
 
 func (b *Backend) Validate(ctx context.Context) error {
-	_, _, err := b.validate(ctx)
-	return err
+	if err := b.configured(); err != nil {
+		return err
+	}
+	engine, err := b.host(ctx)
+	if err != nil {
+		return err
+	}
+	images, err := inspectImages(ctx, b.Image)
+	if err != nil {
+		return err
+	}
+	return images[0].check(engine)
 }
 
 type imageConfig struct {
@@ -47,15 +57,18 @@ type imageConfig struct {
 	}
 }
 
-// validate checks the host and the pinned image and returns the engine architecture and image configuration.
-func (b *Backend) validate(ctx context.Context) (string, imageConfig, error) {
-	var image imageConfig
+func (b *Backend) configured() error {
 	if !imagePattern.MatchString(b.Image) || !ownerPattern.MatchString(b.Owner) || len(b.Command) == 0 || !strings.HasPrefix(b.Command[0], "/") {
-		return "", image, fmt.Errorf("digest-pinned image, stable daemon UUID and absolute executable required")
+		return fmt.Errorf("digest-pinned image, stable daemon UUID and absolute executable required")
 	}
+	return nil
+}
+
+// host checks the Docker engine and returns its architecture.
+func (b *Backend) host(ctx context.Context) (string, error) {
 	data, err := command(ctx, "info", "--format", "{{json .}}")
 	if err != nil {
-		return "", image, err
+		return "", err
 	}
 	var info struct {
 		Architecture                                                 string
@@ -65,35 +78,46 @@ func (b *Backend) validate(ctx context.Context) (string, imageConfig, error) {
 		Runtimes                                                     map[string]json.RawMessage
 	}
 	if err = json.Unmarshal(data, &info); err != nil {
-		return "", image, err
+		return "", err
 	}
 	if info.OSType != "linux" || info.CgroupVersion != "2" || !info.MemoryLimit || !info.SwapLimit || !info.PidsLimit || !info.CpuCfsPeriod || !info.CpuCfsQuota || !strings.Contains(strings.Join(info.SecurityOptions, ","), "name=seccomp,profile=builtin") {
-		return "", image, fmt.Errorf("Linux cgroup v2, resource controllers and builtin seccomp required")
+		return "", fmt.Errorf("Linux cgroup v2, resource controllers and builtin seccomp required")
 	}
 	if b.Runtime != "" && (b.Runtime != Sysbox || info.Runtimes[Sysbox] == nil) {
-		return "", image, fmt.Errorf("runtime %.32q is not registered with the Docker engine", b.Runtime)
+		return "", fmt.Errorf("runtime %.32q is not registered with the Docker engine", b.Runtime)
 	}
-	image, err = inspectImage(ctx, b.Image, info.Architecture)
-	return info.Architecture, image, err
+	return info.Architecture, nil
 }
 
-// inspectImage requires a preloaded image matching the engine platform without declared volumes.
-func inspectImage(ctx context.Context, ref, engine string) (imageConfig, error) {
-	var image imageConfig
-	data, err := command(ctx, "image", "inspect", ref, "--format", "{{json .}}")
+// inspectImages requires every image preloaded and returns their configurations in
+// order; one engine request inspects them all.
+func inspectImages(ctx context.Context, refs ...string) ([]imageConfig, error) {
+	data, err := command(ctx, append([]string{"image", "inspect", "--format", "{{json .}}"}, refs...)...)
 	if err != nil {
-		return image, fmt.Errorf("preload the pinned image: %w", err)
+		return nil, fmt.Errorf("preload the pinned image: %w", err)
 	}
-	if err = json.Unmarshal(data, &image); err != nil {
-		return image, err
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != len(refs) {
+		return nil, fmt.Errorf("image inspection returned %d of %d images", len(lines), len(refs))
 	}
+	images := make([]imageConfig, len(refs))
+	for i, line := range lines {
+		if err = json.Unmarshal([]byte(line), &images[i]); err != nil {
+			return nil, err
+		}
+	}
+	return images, nil
+}
+
+// check requires the engine platform and no declared volumes.
+func (image imageConfig) check(engine string) error {
 	if host := engineArchitectures[engine]; image.Os != "linux" || host == "" || image.Architecture != host {
-		return image, fmt.Errorf("image platform %.16s/%.16s does not match the Docker engine %.16s", image.Os, image.Architecture, engine)
+		return fmt.Errorf("image platform %.16s/%.16s does not match the Docker engine %.16s", image.Os, image.Architecture, engine)
 	}
 	if len(image.Config.Volumes) > 0 {
-		return image, fmt.Errorf("image-declared volumes are unsupported")
+		return fmt.Errorf("image-declared volumes are unsupported")
 	}
-	return image, nil
+	return nil
 }
 
 // engineArchitectures maps Docker engine (uname) names to OCI platform names; emulation is unsupported.
@@ -108,7 +132,8 @@ func (b *Backend) Reconcile(ctx context.Context) error {
 		return err
 	}
 	for _, id := range strings.Fields(string(data)) {
-		if _, err = command(ctx, "rm", "-fv", id); err != nil {
+		// After a crash under memory pressure leftovers exit as slowly as attempts do.
+		if _, err = commandWithin(ctx, RemoveTimeout, "rm", "-fv", id); err != nil {
 			return err
 		}
 	}
@@ -123,7 +148,8 @@ func (b *Backend) name(attempt string) string {
 }
 func (b *Backend) Start(ctx context.Context, attempt string) (execution.Run, error) {
 	if err := b.Validate(ctx); err != nil {
-		return nil, err
+		// Nothing exists yet: only this task fails.
+		return nil, &execution.RejectedError{Err: err}
 	}
 	r := &run{name: b.name(attempt)}
 	if _, err := command(ctx, b.createArgs(r.name, probeResources)...); err != nil {

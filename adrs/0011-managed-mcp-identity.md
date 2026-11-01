@@ -24,7 +24,9 @@ before delivery. IAM owns audiences, roles and groups; MCP services filter
 The controller keeps source credentials and JWTs. Its relay grants the attempt
 an opaque per-attempt credential and forwards only its selected connection with
 the current upstream authorization. Reissue tokens while Multica confirms the
-task remains running. Revoke attempt grants and cancel streams on cleanup.
+task remains running: the controller's single status poll per attempt feeds the
+renewal gate, which rides out transient errors only within the 15-second attempt
+lease. Revoke attempt grants and cancel streams on cleanup.
 Stopping renewal alone does not invalidate an upstream unexpired JWT.
 
 An optional external authority may enforce attempt fingerprint leases (ADR 0009).

@@ -6,8 +6,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // modelInfoFixture mirrors LiteLLM /v1/model/info for a virtual key, including
@@ -84,6 +86,62 @@ func TestGatewayCatalogMapsWorkspaceKeyModels(t *testing.T) {
 	}
 	if _, err = s.Catalog(context.Background(), Scope{Server: scope.Server, WorkspaceID: "10000000-0000-4000-8000-000000000002"}); err == nil {
 		t.Fatal("workspace without a key got a catalog")
+	}
+}
+
+func TestGatewayCatalogRefreshIsPerWorkspace(t *testing.T) {
+	var slowCalls atomic.Int32
+	entered, release := make(chan struct{}), make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/slow/") && slowCalls.Add(1) == 1 {
+			close(entered)
+			select {
+			case <-release:
+			case <-r.Context().Done():
+			}
+		}
+		fmt.Fprint(w, modelInfoFixture)
+	}))
+	t.Cleanup(server.Close)
+	c := testConfig(t)
+	c.AllowHTTP = true
+	c.Bindings[0].Gateway = server.URL + "/slow"
+	fast := Scope{Server: testScope().Server, WorkspaceID: "10000000-0000-4000-8000-000000000002"}
+	c.Bindings = append(c.Bindings, Binding{WorkspaceID: fast.WorkspaceID, Gateway: server.URL + "/fast", KeyFile: c.Bindings[0].KeyFile})
+	c.GatewayCatalog = &GatewayCatalog{TTL: "1h"}
+	s, err := New(c, testScope().Server)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	errs := make(chan error, 8)
+	for range 8 {
+		wg.Go(func() {
+			_, err := s.Catalog(context.Background(), testScope())
+			errs <- err
+		})
+	}
+	<-entered
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if _, err := s.Catalog(ctx, fast); err != nil {
+		t.Fatal("a slow gateway blocked another workspace:", err)
+	}
+	waiting, stop := context.WithCancel(context.Background())
+	stop()
+	if _, err := s.gateway.catalog(waiting, testScope()); err == nil {
+		t.Fatal("cancelled caller got a catalog without a cached one")
+	}
+	close(release)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if slowCalls.Load() != 1 {
+		t.Fatalf("concurrent callers made %d refreshes, want 1", slowCalls.Load())
 	}
 }
 

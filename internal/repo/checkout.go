@@ -174,6 +174,11 @@ func (c *Checkout) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	lease, ok := c.Auth.Authorize(r)
+	if !ok && lease.Busy {
+		w.Header().Set("Retry-After", "1")
+		http.Error(w, "too many concurrent requests", http.StatusTooManyRequests)
+		return
+	}
 	if !ok {
 		http.Error(w, "repo checkout credential is not bound to a task running in this daemon: the task it belongs to has already finished, or the daemon restarted after this agent started. Repo checkout is only available while the task that owns this workdir is still running.", http.StatusUnauthorized)
 		return

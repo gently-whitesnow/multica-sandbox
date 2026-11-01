@@ -112,24 +112,32 @@ func attemptPool(c *OpenCodeConfig, resources docker.Resources) (*pool.Pool, doc
 	if attempts.MaxPressure < 0 || attempts.MaxPressure > 100 || attempts.MaxWorkingSet < 0 || attempts.MaxWorkingSet > 1 {
 		return nil, resources, fmt.Errorf("pool max_pressure must be within (0,100] and max_working_set within (0,1]")
 	}
+	ceiling, err := attemptCeiling(p, attempts)
+	if err != nil {
+		return nil, resources, err
+	}
+	return attempts, resources.InPool(p.CgroupParent, ceiling), nil
+}
+
+// attemptCeiling resolves attempt_memory_max in bytes, 0 for none.
+func attemptCeiling(p *PoolConfig, attempts *pool.Pool) (int64, error) {
 	var ceiling int64
 	if percent, ok := strings.CutSuffix(p.AttemptMemoryMax, "%"); ok {
 		n, err := strconv.Atoi(percent)
 		limits, limitsErr := attempts.Limits()
 		if err != nil || n < 10 || n > 100 || limitsErr != nil {
-			return nil, resources, fmt.Errorf("pool attempt_memory_max must be 10%%-100%% of a bounded pool")
+			return 0, fmt.Errorf("pool attempt_memory_max must be 10%%-100%% of a bounded pool")
 		}
 		ceiling = limits.Max * int64(n) / 100
 	} else if p.AttemptMemoryMax != "" {
 		n, err := docker.ParseSize(p.AttemptMemoryMax)
 		if err != nil || n < 64<<20 {
-			return nil, resources, fmt.Errorf("pool attempt_memory_max must be a size of at least 64m or a percentage")
+			return 0, fmt.Errorf("pool attempt_memory_max must be a size of at least 64m or a percentage")
 		}
 		ceiling = n
 	}
 	// The kernel rounds memory.max down to pages; a MiB multiple is exact for every page size.
-	ceiling &^= 1<<20 - 1
-	return attempts, resources.InPool(p.CgroupParent, ceiling), nil
+	return ceiling &^ (1<<20 - 1), nil
 }
 
 // admission defers claims while the pool is under memory pressure and records each

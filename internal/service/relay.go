@@ -81,6 +81,8 @@ func relayErrorType(ctx context.Context, err error) string {
 		return "policy-denied"
 	case errors.Is(err, relay.ErrCredential):
 		return "invalid-credential"
+	case errors.Is(err, relay.ErrBusy):
+		return "too-many-requests"
 	case errors.Is(err, relay.ErrRedirect):
 		return "redirect-refused"
 	case errors.As(err, &body):

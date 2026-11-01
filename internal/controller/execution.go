@@ -10,9 +10,15 @@ import (
 	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
 )
 
-func (p *Probe) launch(ctx context.Context, t multica.Task) (<-chan error, func() error, func() execution.Result, error) {
+// statusFed is a run that gates its own access on the task status; the controller's
+// poll feeds it so one poller serves each attempt.
+type statusFed interface{ TaskStatus(string, error) }
+
+// launch also returns feed, which passes every status poll to the run.
+func (p *Probe) launch(ctx context.Context, t multica.Task) (<-chan error, func() error, func() execution.Result, func(string, error), error) {
+	feed := func(string, error) {}
 	if p.Backend == nil && p.Launch == nil {
-		return nil, func() error { return nil }, func() execution.Result { return execution.Result{} }, nil
+		return nil, func() error { return nil }, func() execution.Result { return execution.Result{} }, feed, nil
 	}
 	waitCtx, cancel := context.WithTimeout(ctx, p.Duration)
 	var run execution.Run
@@ -24,7 +30,10 @@ func (p *Probe) launch(ctx context.Context, t multica.Task) (<-chan error, func(
 	}
 	if err != nil {
 		cancel()
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
+	}
+	if fed, ok := run.(statusFed); ok {
+		feed = fed.TaskStatus
 	}
 	done := make(chan error, 1)
 	waited := make(chan struct{})
@@ -49,7 +58,7 @@ func (p *Probe) launch(ctx context.Context, t multica.Task) (<-chan error, func(
 		})
 		return cleanupErr
 	}
-	return done, stop, run.Result, nil
+	return done, stop, run.Result, feed, nil
 }
 
 // CleanupError keeps a failed teardown distinguishable from a revoked API grant.

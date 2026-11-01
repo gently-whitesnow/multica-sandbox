@@ -112,8 +112,9 @@ func TestRelayRecordLogsRefusalsAtDebug(t *testing.T) {
 	record(req, 200, nil, time.Second)
 	record(req, 0, relay.ErrPolicy, time.Millisecond)
 	record(req, 429, nil, time.Second)
+	record(req, 0, relay.ErrBusy, time.Millisecond)
 	events := lines(t, log)
-	if len(events) != 2 || events[0]["level"] != "DEBUG" || events[0]["error_type"] != "policy-denied" || events[1]["status"] != 429.0 || events[1]["path"] != "/v1/chat/completions" {
+	if len(events) != 3 || events[2]["error_type"] != "too-many-requests" || events[0]["level"] != "DEBUG" || events[0]["error_type"] != "policy-denied" || events[1]["status"] != 429.0 || events[1]["path"] != "/v1/chat/completions" {
 		t.Fatalf("events: %v", events)
 	}
 	if strings.Contains(log.String(), "secret") {
@@ -123,6 +124,7 @@ func TestRelayRecordLogsRefusalsAtDebug(t *testing.T) {
 	for _, line := range []string{
 		`sandbox_relay_request_duration_seconds_count{relay="inference",status_code="429"} 1`,
 		`sandbox_relay_request_duration_seconds_count{error_type="policy-denied",relay="inference"} 1`,
+		`sandbox_relay_request_duration_seconds_count{error_type="too-many-requests",relay="inference"} 1`,
 	} {
 		if !strings.Contains(text, line) {
 			t.Errorf("exposition lacks %s", line)

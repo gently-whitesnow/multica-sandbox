@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"slices"
 	"strings"
@@ -14,12 +15,15 @@ import (
 	"github.com/gently-whitesnow/multica-sandbox/internal/attempt"
 	"github.com/gently-whitesnow/multica-sandbox/internal/execution"
 	"github.com/gently-whitesnow/multica-sandbox/internal/identity"
+	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
 )
 
 type stubIssuer struct {
 	calls  int
 	denyAt int
 	env    identity.Env
+	// ttl is the issued lifetime, 11 s by default.
+	ttl time.Duration
 }
 
 func (s *stubIssuer) AcquireForMCP(_ context.Context, _ identity.Ref, env identity.Env, _ string) (identity.AccessToken, error) {
@@ -28,7 +32,12 @@ func (s *stubIssuer) AcquireForMCP(_ context.Context, _ identity.Ref, env identi
 	if s.calls == s.denyAt {
 		return identity.AccessToken{}, identity.ErrDenied
 	}
-	return identity.AccessToken{ExpiresAt: time.Now().Add(11 * time.Second)}, nil
+	ttl := s.ttl
+	if ttl == 0 {
+		ttl = 11 * time.Second
+	}
+	// Like a real issuer, every token is distinct.
+	return identity.NewAccessToken(fmt.Sprintf("jwt-%d", s.calls), time.Now().Add(ttl)), nil
 }
 
 type stubAuthority struct {
@@ -36,6 +45,18 @@ type stubAuthority struct {
 	actions    []string
 	deny       bool
 	denyRevoke bool
+}
+
+func (s *stubAuthority) renewals() int {
+	s.Lock()
+	defer s.Unlock()
+	n := 0
+	for _, action := range s.actions {
+		if action == "renew" {
+			n++
+		}
+	}
+	return n
 }
 
 func (s *stubAuthority) Apply(_ context.Context, g attempt.Grant) error {
@@ -51,6 +72,30 @@ func (s *stubAuthority) Apply(_ context.Context, g attempt.Grant) error {
 type stubStatus struct{}
 
 func (stubStatus) Status(context.Context, string) (string, error) { return "running", nil }
+
+// scriptedStatus answers status polls with state, or err when set, and counts them.
+type scriptedStatus struct {
+	sync.Mutex
+	state string
+	err   error
+	calls int
+}
+
+func (s *scriptedStatus) Status(context.Context, string) (string, error) {
+	s.Lock()
+	defer s.Unlock()
+	s.calls++
+	if s.err != nil {
+		return "", s.err
+	}
+	return s.state, nil
+}
+func (s *scriptedStatus) set(state string, err error) {
+	s.Lock()
+	defer s.Unlock()
+	s.state, s.err = state, err
+}
+func (s *scriptedStatus) polls() int { s.Lock(); defer s.Unlock(); return s.calls }
 
 type stubWorkload struct {
 	writes  int
@@ -137,6 +182,104 @@ func TestRenewalOutageStopsAndRevokes(t *testing.T) {
 		})
 	}
 }
+func TestStatusGateRidesOutTransientErrorsWithinLease(t *testing.T) {
+	unavailable, denied := &multica.HTTPError{Status: 503}, &multica.HTTPError{Status: 403}
+	for _, c := range []struct {
+		name      string
+		confirmed time.Duration
+		state     string
+		err       error
+		ok        bool
+	}{
+		{"running", -time.Hour, "running", nil, true},
+		{"transient", -time.Second, "", unavailable, true},
+		{"transient past lease", -attemptLease - time.Second, "", unavailable, false},
+		{"transient unconfirmed", 0, "", unavailable, false},
+		{"denied", -time.Second, "", denied, false},
+		{"missing", -time.Second, "", &multica.HTTPError{Status: 404}, false},
+		{"cancelled", -time.Second, "cancelled", nil, false},
+	} {
+		r := &running{adapter: &Adapter{Status: &scriptedStatus{state: c.state, err: c.err}}, task: safeTask()}
+		if c.confirmed != 0 {
+			r.confirmed = time.Now().Add(c.confirmed)
+		}
+		if err := r.confirm(context.Background()); (err == nil) != c.ok {
+			t.Errorf("%s: %v", c.name, err)
+		}
+	}
+
+	status := &scriptedStatus{state: "running"}
+	a := Adapter{Issuer: &stubIssuer{}, MCPRelay: NewMCPRelay(), Authority: &stubAuthority{}, Workloads: &stubWorkload{}, Status: status}
+	run, err := a.Start(context.Background(), safeTask())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer run.Remove(context.Background())
+	status.set("", unavailable)
+	short, cancel := context.WithTimeout(context.Background(), 2500*time.Millisecond)
+	defer cancel()
+	if err := run.Wait(short); !errors.Is(err, context.DeadlineExceeded) || status.polls() < 3 {
+		t.Fatalf("transient status error stopped the attempt: %v after %d polls", err, status.polls())
+	}
+	status.set("", denied)
+	wait, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := run.Wait(wait); !errors.Is(err, ErrDenied) {
+		t.Fatalf("denied status did not stop the attempt: %v", err)
+	}
+}
+
+// Once the controller feeds the status, the adapter stops polling and follows it.
+func TestFedStatusReplacesThePoll(t *testing.T) {
+	status := &scriptedStatus{state: "running"}
+	a := Adapter{Issuer: &stubIssuer{}, MCPRelay: NewMCPRelay(), Authority: &stubAuthority{}, Workloads: &stubWorkload{}, Status: status}
+	run, err := a.Start(context.Background(), safeTask())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer run.Remove(context.Background())
+	fed := run.(interface{ TaskStatus(string, error) })
+	for range 25 {
+		fed.TaskStatus("running", nil)
+		time.Sleep(100 * time.Millisecond)
+	}
+	if polls := status.polls(); polls != 1 {
+		t.Fatalf("adapter polled %d times beside the controller", polls)
+	}
+	fed.TaskStatus("cancelled", nil)
+	wait, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := run.Wait(wait); !errors.Is(err, ErrDenied) {
+		t.Fatalf("fed cancellation did not stop renewal: %v", err)
+	}
+}
+
+// The authority holds a lease until half of it remains or the token changes.
+func TestAuthorityRenewsOnlyNearLeaseEndOrOnChange(t *testing.T) {
+	authority := &stubAuthority{}
+	a := Adapter{Issuer: &stubIssuer{ttl: time.Hour}, Authority: authority, Status: stubStatus{}}
+	connections, err := Select(safeTask())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &running{adapter: &a, task: safeTask(), connections: connections, tokens: map[string]identity.AccessToken{}, leases: map[string]lease{}}
+	step := func(want int) {
+		t.Helper()
+		if err := r.refresh(context.Background()); err != nil || authority.renewals() != want {
+			t.Fatalf("renewals=%d want %d: %v", authority.renewals(), want, err)
+		}
+	}
+	step(1)
+	step(1)
+	r.leases["selected"] = lease{r.leases["selected"].hash, time.Now().Add(attemptLease/2 - time.Second)}
+	step(2)
+	r.tokens["selected"] = identity.NewAccessToken("rotated", time.Now().Add(time.Hour))
+	step(3)
+	if r.leases["selected"].hash != attempt.Fingerprint("rotated") {
+		t.Fatal("rotated token not registered")
+	}
+}
+
 func TestInitialDenialNeverStartsWorkload(t *testing.T) {
 	workload := &stubWorkload{}
 	authority := &stubAuthority{deny: true}

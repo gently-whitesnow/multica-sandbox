@@ -64,8 +64,10 @@ func (c *Client) UseOutbox(dir string) error {
 	return nil
 }
 
-// Deliver sends a terminal callback with the upstream retry schedule. Once the
-// callback is persisted, an undelivered report returns ErrDeferred.
+// Deliver sends a terminal callback. A persisted callback gets one online attempt and
+// otherwise returns ErrDeferred: replay retries it with backoff, so the attempt's slot
+// is not held through the retry schedule. Without the outbox it follows the upstream
+// retry schedule online.
 func (c *Client) Deliver(ctx context.Context, t Terminal) error {
 	if !validID(t.Task) {
 		return fmt.Errorf("invalid task ID")
@@ -83,11 +85,10 @@ func (c *Client) Deliver(ctx context.Context, t Terminal) error {
 	defer o.end(t.Task)
 	// Durability improves availability; a full disk must not block an online callback.
 	record := pending{Version: 1, Terminal: t, NextAt: o.now()}
-	persisted := o.save(record) == nil
-	err := send()
-	if !persisted {
-		return err
+	if o.save(record) != nil {
+		return send()
 	}
+	err := c.sendTerminal(ctx, t)
 	if err == nil {
 		return o.remove(t.Task)
 	}

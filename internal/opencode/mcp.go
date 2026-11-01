@@ -64,7 +64,7 @@ func (m *MCPRelay) revoke(attempt string) {
 func (m *MCPRelay) Authorize(req *http.Request) (relay.Lease, bool) {
 	lease, ok := m.grants.Authorize(req)
 	if !ok {
-		return relay.Lease{}, false
+		return lease, false
 	}
 	m.mu.Lock()
 	r := m.attempts[lease.Attempt]

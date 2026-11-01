@@ -1,7 +1,12 @@
 package opencode
 
 import (
+	"cmp"
 	"context"
+	"crypto/rand"
+	"errors"
+	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -17,6 +22,8 @@ const (
 	reportInterval    = 500 * time.Millisecond
 	reportTimeout     = 5 * time.Second
 	idleWatchdog      = 10 * time.Minute
+	// pendingLimit bounds transcript rows kept across failed reports; older rows go first.
+	pendingLimit = 512
 )
 
 type Reporter interface {
@@ -28,8 +35,10 @@ type Reporter interface {
 // eventStream reports ACP session updates like the upstream daemon reports its agents.
 type eventStream struct {
 	reporter Reporter
-	task     string
-	model    string
+	// log reports what Multica never received; nil discards.
+	log   *slog.Logger
+	task  string
+	model string
 	// workDir names the retained workdir reported with the session.
 	workDir string
 	active  atomic.Int64
@@ -43,7 +52,13 @@ type eventStream struct {
 	usage   multica.Usage
 	seq     int
 	batch   []multica.Message
+	// sent counts the leading batch rows already offered to Multica; they stay unchanged.
+	sent int
+	// keys prefixes the rows' idempotency keys, unique to this stream.
+	keys    string
 	pending string
+	// unreported is turn usage a transient failure kept for the next report.
+	unreported *multica.Usage
 }
 
 // chunk appends streamed text or reasoning, joining consecutive chunks of one kind
@@ -56,7 +71,7 @@ func (s *eventStream) chunk(kind, text string) {
 	if kind == "text" {
 		s.output.WriteString(text)
 	}
-	if n := len(s.batch); n > 0 && s.batch[n-1].Type == kind {
+	if n := len(s.batch); n > s.sent && s.batch[n-1].Type == kind {
 		s.batch[n-1].Content += text
 		s.mu.Unlock()
 		return
@@ -97,13 +112,18 @@ func (s *eventStream) idle(window time.Duration) bool {
 	return s.running.Load() == 0 && time.Since(time.Unix(0, s.active.Load())) > window
 }
 
-// add sequences transcript rows; seq 1 is the controller's start message.
+// add sequences transcript rows; seq 1 is the controller's start message. Each row
+// gets a stable idempotency key, so a report resent after a lost answer stores it once.
 func (s *eventStream) add(messages ...multica.Message) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.keys == "" {
+		s.keys = rand.Text()
+	}
 	for _, m := range messages {
 		s.seq++
 		m.Seq = s.seq + 1
+		m.IdempotencyKey = s.keys + ":" + strconv.Itoa(m.Seq)
 		s.batch = append(s.batch, m)
 	}
 }
@@ -128,27 +148,89 @@ func (s *eventStream) flushEvery(interval time.Duration) func() {
 	return func() {
 		close(done)
 		<-exited
-		s.flush()
+		if err := s.flush(); err != nil {
+			s.mu.Lock()
+			rows, usage := len(s.batch), s.unreported != nil
+			s.batch, s.sent, s.pending, s.unreported = nil, 0, "", nil
+			s.mu.Unlock()
+			s.dropped(rows, usage, err)
+		}
 	}
 }
 
+// retryable failures keep their reports for the next flush.
+func retryable(err error) bool {
+	return multica.Transient(err) || errors.Is(err, context.DeadlineExceeded)
+}
+
 // flush is best-effort, like the upstream daemon: reporting outages never fail the task.
-func (s *eventStream) flush() {
+// Transiently refused reports are kept, within pendingLimit, for the next flush, which
+// returns the last such failure; anything else Multica refused is dropped and logged.
+func (s *eventStream) flush() (kept error) {
 	s.mu.Lock()
-	session, batch := s.pending, s.batch
-	s.pending, s.batch = "", nil
+	session, batch, usage := s.pending, s.batch, s.unreported
+	s.pending, s.batch, s.sent, s.unreported = "", nil, 0, nil
 	s.mu.Unlock()
 	if s.reporter == nil {
-		return
+		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), reportTimeout)
 	defer cancel()
 	if session != "" {
-		_ = s.reporter.ReportSession(ctx, s.task, session, s.workDir)
+		if err := s.reporter.ReportSession(ctx, s.task, session, s.workDir); retryable(err) {
+			kept = err
+			s.mu.Lock()
+			if s.pending == "" {
+				s.pending = session
+			}
+			s.mu.Unlock()
+		}
 	}
-	if len(batch) > 0 {
-		_ = s.reporter.ReportMessages(ctx, s.task, batch)
+	if usage != nil {
+		kept = cmp.Or(s.sendUsage(ctx, *usage), kept)
 	}
+	if len(batch) == 0 {
+		return kept
+	}
+	err := s.reporter.ReportMessages(ctx, s.task, batch)
+	if err == nil {
+		return kept
+	}
+	if !retryable(err) {
+		s.dropped(len(batch), false, err)
+		return kept
+	}
+	// Multica may have stored the batch: resend it unchanged, after which new text starts a row.
+	s.mu.Lock()
+	s.batch = append(batch, s.batch...)
+	excess := max(len(s.batch)-pendingLimit, 0)
+	s.batch, s.sent = s.batch[excess:], max(len(batch)-excess, 0)
+	s.mu.Unlock()
+	s.dropped(excess, false, err)
+	return err
+}
+
+// sendUsage reports usage, keeping it after a transient failure, which it returns.
+func (s *eventStream) sendUsage(ctx context.Context, u multica.Usage) error {
+	err := s.reporter.ReportUsage(ctx, s.task, u)
+	switch {
+	case retryable(err):
+		s.mu.Lock()
+		s.unreported = &u
+		s.mu.Unlock()
+		return err
+	case err != nil:
+		s.dropped(0, true, err)
+	}
+	return nil
+}
+
+// dropped logs transcript rows and usage Multica will not receive.
+func (s *eventStream) dropped(rows int, usage bool, err error) {
+	if (rows == 0 && !usage) || s.log == nil {
+		return
+	}
+	s.log.Warn("attempt report dropped", "task", s.task, "messages", rows, "usage", usage, "error", err.Error())
 }
 
 // reportUsage sends the turn total once; OpenCode emits no model, so attribution is the applied model.
@@ -165,5 +247,5 @@ func (s *eventStream) reportUsage(u multica.Usage) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), reportTimeout)
 	defer cancel()
-	_ = s.reporter.ReportUsage(ctx, s.task, u)
+	_ = s.sendUsage(ctx, u)
 }

@@ -5,6 +5,8 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"slices"
+	"strings"
 	"time"
 )
 
@@ -17,8 +19,11 @@ func (w *limitedOutput) Write(p []byte) (int, error) {
 	return w.Buffer.Write(p)
 }
 func command(ctx context.Context, args ...string) ([]byte, error) {
-	return commandWithin(ctx, 30*time.Second, args...)
+	return commandWithin(ctx, commandTimeout, args...)
 }
+
+// commandTimeout bounds ordinary engine requests; tests shorten it.
+var commandTimeout = 30 * time.Second
 
 // RemoveTimeout bounds attempt removal apart from the caller's cleanup deadline: killed
 // attempt processes throttled at memory.high and swapped out exit slowly (ADR 0020), and
@@ -34,9 +39,14 @@ func commandWithin(ctx context.Context, timeout time.Duration, args ...string) (
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	var out limitedOutput
-	cmd.Stdout = &out
-	// Diagnostics may contain image metadata. Do not expose them as task output.
+	var stderr cappedOutput
+	cmd.Stdout, cmd.Stderr = &out, &stderr
+	// Diagnostics may contain image metadata. Do not expose them as task output. Engine
+	// messages name the cause; attempt and image processes write their own stderr.
 	if err := cmd.Run(); err != nil {
+		if detail := strings.TrimSpace(stderr.String()); detail != "" && args[0] != "exec" && !slices.Contains(args, "--attach") {
+			return nil, fmt.Errorf("docker %s failed: %w: %.256q", args[0], err, detail)
+		}
 		return nil, fmt.Errorf("docker %s failed: %w", args[0], err)
 	}
 	return out.Bytes(), nil

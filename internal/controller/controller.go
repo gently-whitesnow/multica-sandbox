@@ -107,7 +107,7 @@ func (p *Probe) execute(ctx context.Context, t multica.Task, ticks <-chan time.T
 	if err := p.API.Message(ctx, t.ID); err != nil {
 		p.observe("message-deferred", t.ID)
 	}
-	done, stop, outcome, err := p.launch(ctx, t)
+	done, stop, outcome, feed, err := p.launch(ctx, t)
 	if err != nil {
 		var rejected *execution.RejectedError
 		if errors.As(err, &rejected) {
@@ -135,7 +135,7 @@ func (p *Probe) execute(ctx context.Context, t multica.Task, ticks <-chan time.T
 					return err
 				}
 			}
-			active, err := p.reconcile(ctx, t.ID, stop)
+			active, err := p.reconcile(ctx, t.ID, stop, feed)
 			if err != nil || !active {
 				return err
 			}
@@ -160,7 +160,7 @@ func (p *Probe) finish(ctx context.Context, f Finish, failure error, stop func()
 	if err := stop(); err != nil {
 		return err
 	}
-	active, err := p.reconcile(ctx, id, stop)
+	active, err := p.reconcile(ctx, id, stop, nil)
 	if err != nil || !active {
 		return err
 	}
@@ -184,8 +184,13 @@ func (p *Probe) finish(ctx context.Context, f Finish, failure error, stop func()
 	}
 	return nil
 }
-func (p *Probe) reconcile(ctx context.Context, id string, stop func() error) (bool, error) {
+
+// reconcile polls the task status and passes the answer to a running attempt's feed.
+func (p *Probe) reconcile(ctx context.Context, id string, stop func() error, feed func(string, error)) (bool, error) {
 	status, err := p.API.Status(ctx, id)
+	if feed != nil {
+		feed(status, err)
+	}
 	switch {
 	case multica.Transient(err):
 		// Keep running; the next tick or the terminal callback checks again.

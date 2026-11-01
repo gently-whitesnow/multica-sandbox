@@ -53,7 +53,8 @@ Production integration must verify identity bootstrap, tenant/resource isolation
 wrong-audience/expired-token rejection, lifecycle revocation and external egress
 policy before advertising support. The experimental OpenCode path integrates an authenticated deployment-owned
 authority through `internal/attempt`. Renewals register JWT fingerprints with an
-exact MCP recipient and a maximum 15-second lease, checked every second. Completion,
+exact MCP recipient and a maximum 15-second lease, renewed once half remains or the
+token changes while the task status is checked every second. Completion,
 cancellation and failed renewal revoke the attempt before terminal reporting; startup
 recovers the controller namespace before claims. An authority outage still removes
 the container and stops the controller; downstream access ends when its lease expires.

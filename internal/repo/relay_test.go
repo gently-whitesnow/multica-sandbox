@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -182,6 +183,40 @@ func TestGitRelayServesOnlyClaimRepositories(t *testing.T) {
 	if _, _, ok := g.Allow("attempt", "https://git.example.test/other.git"); ok {
 		t.Fatal("revoked attempt extended")
 	}
+}
+
+// Checkout extends a grant while the attempt fetches; run under -race.
+func TestGitRelayAllowsDuringAuthorize(t *testing.T) {
+	hosts, err := NewHosts(Config{Version: 1, Hosts: []Host{{WorkspaceID: workspace, Host: "git.example.test"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := NewRelay("http://relay.example.test", hosts)
+	env, err := g.Issue("attempt", workspace, []string{"https://git.example.test/fixture.git"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := range 200 {
+			g.Allow("attempt", "https://git.example.test/repo"+strconv.Itoa(i)+".git")
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for range 200 {
+			r := httptest.NewRequest(http.MethodPost, "http://git.example.test/fixture.git/git-upload-pack", nil)
+			r.Header.Set("Authorization", env["GIT_CONFIG_VALUE_0"][len("Authorization: "):])
+			if lease, ok := g.Authorize(r); !ok {
+				t.Error("granted repository refused")
+			} else {
+				lease.Release()
+			}
+		}
+	}()
+	wg.Wait()
 }
 
 func TestClaimURLFormsMatchUpstream(t *testing.T) {

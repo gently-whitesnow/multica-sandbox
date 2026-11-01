@@ -36,6 +36,8 @@ type Lease struct {
 	// Context ends when the grant is revoked, cancelling in-flight requests.
 	Context context.Context
 	Release func()
+	// Busy marks a refusal of a valid grant whose concurrent request slots are full.
+	Busy bool
 }
 
 // Authorizer validates the caller and resolves the upstream from trusted state.
@@ -86,6 +88,7 @@ type exchange struct {
 var (
 	ErrPolicy     = errors.New("request not permitted")
 	ErrCredential = errors.New("invalid relay credential")
+	ErrBusy       = errors.New("too many concurrent requests")
 	ErrRedirect   = errors.New("upstream redirect refused")
 	ErrUpstream   = errors.New("upstream unavailable")
 )
@@ -192,6 +195,11 @@ func (r *Relay) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	lease, ok := r.auth.Authorize(req)
+	if !ok && lease.Busy {
+		w.Header().Set("Retry-After", "1")
+		r.refuse(w, req, http.StatusTooManyRequests, ErrBusy, start)
+		return
+	}
 	if !ok {
 		r.refuse(w, req, http.StatusUnauthorized, ErrCredential, start)
 		return

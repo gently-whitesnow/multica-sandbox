@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/url"
 	"regexp"
 	"strings"
@@ -52,6 +53,8 @@ type Adapter struct {
 	// Command replaces the `opencode acp` argv; it must speak ACP on stdio.
 	Command  []string
 	Reporter Reporter
+	// Log records reports Multica never received; nil discards them.
+	Log *slog.Logger
 	// Relay and RelayURL enable upstream-equivalent Multica CLI access (ADR 0014).
 	Relay    Grants
 	RelayURL string
@@ -82,9 +85,16 @@ type running struct {
 	anonymous map[string]bool
 	public    map[string]bool
 	workload  execution.ProjectedRun
-	// mu guards tokens, which the MCP relay reads while the renewal loop replaces them.
-	mu           sync.Mutex
-	tokens       map[string]identity.AccessToken
+	// mu guards tokens, which the MCP relay reads while the renewal loop replaces them,
+	// and the task status: confirmed is when Multica last reported it running, ended
+	// a final answer, fed that the controller's poll replaced the adapter's own.
+	mu         sync.Mutex
+	confirmed  time.Time
+	ended, fed bool
+	tokens     map[string]identity.AccessToken
+	// leases are the fingerprints the authority holds and their ends; only the
+	// renewal loop uses them.
+	leases       map[string]lease
 	httpServices map[string]identity.HTTPService
 	httpTokens   map[string]identity.AccessToken
 	cancel       context.CancelFunc
@@ -111,6 +121,17 @@ type running struct {
 	workDir, resume, retired string
 	// skills are the claim's skill files under SkillsDir, upstream tasks only (ADR 0017).
 	skills map[string][]byte
+}
+
+// attemptLease bounds an authority lease and how long renewal rides out transient
+// task status errors after the last confirmation. A lease is renewed once half of
+// it remains, which leaves an authority request timeout of slack, or at once when
+// the token changes.
+const attemptLease = 15 * time.Second
+
+type lease struct {
+	hash string
+	end  time.Time
 }
 
 // SessionDB keeps OpenCode's session store in the retained workdir, apart from
@@ -150,7 +171,7 @@ func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, 
 	if err != nil {
 		return nil, &execution.RejectedError{Err: err}
 	}
-	r := &running{adapter: a, task: task, connections: connections, anonymous: anonymous, public: public, tokens: map[string]identity.AccessToken{}, done: make(chan error, 1), exited: make(chan struct{}), skills: skills}
+	r := &running{adapter: a, task: task, connections: connections, anonymous: anonymous, public: public, tokens: map[string]identity.AccessToken{}, leases: map[string]lease{}, done: make(chan error, 1), exited: make(chan struct{}), skills: skills}
 	if err := r.configureHTTP(); err != nil {
 		return nil, &execution.RejectedError{Err: err}
 	}
@@ -229,7 +250,7 @@ func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, 
 		// Retained checkouts follow the current setting before the agent commits.
 		a.Checkout.Refresh(runCtx, task.AttemptKey())
 	}
-	r.events = &eventStream{reporter: a.Reporter, task: task.ID, model: r.model, workDir: r.workDir}
+	r.events = &eventStream{reporter: a.Reporter, log: a.Log, task: task.ID, model: r.model, workDir: r.workDir}
 	r.events.touch()
 	r.started = true
 	go r.loop(runCtx)
@@ -288,10 +309,51 @@ func (r *running) grant(action string) attempt.Grant {
 	return attempt.Grant{Controller: r.adapter.Controller, Attempt: r.task.AttemptKey(), Server: r.adapter.Server, Workspace: r.task.WorkspaceID, Agent: r.task.AgentID, Task: r.task.ID, Action: action}
 }
 
-func (r *running) refresh(ctx context.Context) error {
-	status, err := r.adapter.Status.Status(ctx, r.task.ID)
-	if err != nil || status != "running" {
+// TaskStatus takes the controller's poll of the task status in place of the adapter's
+// own, so one poller serves the attempt.
+func (r *running) TaskStatus(status string, err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.fed = true
+	r.observe(status, err)
+}
+
+// observe records a status answer; the caller holds mu.
+func (r *running) observe(status string, err error) {
+	switch {
+	case err == nil && status == "running":
+		r.confirmed = time.Now()
+	case !multica.Transient(err):
+		r.ended = true
+	}
+}
+
+// confirm gates renewal on Multica reporting the task running (ADR 0011). Like the
+// controller it rides out transient status errors, but only within the attempt lease;
+// denial, absence and any other state end renewal at once. It polls only until the
+// controller feeds it.
+func (r *running) confirm(ctx context.Context) error {
+	r.mu.Lock()
+	fed := r.fed
+	r.mu.Unlock()
+	if !fed {
+		status, err := r.adapter.Status.Status(ctx, r.task.ID)
+		r.mu.Lock()
+		r.observe(status, err)
+		r.mu.Unlock()
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.ended || time.Since(r.confirmed) > attemptLease {
 		return fmt.Errorf("task status: %w", ErrDenied)
+	}
+	return nil
+}
+
+func (r *running) refresh(ctx context.Context) error {
+	err := r.confirm(ctx)
+	if err != nil {
+		return err
 	}
 	ref := identity.Ref{Server: r.adapter.Server, WorkspaceID: r.task.WorkspaceID, AgentID: r.task.AgentID}
 	for name, connection := range r.connections {
@@ -308,14 +370,16 @@ func (r *running) refresh(ctx context.Context) error {
 			}
 		}
 		// An optional authority registers the JWT fingerprint before the relay uses it.
-		if r.adapter.Authority != nil {
+		hash := attempt.Fingerprint(token.Bearer())
+		if held := r.leases[name]; r.adapter.Authority != nil && (held.hash != hash || time.Until(held.end) <= attemptLease/2) {
 			grant := r.grant("renew")
 			grant.URL = connection.URL
-			grant.TokenHash = attempt.Fingerprint(token.Bearer())
-			grant.ExpiresAt = min(token.ExpiresAt.Unix(), time.Now().Add(15*time.Second).Unix())
+			grant.TokenHash = hash
+			grant.ExpiresAt = min(token.ExpiresAt.Unix(), time.Now().Add(attemptLease).Unix())
 			if err := r.adapter.Authority.Apply(ctx, grant); err != nil {
 				return err
 			}
+			r.leases[name] = lease{hash, time.Unix(grant.ExpiresAt, 0)}
 		}
 		r.mu.Lock()
 		r.tokens[name] = token
