@@ -50,10 +50,8 @@ and stability gate, automatic rollback.
 
 ## Consequences
 
-An agent dispatches the deploy for a merged commit, sets a native Multica wakeup
-and ends its run; the drain waits for that run. After the restart the wakeup
-starts a new attempt on the new controller, which checks the run summary and its
-own behavior. A drain timeout keeps the old controller and resumes claims unless
+Agents release the controller they run in; the procedure (wakeup, dispatch,
+summary check, rollback) lives only in AGENTS.md, Controller release. A drain timeout keeps the old controller and resumes claims unless
 `force` is set; `force` accepts the recovery semantics above. Environment secrets
 and the master-only environment rule are owner configuration. Readiness proves
 registration and recovery, not end-to-end task execution.
