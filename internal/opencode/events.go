@@ -112,7 +112,7 @@ func (s *eventStream) idle(window time.Duration) bool {
 	return s.running.Load() == 0 && time.Since(time.Unix(0, s.active.Load())) > window
 }
 
-// add sequences transcript rows; seq 1 is the controller's start message. Each row
+// add sequences transcript rows starting at 1. Each row
 // gets a stable idempotency key, so a report resent after a lost answer stores it once.
 func (s *eventStream) add(messages ...multica.Message) {
 	s.mu.Lock()
@@ -122,7 +122,7 @@ func (s *eventStream) add(messages ...multica.Message) {
 	}
 	for _, m := range messages {
 		s.seq++
-		m.Seq = s.seq + 1
+		m.Seq = s.seq
 		m.IdempotencyKey = s.keys + ":" + strconv.Itoa(m.Seq)
 		s.batch = append(s.batch, m)
 	}

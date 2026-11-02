@@ -115,7 +115,6 @@ func (r *running) opened(ctx context.Context, client *acpClient, id acp.SessionI
 	}
 	client.follow(id)
 	r.events.begin(string(id))
-	r.events.add(multica.Message{Type: "status", Content: "running", CreatedAt: time.Now().UTC()})
 	return id, nil
 }
 

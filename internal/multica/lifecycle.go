@@ -197,9 +197,6 @@ func (c *Client) taskPost(ctx context.Context, id, action string, body any) erro
 	return c.call(ctx, http.MethodPost, "/api/daemon/tasks/"+id+"/"+action, body, nil)
 }
 
-func (c *Client) AgentMessage(ctx context.Context, id string) error {
-	return c.taskPost(ctx, id, "messages", map[string]any{"messages": []map[string]any{{"seq": 1, "type": "text", "content": "Experimental OpenCode attempt started.", "created_at": time.Now().UTC()}}})
-}
 func (c *Client) AgentComplete(ctx context.Context, id string, result execution.Result) error {
 	return c.Deliver(ctx, Terminal{Task: id, Output: result.Output, Session: result.SessionID, WorkDir: result.WorkDir, Retired: result.RetiredSessionID, Disposable: result.Disposable})
 }
