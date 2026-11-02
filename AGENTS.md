@@ -83,7 +83,12 @@ running `./verify.sh`: Harness reads the Git index. Use `harness explain <id>`
 through the clone-local binary to investigate findings; fix their cause rather
 than weakening the frame. Inspect `git diff --check` before committing.
 Run `VERIFY_UPSTREAM=1 ./verify.sh` for lifecycle/client changes; Docker must be
-available. Run `VERIFY_CONTAINERS=1 ./verify.sh` for backend changes and
+available. It builds a clone at exactly `multica.UpstreamRevision` of `MULTICA_SOURCE`,
+else of the sibling checkout from `multica repo checkout <repo>` (any checkout holding
+the revision), else fetches it; `<repo>` is `MULTICA_UPSTREAM_REPO`, by default
+`https://github.com/multica-ai/multica`. A `docker ... signal: killed` is usually an
+`exec.CommandContext` deadline; check `memory.events` for `oom_kill` before suspecting OOM.
+Run `VERIFY_CONTAINERS=1 ./verify.sh` for backend changes and
 `VERIFY_SERVICE=1 ./verify.sh` for service/packaging changes. Never run test commands
 against production tasks. Keep fixture data generic.
 Run `VERIFY_IDENTITY=1 ./verify.sh` for identity/MCP fixture changes.

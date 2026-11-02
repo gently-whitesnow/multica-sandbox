@@ -15,6 +15,7 @@ import (
 
 	"github.com/gently-whitesnow/multica-sandbox/internal/controller"
 	"github.com/gently-whitesnow/multica-sandbox/internal/docker"
+	"github.com/gently-whitesnow/multica-sandbox/internal/execution"
 	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
 )
 
@@ -40,9 +41,19 @@ func containerLifecycle(t *testing.T, api *multica.Client, rt multica.Runtime) {
 					t.Error(err)
 				}
 			})
-			p := controller.Probe{API: api, Backend: b, Interval: 100 * time.Millisecond, Duration: time.Second}
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
+			// The execution deadline also bounds docker create/start, whose latency is the
+			// engine's (nested engines are slower). Only the timeout scenario asserts it, and
+			// it starts outside the deadline, so it times out the running workload.
+			budget, _ := ctx.Deadline()
+			p := controller.Probe{API: api, Backend: b, Interval: 100 * time.Millisecond, Duration: time.Until(budget)}
+			if scenario == "timeout" {
+				p.Backend, p.Duration = nil, time.Second
+				p.Launch = func(ctx context.Context, task multica.Task) (execution.Run, error) {
+					return b.Start(context.WithoutCancel(ctx), task.AttemptKey())
+				}
+			}
 			if scenario == "cancel" {
 				want = "cancelled"
 				p.Observe = func(event, id string) {
