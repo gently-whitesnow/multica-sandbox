@@ -55,7 +55,7 @@ func (a *fleetFake) ClaimBatch(_ context.Context, _ string, scopes map[string]st
 	return nil, nil
 }
 func newFleet(t *testing.T, a *fleetFake) *fleet {
-	return newFleetState(a, "test", t.TempDir(), slog.New(slog.DiscardHandler), map[string]string{}, 16, 0)
+	return newFleetState(a, "test", t.TempDir(), slog.New(slog.DiscardHandler), map[string]string{})
 }
 
 // track starts attempts that block until released and reports what is running.
@@ -87,7 +87,7 @@ func TestWorkspaceTasksRunInParallel(t *testing.T) {
 	f.ready = map[string]string{"a": "a", "b": "b"}
 	execute, _, release := track()
 	defer close(release)
-	if err := f.claim(context.Background(), 10, execute); err != nil {
+	if err := f.claim(context.Background(), execute); err != nil {
 		t.Fatal(err)
 	}
 	if len(f.active) != 5 || f.perRuntime["a"] != 5 {
@@ -95,42 +95,55 @@ func TestWorkspaceTasksRunInParallel(t *testing.T) {
 	}
 }
 
-func TestWorkspaceConcurrencyCapsOnlyItsWorkspace(t *testing.T) {
-	a := &fleetFake{queued: map[string]int{"a": 5, "b": 5}}
-	f := newFleet(t, a)
-	f.workspaceLimit = 2
-	f.ready = map[string]string{"a": "a", "b": "b"}
-	execute, _, release := track()
-	if err := f.claim(context.Background(), 10, execute); err != nil {
-		t.Fatal(err)
-	}
-	if len(f.active) != 4 || f.perRuntime["a"] != 2 || f.perRuntime["b"] != 2 {
-		t.Fatalf("workspace limit not applied per workspace: %v", f.perRuntime)
-	}
-	release <- struct{}{}
-	f.finish(<-f.done)
-	if err := f.claim(context.Background(), 10, execute); err != nil {
-		t.Fatal(err)
-	}
-	if len(f.active) != 4 {
-		t.Fatalf("freed workspace slot not refilled: %v", f.perRuntime)
-	}
-	close(release)
-}
-
-func TestBusyWorkspaceSharesCapacityFairly(t *testing.T) {
+func TestBusyWorkspaceSharesAdmissionFairly(t *testing.T) {
 	a := &fleetFake{}
 	f := newFleet(t, a)
 	f.ready = map[string]string{"a": "a", "b": "b", "c": "c"}
+	f.admit = func() (bool, string) { return len(f.active) < 3, "test pool" }
 	execute, started, release := track()
 	defer close(release)
-	if err := f.claim(context.Background(), 3, execute); err != nil {
+	if err := f.claim(context.Background(), execute); err != nil {
 		t.Fatal(err)
 	}
 	if len(f.perRuntime) != 3 {
-		t.Fatalf("capacity not shared one task per workspace per round: %v", f.perRuntime)
+		t.Fatalf("admission not shared one task per workspace per round: %v", f.perRuntime)
 	}
 	eventuallyLen(t, started, 3)
+}
+
+// The controller has no concurrency limit of its own (Multica enforces each agent's
+// max_concurrent_tasks at claim): it claims past the removed cap of 64 while the pool
+// admits, stops at a refusal and otherwise when Multica hands out no task.
+func TestClaimsUntilAdmissionOrMulticaStops(t *testing.T) {
+	a := &fleetFake{queued: map[string]int{"a": 50, "b": 50}}
+	f := newFleet(t, a)
+	f.ready = map[string]string{"a": "a", "b": "b"}
+	now := time.Now()
+	f.clock = func() time.Time { return now }
+	admitted := 80
+	f.admit = func() (bool, string) { return len(f.active) < admitted, "test pool" }
+	execute, _, release := track()
+	defer close(release)
+	if err := f.claim(context.Background(), execute); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.active) != 80 || f.perRuntime["a"] != 40 || f.perRuntime["b"] != 40 || a.claims != 80 {
+		t.Fatalf("claims did not stop fairly at the admission refusal: %v, %d claim calls", f.perRuntime, a.claims)
+	}
+	admitted = 1000
+	if err := f.claim(context.Background(), execute); err != nil || len(f.active) != 80 {
+		t.Fatalf("claimed within the cooldown: %v %d", err, len(f.active))
+	}
+	now = now.Add(admissionCooldown)
+	// The refusal followed a full round: the first poll only resets the served set.
+	for range 2 {
+		if err := f.claim(context.Background(), execute); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(f.active) != 100 || a.queued["a"] != 0 || a.queued["b"] != 0 {
+		t.Fatalf("queue not drained while admitted: %d active", len(f.active))
+	}
 }
 
 func TestRemovedWorkspaceCancelsAllItsAttempts(t *testing.T) {
@@ -139,7 +152,7 @@ func TestRemovedWorkspaceCancelsAllItsAttempts(t *testing.T) {
 	f.ready = map[string]string{"a": "a", "b": "b"}
 	execute, _, release := track()
 	defer close(release)
-	if err := f.claim(context.Background(), 10, execute); err != nil {
+	if err := f.claim(context.Background(), execute); err != nil {
 		t.Fatal(err)
 	}
 	f.remove("a", "a")
@@ -163,21 +176,24 @@ func eventuallyLen(t *testing.T, list func() []string, n int) {
 		}
 	}
 }
-func TestFleetCapacityAndFairness(t *testing.T) {
+
+// A round interrupted by an admission refusal resumes with the workspaces it did not serve.
+func TestRefusedRoundKeepsFairness(t *testing.T) {
 	a := &fleetFake{}
 	f := newFleet(t, a)
 	f.ready = map[string]string{"a": "a", "b": "b", "c": "c"}
+	now := time.Now()
+	f.clock = func() time.Time { return now }
+	f.admit = func() (bool, string) { return len(f.active) == 0, "test pool" }
 	seen := map[string]bool{}
 	execute := func(context.Context, multica.Task) error { return nil }
 	for range 3 {
-		if err := f.claim(context.Background(), 1, execute); err != nil {
+		now = now.Add(admissionCooldown)
+		if err := f.claim(context.Background(), execute); err != nil {
 			t.Fatal(err)
 		}
 		if len(f.active) != 1 {
-			t.Fatal("capacity not reserved")
-		}
-		if err := f.claim(context.Background(), 1, execute); err != nil {
-			t.Fatal(err)
+			t.Fatal("admission refusal not applied")
 		}
 		done := <-f.done
 		if seen[done.runtime] {
@@ -187,7 +203,7 @@ func TestFleetCapacityAndFairness(t *testing.T) {
 		f.finish(done)
 	}
 	if a.claims != 3 {
-		t.Fatal("claimed without capacity")
+		t.Fatal("claimed while admission refused")
 	}
 }
 func TestDiscoveryCancelsRemovedWorkspaceOnly(t *testing.T) {
@@ -285,7 +301,7 @@ func TestReplayPrecedesRecovery(t *testing.T) {
 	f := newFleet(t, a)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := f.serve(ctx, 1, func(context.Context, multica.Task) error { return nil }); err != nil {
+	if err := f.serve(ctx, func(context.Context, multica.Task) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if len(a.calls) < 2 || a.calls[0] != "replay" || a.calls[1] != "recover" {
@@ -319,11 +335,11 @@ func (a *wakeFake) Wakeups(ctx context.Context, _ []string, connected func(), de
 func TestPendingWorkHintHeartbeatsItsRuntimeNow(t *testing.T) {
 	a := &wakeFake{fleetFake: &fleetFake{workspaces: []multica.Workspace{{ID: "ws-a"}, {ID: "ws-b"}}, queued: map[string]int{}},
 		hints: make(chan multica.Wakeup, 1), beat: make(chan string, 16)}
-	f := newFleetState(a, "test", t.TempDir(), slog.New(slog.DiscardHandler), map[string]string{}, 1, 0)
+	f := newFleetState(a, "test", t.TempDir(), slog.New(slog.DiscardHandler), map[string]string{})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	execute, _, _ := track()
-	go func() { _ = f.serve(ctx, 1, execute) }()
+	go func() { _ = f.serve(ctx, execute) }()
 	a.hints <- multica.Wakeup{Event: multica.WakeupPendingWork, Runtime: "ws-b"}
 	select {
 	case rt := <-a.beat:
@@ -336,46 +352,44 @@ func TestPendingWorkHintHeartbeatsItsRuntimeNow(t *testing.T) {
 }
 
 // TestDrainHoldsClaimsUntilReleased pins the deploy drain: running attempts keep
-// their slots, nothing new is claimed while draining, and release resumes claims.
+// running, nothing new is claimed while draining, and release resumes claims.
 func TestDrainHoldsClaimsUntilReleased(t *testing.T) {
 	a := &fleetFake{queued: map[string]int{"a": 3}}
 	f := newFleet(t, a)
 	f.ready = map[string]string{"a": "a"}
 	execute, _, release := track()
 	defer close(release)
-	if err := f.claim(context.Background(), 1, execute); err != nil || len(f.active) != 1 {
+	if err := f.claim(context.Background(), execute); err != nil || len(f.active) != 3 {
 		t.Fatalf("first claim: %v, %d active", err, len(f.active))
 	}
 	f.setDraining(true)
 	release <- struct{}{}
 	f.finish(<-f.done)
+	a.queued["a"] = 2
 	claims := a.claims
-	if err := f.claim(context.Background(), 1, execute); err != nil {
+	if err := f.claim(context.Background(), execute); err != nil {
 		t.Fatal(err)
 	}
-	if len(f.active) != 0 || a.claims != claims {
+	if len(f.active) != 2 || a.claims != claims {
 		t.Fatalf("drained controller claimed: %d active, %d claim calls", len(f.active), a.claims-claims)
 	}
 	f.setDraining(false)
-	// The first round after a full one only resets the served set, as in ordinary polling.
-	for range 2 {
-		if err := f.claim(context.Background(), 1, execute); err != nil {
-			t.Fatal(err)
-		}
+	if err := f.claim(context.Background(), execute); err != nil {
+		t.Fatal(err)
 	}
-	if len(f.active) != 1 {
+	if len(f.active) != 4 {
 		t.Fatalf("released drain did not resume claims: %d active", len(f.active))
 	}
 }
 
 func TestDrainSignalReachesServeLoop(t *testing.T) {
 	a := &fleetFake{workspaces: []multica.Workspace{{ID: "ws-a"}}, queued: map[string]int{}}
-	f := newFleetState(a, "test", t.TempDir(), slog.New(slog.DiscardHandler), map[string]string{}, 1, 0)
+	f := newFleetState(a, "test", t.TempDir(), slog.New(slog.DiscardHandler), map[string]string{})
 	drain := make(chan bool)
 	f.drain = drain
 	ctx, cancel := context.WithCancel(context.Background())
 	served := make(chan error, 1)
-	go func() { served <- f.serve(ctx, 1, func(context.Context, multica.Task) error { return nil }) }()
+	go func() { served <- f.serve(ctx, func(context.Context, multica.Task) error { return nil }) }()
 	drain <- true
 	drain <- false
 	drain <- true
@@ -385,5 +399,27 @@ func TestDrainSignalReachesServeLoop(t *testing.T) {
 	}
 	if !f.draining {
 		t.Fatal("drain request not applied")
+	}
+}
+
+// Shutdown cancels every attempt and receives each completion from the unbuffered
+// done channel, here more attempts than the removed cap of 64.
+func TestShutdownCollectsEveryAttempt(t *testing.T) {
+	a := &fleetFake{workspaces: []multica.Workspace{{ID: "ws-a"}, {ID: "ws-b"}}, queued: map[string]int{"ws-a": 40, "ws-b": 40}}
+	f := newFleet(t, a)
+	execute, started, release := track()
+	defer close(release)
+	ctx, cancel := context.WithCancel(context.Background())
+	served := make(chan error, 1)
+	go func() { served <- f.serve(ctx, execute) }()
+	eventuallyLen(t, started, 80)
+	cancel()
+	select {
+	case err := <-served:
+		if err != nil || len(f.active) != 0 {
+			t.Fatalf("shutdown: %v, %d active", err, len(f.active))
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("shutdown did not collect every attempt")
 	}
 }

@@ -112,7 +112,7 @@ func TestClaimsWaitWhilePoolIsUnderPressure(t *testing.T) {
 	execute, _, release := track()
 	defer close(release)
 	for range 3 {
-		if err := f.claim(context.Background(), 10, execute); err != nil {
+		if err := f.claim(context.Background(), execute); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -128,11 +128,11 @@ func TestClaimsWaitWhilePoolIsUnderPressure(t *testing.T) {
 	// A calm reading resumes claims only after the cooldown.
 	now := time.Now()
 	f.clock = func() time.Time { return now }
-	if err := f.claim(context.Background(), 10, execute); err != nil || len(f.active) != 0 {
+	if err := f.claim(context.Background(), execute); err != nil || len(f.active) != 0 {
 		t.Fatalf("claimed within the cooldown: %v %d", err, len(f.active))
 	}
 	now = now.Add(admissionCooldown)
-	if err := f.claim(context.Background(), 10, execute); err != nil {
+	if err := f.claim(context.Background(), execute); err != nil {
 		t.Fatal(err)
 	}
 	if len(f.active) != 3 || strings.Count(log.String(), `"msg":"claims resumed"`) != 1 || strings.Count(log.String(), `"msg":"claims paused"`) != 1 {
@@ -145,7 +145,7 @@ func TestClaimsWaitWhilePoolIsUnderPressure(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.queued["a"] = 1
-	if err := f.claim(context.Background(), 10, execute); err != nil || len(f.active) != 3 || !strings.Contains(log.String(), "attempt pool unreadable") {
+	if err := f.claim(context.Background(), execute); err != nil || len(f.active) != 3 || !strings.Contains(log.String(), "attempt pool unreadable") {
 		t.Fatalf("unreadable pool admitted: %v %d", err, len(f.active))
 	}
 }
@@ -165,15 +165,15 @@ func TestAutoAdmissionDoesNotFillColdCapacity(t *testing.T) {
 	f.ready = map[string]string{"a": "a"}
 	execute, _, release := track()
 	defer close(release)
-	if err := f.claim(context.Background(), 10, execute); err != nil || len(f.active) != 1 {
+	if err := f.claim(context.Background(), execute); err != nil || len(f.active) != 1 {
 		t.Fatalf("cold fill: %d %v", len(f.active), err)
 	}
 	now = now.Add(pool.ColdStartInterval + admissionCooldown)
 	// The fleet first clears the previous workspace fairness round.
-	if err := f.claim(context.Background(), 10, execute); err != nil {
+	if err := f.claim(context.Background(), execute); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.claim(context.Background(), 10, execute); err != nil || len(f.active) != 2 {
+	if err := f.claim(context.Background(), execute); err != nil || len(f.active) != 2 {
 		t.Fatalf("warm ramp: %d %v", len(f.active), err)
 	}
 }
@@ -196,7 +196,7 @@ func TestAutoAdmissionPacesStartsAtWarmupInterval(t *testing.T) {
 	var starts []time.Duration
 	for ; len(starts) < 4 && now.Sub(start) < 5*time.Minute; now = now.Add(time.Second) {
 		before := len(f.active)
-		if err := f.claim(context.Background(), 10, execute); err != nil {
+		if err := f.claim(context.Background(), execute); err != nil {
 			t.Fatal(err)
 		}
 		if len(f.active) > before {
@@ -257,7 +257,8 @@ func TestAutoAdmissionRampsPastStalePageCache(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := &fleetFake{queued: map[string]int{"a": 3, "b": 3}}
+	// Multica holds three tasks, so the last step finds no fourth.
+	a := &fleetFake{queued: map[string]int{"a": 2, "b": 1}}
 	f := newFleet(t, a)
 	var log bytes.Buffer
 	now := time.Now()
@@ -271,7 +272,7 @@ func TestAutoAdmissionRampsPastStalePageCache(t *testing.T) {
 		now = now.Add(elapsed)
 		// The second claim clears a served workspace fairness round.
 		for range 2 {
-			if err := f.claim(context.Background(), 3, execute); err != nil {
+			if err := f.claim(context.Background(), execute); err != nil {
 				t.Fatal(err)
 			}
 		}

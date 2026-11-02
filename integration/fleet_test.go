@@ -86,7 +86,7 @@ func multiWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 	metricsAddr := freeAddress(t)
-	c := service.Config{Server: server.URL, Concurrency: 2, Daemon: daemon, Image: image, Command: []string{"/bin/sh", "-c", "sleep 12"}, Timeout: "30s", MetricsListen: metricsAddr}
+	c := service.Config{Server: server.URL, Daemon: daemon, Image: image, Command: []string{"/bin/sh", "-c", "sleep 12"}, Timeout: "30s", MetricsListen: metricsAddr}
 	logs := &fleetLog{}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -97,7 +97,7 @@ func multiWorkspace(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	eventually(t, "100 workspaces registered", func() bool { return logs.contains(readyEvent + `,"workspaces":100,`) })
+	eventually(t, "100 workspaces registered", func() bool { return logs.contains(readyEvent + `,"workspaces":100}`) })
 	startRequests, startClaims := requests.Load(), claims.Load()
 	started := time.Now()
 	time.Sleep(16 * time.Second)
@@ -120,10 +120,11 @@ func multiWorkspace(t *testing.T) {
 	second := enqueueWorkspace(t, runtime(2), 102, fleetWorkspace(2))
 	eventually(t, "two workspace attempts started", func() bool { return logs.contains(attemptStarted(first)) && logs.contains(attemptStarted(second)) })
 	t.Logf("two tasks started across 100 workspaces in %s", time.Since(claimStarted).Round(time.Millisecond))
+	// Agent max_concurrent_tasks is the only concurrency limit: the controller adds none.
 	third := enqueueWorkspace(t, runtime(3), 103, fleetWorkspace(3))
-	status(t, api, third, "queued")
-	if len(strings.Fields(ownedContainers(t))) != 2 {
-		t.Fatal("shared capacity not exercised")
+	eventually(t, "third workspace attempt started", func() bool { return logs.contains(attemptStarted(third)) })
+	if len(strings.Fields(ownedContainers(t))) != 3 {
+		t.Fatal("controller limited concurrency")
 	}
 	fleetMembershipChange(t, api, logs, first, second)
 	waitTask(t, api, third, "completed")
@@ -137,8 +138,8 @@ func multiWorkspace(t *testing.T) {
 func fleetMetrics(t *testing.T, addr, task string) {
 	t.Helper()
 	var text string
-	// Slots are released after cleanup, which can follow the task's completed status.
-	eventually(t, "completed attempt exported and slots released", func() bool {
+	// Attempts end after cleanup, which can follow the task's completed status.
+	eventually(t, "completed attempt exported and no attempt active", func() bool {
 		resp, err := http.Get("http://" + addr + "/metrics-text")
 		if err != nil {
 			return false

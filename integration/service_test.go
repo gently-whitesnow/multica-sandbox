@@ -40,8 +40,7 @@ func dockerTest(t *testing.T, args ...string) string {
 }
 func prepareService(t *testing.T) serviceFixture {
 	t.Helper()
-	// One slot keeps the two tasks of the runtime sequential, so each environment is observed.
-	c := service.Config{Server: "http://127.0.0.1:8080", Concurrency: 1, Daemon: daemon, Image: image, Command: []string{"/bin/sh", "-c", "sleep 3"}, Timeout: "30s"}
+	c := service.Config{Server: "http://127.0.0.1:8080", Daemon: daemon, Image: image, Command: []string{"/bin/sh", "-c", "sleep 3"}, Timeout: "30s"}
 	return prepareServiceConfig(t, c)
 }
 func prepareServiceConfig(t *testing.T, c service.Config) serviceFixture {
@@ -101,9 +100,11 @@ func containerService(t *testing.T, api *multica.Client, rt multica.Runtime) {
 	cid := f.compose("ps", "-q", "controller")
 	eventually(t, "controller ready", func() bool { return strings.Contains(dockerTest(t, "logs", cid), readyEvent) })
 	started := dockerTest(t, "inspect", "--format", "{{.State.StartedAt}}", cid)
-	first, second := enqueue(t, rt, 30), enqueue(t, rt, 31)
+	// The second task is queued after the first ends, so each environment is observed.
+	first := enqueue(t, rt, 30)
 	firstContainer := waitServiceExecution(t, cid, first)
 	waitTask(t, api, first, "completed")
+	second := enqueue(t, rt, 31)
 	secondContainer := waitServiceExecution(t, cid, second)
 	if firstContainer == secondContainer {
 		t.Fatal("environment reused between tasks")

@@ -66,8 +66,8 @@ in nested engines) held the pool at `memory.high` with up to 3.7 GiB in swap and
 "some" up to 22 %, without an OOM kill; a run took 45–67 s instead of 40 s. A task can still die when the
 pool reaches `MemoryMax` or its own ceiling; it then fails once with an explicit
 message. Admission bounds only new claims: attempts already running can push the pool
-into `MemoryMax`, so `MemoryHigh` must leave headroom, and the controller's concurrency
-remains the upper bound. Tasks waiting under sustained pressure can expire in the
+into `MemoryMax`, so `MemoryHigh` must leave headroom, and the agents'
+`max_concurrent_tasks` remain the upper bound. Tasks waiting under sustained pressure can expire in the
 Multica queue. Sizing the slice, swap and its disk are host decisions
 (`examples/sysbox-host`). The controller reads host cgroup files, which a stopped and
 restarted slice invalidates until the controller restarts. Tests: unit tests of the
