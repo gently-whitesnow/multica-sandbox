@@ -196,19 +196,19 @@ func TestACPTurnReportsMessagesUsageAndSession(t *testing.T) {
 	}
 	var kinds []string
 	for i, m := range reporter.messages {
-		if m.Seq != i+2 {
+		if m.Seq != i+1 {
 			t.Fatalf("sequence: %+v", reporter.messages)
 		}
 		kinds = append(kinds, m.Type)
 	}
-	if strings.Join(kinds, ",") != "status,thinking,tool_use,tool_result,tool_use,tool_result,text" {
+	if strings.Join(kinds, ",") != "thinking,tool_use,tool_result,tool_use,tool_result,text" {
 		t.Fatalf("messages: %v", kinds)
 	}
-	use, result := reporter.messages[2], reporter.messages[3]
+	use, result := reporter.messages[1], reporter.messages[2]
 	if use.Tool != "bash" || use.CallID != "call-1" || use.Input["command"] != "make build" || result.Output != "built" || result.CallID != "call-1" || *result.OutputTruncated {
 		t.Fatalf("tool call keyed by toolCallId: %+v %+v", use, result)
 	}
-	if child := reporter.messages[5]; child.Tool != "read" || child.Output != "child output" || strings.Contains(output, "child") {
+	if child := reporter.messages[4]; child.Tool != "read" || child.Output != "child output" || strings.Contains(output, "child") {
 		t.Fatalf("child session: %+v", child)
 	}
 	want := multica.Usage{Provider: "opencode", Model: "managed-inference/selected", Input: 30, Output: 12, CacheRead: 4, CacheWrite: 5}
@@ -308,14 +308,18 @@ func TestACPProviderErrorTakesTheRelayedStatus(t *testing.T) {
 
 func TestACPCancellationSendsSessionCancel(t *testing.T) {
 	agent := &fakeAgent{version: "2.2.2", prompted: make(chan string, 1)}
+	reporter := &reportStub{}
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { <-agent.prompted; cancel() }()
 	start := time.Now()
-	if err := turnWith(t, ctx, agent, &running{}); !errors.Is(err, context.Canceled) {
+	if err := turnWith(t, ctx, agent, &running{events: &eventStream{reporter: reporter}}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled turn: %v", err)
 	}
 	if _, ok := agent.called("session/cancel"); !ok || time.Since(start) > cancelGrace {
 		t.Fatal("session/cancel not sent before teardown")
+	}
+	if len(reporter.messages) != 0 || len(reporter.sessions) != 1 {
+		t.Fatalf("cancelled startup: messages=%+v sessions=%v", reporter.messages, reporter.sessions)
 	}
 }
 

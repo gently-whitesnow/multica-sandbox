@@ -311,7 +311,9 @@ func serveForge(ctx context.Context, config Config, git *repo.Relay, hosts *repo
 	return config.serveRelay(ctx, "forge", forge, *c, relay.Policy{Allow: repo.ForgePath, EncodedSlash: true}, nil, forge.TLSConfig())
 }
 
-func (a *agentFleetAPI) Message(ctx context.Context, id string) error { return a.AgentMessage(ctx, id) }
+// Message is the probe's startup hook. Agent startup belongs to /start and the
+// controller log, not the user transcript; ACP reports the agent's actual output.
+func (a *agentFleetAPI) Message(context.Context, string) error { return nil }
 func (a *agentFleetAPI) Complete(ctx context.Context, id string, result execution.Result) error {
 	return a.AgentComplete(ctx, id, result)
 }

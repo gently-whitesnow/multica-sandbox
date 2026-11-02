@@ -76,7 +76,7 @@ func TestTransientReportFailuresRetryInOrder(t *testing.T) {
 	if err := s.flush(); err != nil {
 		t.Fatal(err)
 	}
-	if len(reporter.messages) != 2 || reporter.messages[0].Content != "a" || reporter.messages[0].Seq != 2 || reporter.messages[1].Seq != 3 ||
+	if len(reporter.messages) != 2 || reporter.messages[0].Content != "a" || reporter.messages[0].Seq != 1 || reporter.messages[1].Seq != 2 ||
 		len(reporter.usage) != 1 || len(reporter.sessions) != 1 || logs.Len() != 0 {
 		t.Fatalf("messages=%+v usage=%v sessions=%v logs=%s", reporter.messages, reporter.usage, reporter.sessions, logs)
 	}
@@ -103,13 +103,13 @@ func TestResentReportIsIdempotentAndUnchanged(t *testing.T) {
 	if s.flush() == nil {
 		t.Fatal("lost answer not kept")
 	}
-	// Multica may hold row 2 already: new text must not change it.
+	// Multica may hold row 1 already: new text must not change it.
 	s.chunk("text", "b")
 	if err := s.flush(); err != nil {
 		t.Fatal(err)
 	}
 	first, second := reporter.calls[0], reporter.calls[1]
-	if len(first) != 1 || len(second) != 2 || !reflect.DeepEqual(second[0], first[0]) || second[1].Content != "b" || second[1].Seq != 3 {
+	if len(first) != 1 || len(second) != 2 || !reflect.DeepEqual(second[0], first[0]) || second[1].Content != "b" || second[1].Seq != 2 {
 		t.Fatalf("resent rows changed: %+v then %+v", first, second)
 	}
 	// Multica derives the row ID from the key: the replay stores nothing new.
@@ -137,7 +137,7 @@ func TestReportBacklogIsBoundedAndLogged(t *testing.T) {
 		s.add(multica.Message{Type: "tool_use"})
 	}
 	_ = s.flush()
-	if len(s.batch) != pendingLimit || s.batch[0].Seq != 12 || !strings.Contains(logs.String(), `"messages":10`) {
+	if len(s.batch) != pendingLimit || s.batch[0].Seq != 11 || !strings.Contains(logs.String(), `"messages":10`) {
 		t.Fatalf("backlog=%d first=%d logs=%s", len(s.batch), s.batch[0].Seq, logs)
 	}
 	logs.Reset()

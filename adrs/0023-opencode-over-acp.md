@@ -64,6 +64,9 @@ and the MCP rotation conformance, and appends the release for review.
 - Updates map to Multica messages by `toolCallId`; only the `tool_call` frame names
   the tool. Child-session updates keep tool calls and drop text, like upstream.
   The idle watchdog pauses while a tool is `in_progress`.
+- Startup uses the native task `/start`, session pinning and controller logs, not
+  synthetic transcript text or a raw `running` row. Agent rows begin at sequence 1;
+  fresh, resumed and retried turns share this rule on issue and chat surfaces.
 - `stopReason` decides the outcome; an exit without a prompt response stays the
   retryable provider-network failure.
 - Resume uses `session/load` in the retained workdir and ignores the replay. Any
