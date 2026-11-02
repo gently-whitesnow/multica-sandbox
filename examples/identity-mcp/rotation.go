@@ -154,6 +154,7 @@ func rotation() error {
 	for range tasks {
 		if err := <-ready; err != nil {
 			cancel()
+			return fmt.Errorf("start native identity attempt: %w", err)
 		}
 	}
 	if err := rotationEnvironment(ctx, controller); err != nil {

@@ -72,6 +72,7 @@ func TestCompactionCapRequiresVerifiedNativeBufferSemantics(t *testing.T) {
 	}{
 		{"version opencode v2.2.2\n", 400000, true},
 		{"version 2.2.2\n", 400000, true},
+		{"version opencode v2.2.5\n", 400000, true},
 		{"version 1.18.35\n", 400000, false},
 		{"version opencode v2.99.0\n", 400000, false},
 		{"version opencode v2.2.2\n", -1, false},
