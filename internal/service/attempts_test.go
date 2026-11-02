@@ -229,3 +229,66 @@ func TestAutoAdmissionNeedsFilesystemMount(t *testing.T) {
 		}
 	}
 }
+
+// ECO-149: page cache that finished attempts and nested engines leave charged to the
+// slice no longer serializes attempts; PSI still pauses claims. The slice holds one
+// attempt (1 GiB of anon and kernel memory) beside 2.5 GiB of such cache.
+func TestAutoAdmissionRampsPastStalePageCache(t *testing.T) {
+	dir := fakeSlice(t, "0.00")
+	child := filepath.Join(dir, "docker-"+strings.Repeat("a", 64)+".scope")
+	if err := os.Mkdir(child, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pressure := func(avg10 string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, "memory.pressure"), []byte("some avg10="+avg10+" avg60=0 avg300=0 total=0\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for path, content := range map[string]string{"memory.high": "5252317184", "memory.max": "6179258368", "memory.current": "5188153344",
+		"memory.stat": "anon 943718400\nfile 3920019456\nkernel 324415488\nshmem 0\ninactive_file 2119892992\nactive_file 1800126464\n",
+		"docker-" + strings.Repeat("a", 64) + ".scope/memory.current": "2327838720",
+		"docker-" + strings.Repeat("a", 64) + ".scope/memory.stat":    "anon 943718400\nfile 1258291200\nkernel 125829120\nshmem 0\n"} {
+		if err := os.WriteFile(filepath.Join(dir, path), []byte(content+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p, _, err := attemptPool(&OpenCodeConfig{Pool: &PoolConfig{CgroupParent: "attempts.slice", CgroupDir: dir, AutoAdmission: true, DiskPath: t.TempDir()}}, docker.DefaultResources)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &fleetFake{queued: map[string]int{"a": 3, "b": 3}}
+	f := newFleet(t, a)
+	var log bytes.Buffer
+	now := time.Now()
+	f.clock = func() time.Time { return now }
+	f.log, f.admit, f.ready = newLogger(&log, false), admission(p, f.metrics), map[string]string{"a": "a", "b": "b"}
+	f.autoAdmission = &pool.AutoAdmission{Pool: p, ReadDisk: func(string) (pool.Disk, error) { return pool.Disk{Total: 100 << 30, Available: 50 << 30}, nil }}
+	execute, _, release := track()
+	defer close(release)
+	step := func(elapsed time.Duration, active int) {
+		t.Helper()
+		now = now.Add(elapsed)
+		// The second claim clears a served workspace fairness round.
+		for range 2 {
+			if err := f.claim(context.Background(), 3, execute); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if len(f.active) != active {
+			t.Fatalf("%d active, want %d: %s", len(f.active), active, log.String())
+		}
+	}
+	step(0, 1)
+	step(pool.ColdStartInterval-time.Second, 1)
+	step(time.Second, 2)
+	pressure("23.51")
+	step(pool.ColdStartInterval, 2)
+	pressure("0.00")
+	step(admissionCooldown-time.Second, 2)
+	step(time.Second, 3)
+	step(pool.ColdStartInterval, 3)
+	if strings.Contains(log.String(), "below estimate") || strings.Count(log.String(), `"msg":"claims paused"`) != 1 {
+		t.Fatal(log.String())
+	}
+}

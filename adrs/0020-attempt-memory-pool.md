@@ -38,8 +38,8 @@ Attempts may share one host cgroup slice, the pool, instead of fixed limits.
 - **Preflight.** The parent must fit the engine's cgroup driver, and the slice must set
   `memory.high` and `memory.max` with high not above max. Otherwise startup fails.
 - **Admission.** Before each claim the controller reads the slice: PSI `memory.pressure`
-  "some" `avg10` above `max_pressure` (default 10 %) or a working set (`memory.current`
-  without inactive file cache) above `max_working_set` of `memory.high` (default 0.9)
+  "some" `avg10` above `max_pressure` (default 10 %) or a working set (memory the
+  kernel cannot reclaim, ADR 0028) above `max_working_set` of `memory.high` (default 0.9)
   defers claims; an unreadable slice too. Claims resume after 15 s without a refusal:
   under load the working set hovers at `memory.high`. Tasks stay queued in Multica; the
   log records each pause and resume once.
