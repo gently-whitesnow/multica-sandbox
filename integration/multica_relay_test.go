@@ -114,14 +114,13 @@ func multicaRelayService(t *testing.T, api *multica.Client, agentImage string, n
 	if full {
 		title = "Repository fixture issue"
 		configureRepositories(t, dir, project, &c)
-		c.Command[2] = "export HTTPS_PROXY=http://git-relay:8093 https_proxy=http://git-relay:8093; " + c.Command[2]
 	}
 	var w *workspaceInference
 	if withInference {
 		w = configureInference(t, dir, project, &c)
 		c.OpenCode.Peers = []string{controllerName}
 	}
-	writeJSON(t, filepath.Join(dir, "config.json"), c)
+	writeRelayConfig(t, dir, &c, full)
 	if err := os.WriteFile(filepath.Join(dir, "token"), []byte(token(t)), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -337,6 +336,19 @@ func sessionResumed(t *testing.T, api *multica.Client, agent, runtime, issue, fi
 		t.Fatalf("retained volume lacks the session store or holds a credential: %v %q", err, out)
 	}
 	t.Log("a comment follow-up resumed the native OpenCode session in the retained workdir with upstream warm hints; a missing session was retired and replaced fresh; the volume holds no credential")
+}
+
+// writeRelayConfig applies the fixture proxy after inference replaces the provider
+// command, so the negative NO_PROXY check exercises the proxy in both modes.
+func writeRelayConfig(t *testing.T, dir string, c *service.Config, full bool) {
+	t.Helper()
+	if full {
+		if len(c.Command) == 0 {
+			c.Command = []string{"/bin/sh", "-c", "exec opencode acp"}
+		}
+		c.Command[2] = "export HTTPS_PROXY=http://git-relay:8093 https_proxy=http://git-relay:8093; " + c.Command[2]
+	}
+	writeJSON(t, filepath.Join(dir, "config.json"), c)
 }
 
 // chatResumed sends two web chat messages: the first gets the upstream chat prompt, reads

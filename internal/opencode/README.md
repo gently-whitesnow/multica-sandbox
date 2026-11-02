@@ -86,7 +86,7 @@ Complete/fail follow cleanup and use a durable at-least-once queue. Each reporte
 Supported means this path only: persistent controller, Docker projected backend,
 native OpenCode. Evidence is fixture-based for the pinned stack, not production
 certification. Pins: Multica v0.7.2 `f05a525ac8e82f5e9169ad078e44f166fad6d5c8`
-(unmodified); OpenCode 1.18.34 (`aec0b9a6`), 1.18.35 (`53d1eabb`) 2.2.2 (`098aa7fd`) and 2.2.5, official images in `images.txt`; ACP Go SDK 0.13.5; LiteLLM v1.104.0 with
+(unmodified); OpenCode 1.18.34 (`aec0b9a6`), 1.18.35 (`53d1eabb`), 2.2.2 (`098aa7fd`) and 2.2.5, official images in `images.txt`; ACP Go SDK 0.13.5; LiteLLM v1.104.0 with
 Postgres virtual keys; Keycloak 26.8.0; MCP Go SDK 1.8.0; go-oidc 3.21.0; Docker
 Engine 29.2.1 (runc, cgroup v2, `linux/arm64`; `amd64` is unverified). Reproduce with `MULTICA_SOURCE=<checkout>` and
 `VERIFY_CONTAINERS=1 VERIFY_SERVICE=1 VERIFY_OPENCODE=1 VERIFY_INFERENCE=1 VERIFY_IDENTITY=1 ./verify.sh`;
