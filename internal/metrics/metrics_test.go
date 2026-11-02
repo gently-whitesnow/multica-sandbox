@@ -36,6 +36,8 @@ func TestExportedContract(t *testing.T) {
 	m.Retry("multica", http.MethodPost, "/api/daemon/tasks/{id}/complete")
 	m.Pool(PoolReading{Pressure: 0.42, Usage: 3 << 30, Limit: 4 << 30})
 	m.Paused(true)
+	m.Draining(true)
+	m.Workspaces(2)
 
 	families := scrape(t, m)
 	want := map[string][][]string{
@@ -50,6 +52,8 @@ func TestExportedContract(t *testing.T) {
 		"sandbox_pool_memory_usage_bytes":          {{}},
 		"sandbox_pool_memory_limit_bytes":          {{}},
 		"sandbox_claims_paused":                    {{}},
+		"sandbox_claims_draining":                  {{}},
+		"sandbox_workspaces_ready":                 {{}},
 	}
 	for name, labelSets := range want {
 		family, ok := families[name]
@@ -130,6 +134,8 @@ func TestNilRecordsNothing(t *testing.T) {
 	m.Retry("multica", http.MethodGet, "/")
 	m.Pool(PoolReading{})
 	m.Paused(true)
+	m.Draining(true)
+	m.Workspaces(1)
 }
 
 func TestServeExposesOnlyThePath(t *testing.T) {
@@ -143,16 +149,33 @@ func TestServeExposesOnlyThePath(t *testing.T) {
 	if err = m.Serve(t.Context(), addr); err != nil {
 		t.Fatal(err)
 	}
-	for path, status := range map[string]int{Path: http.StatusOK, "/metrics": http.StatusNotFound, "/": http.StatusNotFound} {
-		resp, err := http.Get("http://" + addr + path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		resp.Body.Close()
-		if resp.StatusCode != status {
-			t.Errorf("%s: %d, want %d", path, resp.StatusCode, status)
+	for path, status := range map[string]int{Path: http.StatusOK, ReadyPath: http.StatusServiceUnavailable, "/metrics": http.StatusNotFound, "/": http.StatusNotFound} {
+		if got := get(t, "http://"+addr+path); got != status {
+			t.Errorf("%s: %d, want %d", path, got, status)
 		}
 	}
+	m.Workspaces(1)
+	if got := get(t, "http://"+addr+ReadyPath); got != http.StatusOK {
+		t.Errorf("ready with a workspace: %d", got)
+	}
+	resp, err := http.Post("http://"+addr+ReadyPath, "text/plain", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Errorf("readiness accepted POST: %d", resp.StatusCode)
+	}
+}
+
+func get(t *testing.T, url string) int {
+	t.Helper()
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	return resp.StatusCode
 }
 
 func TestErrorType(t *testing.T) {

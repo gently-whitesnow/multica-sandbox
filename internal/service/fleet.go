@@ -61,6 +61,10 @@ type fleet struct {
 	// wsUp and wsErr keep wakeup connection logs to state changes.
 	wsUp  bool
 	wsErr string
+	// drain carries deploy drain requests (true) and their release (false); while
+	// draining no task is claimed, running attempts finish and report as usual.
+	drain    <-chan bool
+	draining bool
 }
 
 // wakeupAPI is the upstream daemon WebSocket (multica.Client.Wakeups).
@@ -91,7 +95,7 @@ func serveFleet(ctx context.Context, c Config, dir string, api fleetAPI, p *cont
 		return err
 	}
 	f := newFleetState(api, c.Daemon, dir, c.logger(), known, c.Concurrency, c.WorkspaceConcurrency)
-	f.admit, f.metrics = admit, c.metrics
+	f.admit, f.metrics, f.drain = admit, c.metrics, c.Drain
 	if c.OpenCode != nil && c.OpenCode.Pool != nil && c.OpenCode.Pool.AutoAdmission {
 		pc := c.OpenCode.Pool
 		workingSet := pc.MaxWorkingSet
@@ -127,6 +131,7 @@ func (f *fleet) serve(ctx context.Context, capacity int, execute func(context.Co
 	if err := f.tolerate("sync", f.sync(ctx)); err != nil {
 		return err
 	}
+	f.metrics.Workspaces(len(f.ready))
 	f.log.Info("controller ready", "workspaces", len(f.ready), "capacity", capacity, "workspace_capacity", f.workspaceLimit)
 	if api, ok := f.api.(wakeupAPI); ok {
 		listenCtx, stop := context.WithCancel(ctx)
@@ -151,10 +156,13 @@ func (f *fleet) serve(ctx context.Context, capacity int, execute func(context.Co
 			if err := f.completed(completed); err != nil {
 				return err
 			}
+		case draining := <-f.drain:
+			f.setDraining(draining)
 		case <-discovery.C:
 			if err := f.tolerate("sync", f.sync(ctx)); err != nil {
 				return err
 			}
+			f.metrics.Workspaces(len(f.ready))
 			f.publish()
 		case <-heartbeat.C:
 			if err := f.tolerate("heartbeat", f.beat(ctx)); err != nil {
@@ -178,6 +186,9 @@ func (f *fleet) serve(ctx context.Context, capacity int, execute func(context.Co
 // claim fills free capacity one task per workspace per round, so a busy workspace cannot
 // starve its peers; unused capacity is never pre-claimed and Multica keeps the queue.
 func (f *fleet) claim(ctx context.Context, capacity int, execute func(context.Context, multica.Task) error) error {
+	if f.draining {
+		return nil
+	}
 	if f.autoAdmission != nil {
 		f.autoAdmission.Observe(len(f.active), f.clock())
 	}
@@ -220,6 +231,20 @@ func (f *fleet) claim(ctx context.Context, capacity int, execute func(context.Co
 		go func() { f.done <- completion{key, task.RuntimeID, execute(runCtx, task)} }()
 	}
 	return nil
+}
+
+// setDraining holds or releases claims for a controller deploy; Multica keeps the queue.
+func (f *fleet) setDraining(draining bool) {
+	if draining == f.draining {
+		return
+	}
+	f.draining = draining
+	f.metrics.Draining(draining)
+	if draining {
+		f.log.Info("claims draining", "active", len(f.active))
+	} else {
+		f.log.Info("claims resumed after drain", "active", len(f.active))
+	}
 }
 
 // admitted asks the pool before each claim; tasks wait in the Multica queue meanwhile.

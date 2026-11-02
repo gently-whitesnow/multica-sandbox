@@ -28,5 +28,26 @@ func run() error {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	c.Drain = drainSignals(ctx)
 	return service.Run(ctx, c, *state, *token, os.Stdout)
+}
+
+// drainSignals maps SIGUSR1 to a deploy drain and SIGUSR2 to its release. The host
+// deploy controller sends them with docker kill; a restart always starts undrained.
+func drainSignals(ctx context.Context) <-chan bool {
+	signals := make(chan os.Signal, 4)
+	signal.Notify(signals, syscall.SIGUSR1, syscall.SIGUSR2)
+	drain := make(chan bool, 4)
+	go func() {
+		defer signal.Stop(signals)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case s := <-signals:
+				drain <- s == syscall.SIGUSR1
+			}
+		}
+	}()
+	return drain
 }

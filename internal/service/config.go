@@ -28,7 +28,8 @@ type Config struct {
 	Timeout              string          `json:"timeout"`
 	Debug                bool            `json:"debug,omitempty"`
 	// MetricsListen, when set, serves metrics.Path on this host:port (ADR 0025).
-	MetricsListen string `json:"metrics_listen,omitempty"`
+	MetricsListen string      `json:"metrics_listen,omitempty"`
+	Drain         <-chan bool `json:"-"`
 	log           *slog.Logger
 	metrics       *metrics.Metrics
 }

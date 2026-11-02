@@ -27,6 +27,8 @@ from verified behavior.
   headers/agent ENV and public proxy transport without per-endpoint rollout.
 - `adrs/0030-native-env-and-explicit-iam.md`: native Environment, common IAM keys
   and explicit MCP header selection without per-agent recipient bindings.
+- `adrs/0031-controller-self-deploy.md`: drain signals, `/readyz`, release artifacts
+  and the manual `deploy.yml` controller rollout to vps-worker.
 - `examples/end-to-end/`: opt-in real Multica/OpenCode/inference lab.
 - `examples/identity-mcp/`: disposable identity and MCP contract fixture.
 - `internal/inference/`: workspace gateway bindings, relay policy and advisory model catalogs.
@@ -95,6 +97,9 @@ The end-to-end lab uses `scripts/e2e.sh`; real inference requires explicit local
 subscription login. Never copy account data into documentation or test reports.
 CI is paused; run verification locally. Do not re-enable CI without an explicit
 request. `images.yml` (manual) publishes the controller, helper and CLI images for one
-platform. Use `VERIFY_COMMIT_RANGE=master..HEAD ./verify.sh` before publishing.
+platform. `deploy.yml` (manual) rolls a merged commit's linux/amd64 controller to
+vps-worker: dispatch it with `gh api -X POST repos/gently-whitesnow/multica-sandbox/actions/workflows/deploy.yml/dispatches -f ref=master -f 'inputs[sha]=<commit>'`,
+set a native wakeup and end the run; the next attempt checks the run summary.
+Use `VERIFY_COMMIT_RANGE=master..HEAD ./verify.sh` before publishing.
 Before starting an issue, inspect its ADRs and existing branches/PRs. Leave a concise
 handoff with commit, verified result, next action and blocker when interrupted.
