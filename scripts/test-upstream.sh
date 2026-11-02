@@ -3,7 +3,9 @@
 set -eu
 ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)
 cd "$ROOT"
-REV=f05a525ac8e82f5e9169ad078e44f166fad6d5c8 # v0.7.2
+REV=$(sed -n 's/^const UpstreamRevision = "\([0-9a-f]\{40\}\)"$/\1/p' internal/multica/client.go)
+[ -n "$REV" ] || { printf '%s\n' 'multica.UpstreamRevision not found' >&2; exit 2; }
+REPO=${MULTICA_UPSTREAM_REPO:-https://github.com/multica-ai/multica}
 TMP=$(mktemp -d)
 NAME="multica-sandbox-contract-$$"
 DB="$NAME-db"
@@ -17,17 +19,30 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' HUP TERM
-SOURCE=${MULTICA_SOURCE:-$TMP/upstream}
-if [ ! -d "$SOURCE" ]; then
- git init -q "$SOURCE"
- git -C "$SOURCE" fetch -q --depth=1 https://github.com/multica-ai/multica.git "$REV"
- git -C "$SOURCE" checkout -q --detach FETCH_HEAD
+# Builds use a disposable clone at exactly REV of MULTICA_SOURCE, else of the sibling
+# checkout `multica repo checkout "$REPO"` creates beside this one, else a fetch of REPO.
+SOURCE=${MULTICA_SOURCE:-}
+SIBLING=${REPO%/}
+SIBLING=$(basename "${SIBLING%.git}")
+SIBLING=$ROOT/../${SIBLING##*:}
+if [ -z "$SOURCE" ] && [ -e "$SIBLING/.git" ] && git -C "$SIBLING" cat-file -e "$REV^{commit}" 2>/dev/null; then
+ SOURCE=$SIBLING
 fi
-[ "$(git -C "$SOURCE" rev-parse HEAD)" = "$REV" ]
-git -C "$SOURCE" diff --quiet HEAD --
+UPSTREAM=$TMP/upstream
+if [ -n "$SOURCE" ]; then
+ git -C "$SOURCE" cat-file -e "$REV^{commit}" 2>/dev/null || { printf '%s lacks %s; fetch it or unset MULTICA_SOURCE\n' "$SOURCE" "$REV" >&2; exit 2; }
+ git clone -q --shared --no-checkout -- "$SOURCE" "$UPSTREAM"
+else
+ git init -q "$UPSTREAM"
+ git -C "$UPSTREAM" fetch -q --depth=1 "$REPO" "$REV"
+fi
+git -C "$UPSTREAM" -c advice.detachedHead=false checkout -q --detach "$REV"
+[ "$(git -C "$UPSTREAM" rev-parse HEAD)" = "$REV" ]
+git -C "$UPSTREAM" diff --quiet HEAD --
+printf 'Upstream %s from %s\n' "$REV" "${SOURCE:-$REPO}"
 ARCH=$(docker info --format '{{.Architecture}}')
 case "$ARCH" in aarch64|arm64) ARCH=arm64 ;; x86_64|amd64) ARCH=amd64 ;; *) exit 1 ;; esac
-(cd "$SOURCE/server" && go build -o "$TMP/migrate" ./cmd/migrate && CGO_ENABLED=0 GOOS=linux GOARCH="$ARCH" go build -o "$TMP/server" ./cmd/server)
+(cd "$UPSTREAM/server" && go build -o "$TMP/migrate" ./cmd/migrate && CGO_ENABLED=0 GOOS=linux GOARCH="$ARCH" go build -o "$TMP/server" ./cmd/server)
 docker network create "$NAME" >/dev/null
 POSTGRES_PASSWORD=$(openssl rand -hex 24)
 export POSTGRES_PASSWORD
@@ -35,7 +50,7 @@ JWT_SECRET=$(openssl rand -hex 32)
 export JWT_SECRET
 docker run -d --name "$DB" --network "$NAME" -p 127.0.0.1::5432 -e POSTGRES_PASSWORD -e POSTGRES_USER=contract -e POSTGRES_DB=contract pgvector/pgvector@sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f >/dev/null
 DBPORT=$(docker port "$DB" 5432/tcp | cut -d: -f2)
-(cd "$SOURCE/server" && DATABASE_URL="postgres://contract:$POSTGRES_PASSWORD@127.0.0.1:$DBPORT/contract?sslmode=disable" "$TMP/migrate" up) >"$TMP/migration.log" 2>&1 || { tail -20 "$TMP/migration.log"; exit 1; }
+(cd "$UPSTREAM/server" && DATABASE_URL="postgres://contract:$POSTGRES_PASSWORD@127.0.0.1:$DBPORT/contract?sslmode=disable" "$TMP/migrate" up) >"$TMP/migration.log" 2>&1 || { tail -20 "$TMP/migration.log"; exit 1; }
 DATABASE_URL="postgres://contract:$POSTGRES_PASSWORD@$DB:5432/contract?sslmode=disable"
 export DATABASE_URL
 docker run -d --name "$SERVER" --network "$NAME" -p 127.0.0.1::8080 -e DATABASE_URL -e JWT_SECRET -e APP_ENV=development -e PORT=8080 -v "$TMP/server:/server:ro" alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc /server >/dev/null
@@ -59,7 +74,7 @@ fi
 if [ "${VERIFY_SERVICE:-0}" = 1 ] && [ "${VERIFY_OPENCODE:-0}" = 1 ]; then
  mkdir "$TMP/agent"
  docker build -q -t "$NAME-agent:local" -f examples/agent-image/debian.Dockerfile "$TMP/agent" >/dev/null
- docker build -q -t "$NAME-cli:local" -f deploy/multica-cli.Dockerfile --build-context multica="$SOURCE" "$TMP/agent" >/dev/null
+ docker build -q -t "$NAME-cli:local" -f deploy/multica-cli.Dockerfile --build-context multica="$UPSTREAM" "$TMP/agent" >/dev/null
  docker build -q -t "$NAME-tool-jq:local" -f examples/tool-bundle/Dockerfile "$TMP/agent" >/dev/null
  docker build -q -t "$NAME-helper:local" --target helper . >/dev/null
  for IMAGE in $(grep '^ghcr' internal/opencode/images.txt); do docker pull -q "$IMAGE" >/dev/null; done

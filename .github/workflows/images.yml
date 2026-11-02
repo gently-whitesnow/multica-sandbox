@@ -2,6 +2,8 @@ name: Images
 # Publishes the controller, the attempt helper (ADR 0015) and the multica CLI artifact
 # at multica.UpstreamRevision or an explicit compatible CLI commit (ADR 0014). Manual
 # only: run it for the commit a deployment needs and pin the digests from the summary.
+# Each image also leaves a release-<image>-<os>-<arch> artifact; deploy.yml (ADR 0031)
+# rolls out the controller digest recorded for its commit.
 on:
   workflow_dispatch:
     inputs:
@@ -64,4 +66,22 @@ jobs:
           push: true
           provenance: false
           tags: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ github.sha }}
-      - run: echo "ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}@${{ steps.build.outputs.digest }}" >> "$GITHUB_STEP_SUMMARY"
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+      - id: release
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          PLATFORM: ${{ inputs.platform }}
+        run: |
+          jq -n --arg sha "$GITHUB_SHA" --arg ref "$GITHUB_REF" --arg image "$IMAGE" \
+            --arg digest "$DIGEST" --arg platform "$PLATFORM" \
+            '{sha: $sha, ref: $ref, image: $image, digest: $digest, platform: $platform}' > release.json
+          echo "name=release-${{ matrix.image }}-${PLATFORM//\//-}" >> "$GITHUB_OUTPUT"
+          echo "$IMAGE@$DIGEST" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ${{ steps.release.outputs.name }}
+          path: release.json
+          if-no-files-found: error

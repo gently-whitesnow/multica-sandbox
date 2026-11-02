@@ -15,5 +15,8 @@ ENTRYPOINT ["/sandbox-helper"]
 
 FROM docker:29.2.1-cli@sha256:cab69e2d0a1a2ea9a1ce1060252f439e83483ae41ec09317aecb33b08a0656a5
 COPY --from=build /controller /usr/local/bin/sandbox-controller
+# Deploy contract 1 (ADR 0031): SIGUSR1 drains claims, SIGUSR2 resumes, the metrics
+# listener answers /readyz. The host deploy controller reads this label.
+LABEL io.multica-sandbox.deploy-contract="1"
 ENTRYPOINT ["/usr/local/bin/sandbox-controller"]
 CMD []

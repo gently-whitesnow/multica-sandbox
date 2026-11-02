@@ -1,0 +1,116 @@
+name: Deploy controller
+# Rolls out the controller digest that images.yml published for a master commit to
+# vps-worker (ADR 0031). Manual only. The host capability drains claims, restarts
+# the controller, gates readiness and rolls back on failure; helper, CLI and agent
+# pins stay with the vps-worker Ansible runtime.
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Master commit whose images.yml run to deploy (empty uses master head)
+        type: string
+        required: false
+        default: ''
+      drain_minutes:
+        description: Minutes to wait for running attempts after claims stop (1-240)
+        type: number
+        default: 30
+      force:
+        description: Restart after the drain timeout; interrupted attempts follow Multica runtime_recovery
+        type: boolean
+        default: false
+concurrency:
+  group: deploy-multica-sandbox-controller
+  cancel-in-progress: false
+permissions:
+  actions: read
+  contents: read
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-24.04
+    environment: vps-worker
+    timeout-minutes: 270
+    steps:
+      - id: publication
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea
+        env:
+          SHA: ${{ inputs.sha }}
+        with:
+          script: |
+            const sha = process.env.SHA || context.sha;
+            if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error('sha must be a full lower-case commit hash');
+            const { data: diff } = await github.rest.repos.compareCommitsWithBasehead({
+              ...context.repo, basehead: `${sha}...${context.sha}`,
+            });
+            if (!['identical', 'ahead'].includes(diff.status)) throw new Error(`${sha} is not on master`);
+            const name = 'release-multica-sandbox-linux-amd64';
+            const { data } = await github.rest.actions.listWorkflowRuns({
+              ...context.repo, workflow_id: 'images.yml', head_sha: sha, status: 'success', per_page: 20,
+            });
+            for (const run of data.workflow_runs) {
+              const { data: found } = await github.rest.actions.listWorkflowRunArtifacts({
+                ...context.repo, run_id: run.id, name,
+              });
+              if (found.artifacts.some((artifact) => !artifact.expired)) {
+                core.setOutput('run_id', String(run.id));
+                core.setOutput('sha', sha);
+                return;
+              }
+            }
+            throw new Error(`No successful linux/amd64 images.yml publication for ${sha}; run images.yml first`);
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: release-multica-sandbox-linux-amd64
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ steps.publication.outputs.run_id }}
+      - id: release
+        env:
+          SHA: ${{ steps.publication.outputs.sha }}
+        run: |
+          jq -e --arg sha "$SHA" '.sha == $sha and .image == "ghcr.io/gently-whitesnow/multica-sandbox"
+            and .platform == "linux/amd64" and (.digest | test("^sha256:[0-9a-f]{64}$"))' release.json >/dev/null || {
+            echo 'release artifact does not match the requested master commit' >&2
+            exit 1
+          }
+          echo "digest=$(jq -r .digest release.json)" >> "$GITHUB_OUTPUT"
+      - name: Deploy through the sandbox capability
+        env:
+          SSH_KEY: ${{ secrets.SANDBOX_DEPLOY_SSH_KEY }}
+          HOST: ${{ secrets.SANDBOX_DEPLOY_HOST }}
+          DIGEST: ${{ steps.release.outputs.digest }}
+          DRAIN: ${{ inputs.drain_minutes }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          set -o pipefail
+          case "$DRAIN" in ''|*[!0-9]*) echo 'drain_minutes must be an integer' >&2; exit 1 ;; esac
+          request="$DIGEST drain=$DRAIN"
+          if [ "$FORCE" = true ]; then request="$request force"; fi
+          install -d -m 700 ~/.ssh
+          install -m 600 /dev/null ~/.ssh/id
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id
+          printf '%s ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIF9ynyzLFH/d3FXG2B4U/g2qiNaBdRDBXFU+OqxbSxAm\n' "$HOST" > ~/.ssh/known_hosts
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ServerAliveInterval=30 -i ~/.ssh/id \
+            "deploy-sandbox@${HOST}" "$request" | tee deploy.log
+      - name: Summary
+        if: always()
+        env:
+          SHA: ${{ steps.publication.outputs.sha }}
+        run: |
+          [ -f deploy.log ] || { echo "Deploy did not reach the host for ${SHA:-unknown}" >> "$GITHUB_STEP_SUMMARY"; exit 0; }
+          result=$(sed -n 's/^RESULT //p' deploy.log | tail -n 1)
+          if [ -z "$result" ]; then
+            echo "No result from the host; inspect the log and run the status request" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          printf '%s' "$result" | jq -r --arg sha "$SHA" '
+            "### Controller deploy: \(.result)",
+            "",
+            "| | |", "|---|---|",
+            "| commit | `\($sha)` |",
+            "| previous | `\(.previous)` |",
+            "| requested | `\(.requested)` |",
+            "| running | `\(.current)` |",
+            "| drain | \(.drain.mode), \(.drain.waited_seconds)s, \(.drain.remaining) attempts left |",
+            "| readiness | \(.health.detail) |",
+            "| rollback | \(.rollback // "not needed") |"' >> "$GITHUB_STEP_SUMMARY"
