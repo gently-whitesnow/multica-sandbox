@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"slices"
@@ -26,6 +27,10 @@ import (
 
 // Path is the scrape endpoint, served on its own listener.
 const Path = "/metrics-text"
+
+// ReadyPath answers 200 once the controller serves at least one workspace, else 503.
+// The host deploy gate polls it after a controller restart.
+const ReadyPath = "/readyz"
 
 // CardinalityLimit caps series per instrument; excess combinations go to the
 // otel_metric_overflow series.
@@ -52,7 +57,7 @@ type Metrics struct {
 	active                          metric.Int64UpDownCounter
 	events, retries                 metric.Int64Counter
 	pool                            atomic.Pointer[PoolReading]
-	paused                          atomic.Int64
+	paused, draining, workspaces    atomic.Int64
 }
 
 // PoolReading is the attempt pool state of the last admission check.
@@ -106,6 +111,18 @@ func New() (*Metrics, error) {
 			return nil
 		}))
 	errs = append(errs, err)
+	_, err = meter.Int64ObservableGauge("sandbox.claims.draining", metric.WithDescription("1 while a deploy drain holds new claims."),
+		metric.WithInt64Callback(func(_ context.Context, o metric.Int64Observer) error {
+			o.Observe(m.draining.Load())
+			return nil
+		}))
+	errs = append(errs, err)
+	_, err = meter.Int64ObservableGauge("sandbox.workspaces.ready", metric.WithUnit("{workspace}"), metric.WithDescription("Registered and recovered workspaces."),
+		metric.WithInt64Callback(func(_ context.Context, o metric.Int64Observer) error {
+			o.Observe(m.workspaces.Load())
+			return nil
+		}))
+	errs = append(errs, err)
 	if err = errors.Join(errs...); err != nil {
 		return nil, err
 	}
@@ -120,6 +137,7 @@ func (m *Metrics) Serve(ctx context.Context, listen string) error {
 	}
 	mux := http.NewServeMux()
 	mux.Handle("GET "+Path, m.handler)
+	mux.HandleFunc("GET "+ReadyPath, m.ready)
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: time.Minute}
 	go func() { _ = srv.Serve(listener) }()
 	context.AfterFunc(ctx, func() { _ = srv.Close() })
@@ -127,6 +145,14 @@ func (m *Metrics) Serve(ctx context.Context, listen string) error {
 }
 
 func (m *Metrics) Handler() http.Handler { return m.handler }
+
+func (m *Metrics) ready(w http.ResponseWriter, _ *http.Request) {
+	if m.workspaces.Load() < 1 {
+		http.Error(w, "not ready", http.StatusServiceUnavailable)
+		return
+	}
+	_, _ = io.WriteString(w, "ready\n")
+}
 
 // Attempt records a reported attempt; reason is empty on success and code is the
 // inference HTTP status of an inference failure, else 0.
@@ -211,6 +237,25 @@ func (m *Metrics) Paused(paused bool) {
 		v = 1
 	}
 	m.paused.Store(v)
+}
+
+func (m *Metrics) Draining(draining bool) {
+	if m == nil {
+		return
+	}
+	var v int64
+	if draining {
+		v = 1
+	}
+	m.draining.Store(v)
+}
+
+// Workspaces records how many workspaces are ready; ReadyPath needs at least one.
+func (m *Metrics) Workspaces(n int) {
+	if m == nil {
+		return
+	}
+	m.workspaces.Store(int64(n))
 }
 
 // outcome adds status_code for a response, else error_type: a series carries exactly one.

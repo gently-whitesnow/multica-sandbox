@@ -27,6 +27,8 @@ from verified behavior.
   headers/agent ENV and public proxy transport without per-endpoint rollout.
 - `adrs/0030-native-env-and-explicit-iam.md`: native Environment, common IAM keys
   and explicit MCP header selection without per-agent recipient bindings.
+- `adrs/0031-controller-self-deploy.md`: drain signals, `/readyz`, release artifacts
+  and the manual `deploy.yml` controller rollout to vps-worker.
 - `examples/end-to-end/`: opt-in real Multica/OpenCode/inference lab.
 - `examples/identity-mcp/`: disposable identity and MCP contract fixture.
 - `internal/inference/`: workspace gateway bindings, relay policy and advisory model catalogs.
@@ -100,6 +102,38 @@ The end-to-end lab uses `scripts/e2e.sh`; real inference requires explicit local
 subscription login. Never copy account data into documentation or test reports.
 CI is paused; run verification locally. Do not re-enable CI without an explicit
 request. `images.yml` (manual) publishes the controller, helper and CLI images for one
-platform. Use `VERIFY_COMMIT_RANGE=master..HEAD ./verify.sh` before publishing.
+platform; `deploy.yml` rolls out the controller (Controller release below).
+Use `VERIFY_COMMIT_RANGE=master..HEAD ./verify.sh` before publishing.
 Before starting an issue, inspect its ADRs and existing branches/PRs. Leave a concise
 handoff with commit, verified result, next action and blocker when interrupted.
+
+## Controller release
+
+You run inside this controller, so release it through `deploy.yml` (ADR 0031,
+vps-worker ADR-0024), never through vps-worker Ansible. It changes only the
+controller image; helper, CLI, agent image, secrets, policy and network changes
+are a vps-worker infrastructure window with an idle queue.
+
+1. Use a reviewed commit already on master. Check `actions/runs?head_sha=<SHA>` for a
+   successful `images.yml` with `platform=linux/amd64`; otherwise dispatch it once
+   (`{"ref":"master","inputs":{"platform":"linux/amd64"}}`). Do not dispatch
+   `deploy.yml` while another `deploy.yml` run is queued or in progress.
+2. Save the continuation first, because the drain waits for your run and the restart
+   follows it: `multica issue wakeup create <issue> --agent-id <your-agent-uuid> --kind at --after 40m --instruction-file ./resume-delivery.md`
+   (at least `drain_minutes` + 10). Record SHA, the expected digest from the
+   `images.yml` summary, dispatch time and step 4 in the instruction.
+3. Dispatch and end the run, leaving the issue `in_progress`:
+   `printf '%s\n' '{"ref":"master","inputs":{"sha":"<SHA>","drain_minutes":"30"}}' | gh api --method POST /repos/gently-whitesnow/multica-sandbox/actions/workflows/deploy.yml/dispatches --input -`.
+   Claims stop, running attempts finish, then only the controller restarts; new
+   tasks wait in Multica. A drain timeout cancels the release (`drain_timeout`).
+   Set `force:true` only on an explicit Fred/owner decision: interrupted attempts get
+   `runtime_recovery`, one resumed retry within budget, otherwise a visible failure;
+   autopilot runs are not retried.
+4. After the wakeup read `actions/workflows/deploy.yml/runs?per_page=5`: matching
+   `head_sha`, conclusion, and summary `success` with `running` equal to the expected
+   digest and readiness `/readyz 200, stable`. `rolled_back` is a failed release:
+   diagnose from the run log. `unchanged` means the digest already ran. Then verify the
+   changed behavior in this attempt and record run ID, SHA and digest in the issue.
+5. Roll back by deploying the previous master SHA the same way. No host `RESULT` or a
+   failed rollback is a blocker for Fred with the run ID; never request root or
+   bypass the host capability.

@@ -334,3 +334,56 @@ func TestPendingWorkHintHeartbeatsItsRuntimeNow(t *testing.T) {
 		t.Fatal("pending work waited for the scheduled heartbeat")
 	}
 }
+
+// TestDrainHoldsClaimsUntilReleased pins the deploy drain: running attempts keep
+// their slots, nothing new is claimed while draining, and release resumes claims.
+func TestDrainHoldsClaimsUntilReleased(t *testing.T) {
+	a := &fleetFake{queued: map[string]int{"a": 3}}
+	f := newFleet(t, a)
+	f.ready = map[string]string{"a": "a"}
+	execute, _, release := track()
+	defer close(release)
+	if err := f.claim(context.Background(), 1, execute); err != nil || len(f.active) != 1 {
+		t.Fatalf("first claim: %v, %d active", err, len(f.active))
+	}
+	f.setDraining(true)
+	release <- struct{}{}
+	f.finish(<-f.done)
+	claims := a.claims
+	if err := f.claim(context.Background(), 1, execute); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.active) != 0 || a.claims != claims {
+		t.Fatalf("drained controller claimed: %d active, %d claim calls", len(f.active), a.claims-claims)
+	}
+	f.setDraining(false)
+	// The first round after a full one only resets the served set, as in ordinary polling.
+	for range 2 {
+		if err := f.claim(context.Background(), 1, execute); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(f.active) != 1 {
+		t.Fatalf("released drain did not resume claims: %d active", len(f.active))
+	}
+}
+
+func TestDrainSignalReachesServeLoop(t *testing.T) {
+	a := &fleetFake{workspaces: []multica.Workspace{{ID: "ws-a"}}, queued: map[string]int{}}
+	f := newFleetState(a, "test", t.TempDir(), slog.New(slog.DiscardHandler), map[string]string{}, 1, 0)
+	drain := make(chan bool)
+	f.drain = drain
+	ctx, cancel := context.WithCancel(context.Background())
+	served := make(chan error, 1)
+	go func() { served <- f.serve(ctx, 1, func(context.Context, multica.Task) error { return nil }) }()
+	drain <- true
+	drain <- false
+	drain <- true
+	cancel()
+	if err := <-served; err != nil {
+		t.Fatal(err)
+	}
+	if !f.draining {
+		t.Fatal("drain request not applied")
+	}
+}
