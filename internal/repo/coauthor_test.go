@@ -13,12 +13,15 @@ import (
 	"testing"
 )
 
-// localTarget runs attempt commands on the host with /workspace mapped to a directory.
-type localTarget struct{ base string }
+// localTarget runs attempt commands on the host with /workspace mapped to base. The remote is
+// a host path and stays: inside an attempt it lies under /workspace too, in TMPDIR.
+type localTarget struct{ base, remote string }
 
 func (l localTarget) Capture(ctx context.Context, args []string, env map[string]string) ([]byte, error) {
 	for i := range args {
-		args[i] = strings.ReplaceAll(args[i], "/workspace", l.base)
+		if args[i] != l.remote {
+			args[i] = strings.ReplaceAll(args[i], "/workspace", l.base)
+		}
 	}
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0")
@@ -73,7 +76,7 @@ func TestSettingChangeReachesLiveHooks(t *testing.T) {
 	}
 	settings := &fakeSettings{enabled: true}
 	c := &Checkout{Auth: fakeAuth("opaque"), Settings: settings}
-	c.Register("attempt", Task{Workspace: ws, ID: task, AgentName: "A", Repos: map[string]string{bare: ""}, Target: localTarget{base}})
+	c.Register("attempt", Task{Workspace: ws, ID: task, AgentName: "A", Repos: map[string]string{bare: ""}, Target: localTarget{base, bare}})
 	c.Refresh(context.Background(), "attempt")
 	var paths []string
 	for _, workdir := range []string{WorkDir, WorkDir + "/a/b"} {
