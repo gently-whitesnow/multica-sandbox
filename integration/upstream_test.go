@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/gently-whitesnow/multica-sandbox/internal/execution"
+	"math/rand/v2"
 	"net/http"
 	"os"
 	"os/exec"
@@ -25,7 +26,10 @@ import (
 
 const user = "10000000-0000-4000-8000-000000000001"
 const workspace = "10000000-0000-4000-8000-000000000002"
-const daemon = "10000000-0000-4000-8000-000000000003"
+
+// daemon also labels the run's containers, volumes and networks: unique per run, so
+// Reconcile in concurrent runs on one engine leaves this run's executions alone.
+var daemon = fmt.Sprintf("10000000-0000-4000-8000-%012x", rand.Uint64()&(1<<48-1))
 
 func sql(t *testing.T, query string) string {
 	t.Helper()
