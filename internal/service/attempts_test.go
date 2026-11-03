@@ -119,7 +119,7 @@ func TestClaimsWaitWhilePoolIsUnderPressure(t *testing.T) {
 	if a.claims != 0 || len(f.active) != 0 || strings.Count(log.String(), `"msg":"claims paused","pool":"memory pressure some avg10=42.00%`) != 1 {
 		t.Fatalf("claimed under pressure: claims=%d log=%q", a.claims, log.String())
 	}
-	if text := exposition(m); !strings.Contains(text, "sandbox_claims_paused 1") || !strings.Contains(text, "sandbox_pool_memory_pressure_ratio 0.42") {
+	if text := exposition(m); !strings.Contains(text, `sandbox_claims_paused{reason="pressure"} 1`) || !strings.Contains(text, "sandbox_pool_memory_pressure_ratio 0.42") {
 		t.Fatalf("pause not exported:\n%s", text)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "memory.pressure"), []byte("some avg10=1.00 avg60=0 avg300=0 total=0\n"), 0o644); err != nil {
@@ -202,7 +202,7 @@ func TestAutoAdmissionPacesStartsAtWarmupInterval(t *testing.T) {
 		if len(f.active) > before {
 			starts = append(starts, now.Sub(start))
 		}
-		if strings.Contains(exposition(m), "\nsandbox_claims_paused 1") {
+		if strings.Contains(exposition(m), "\nsandbox_claims_paused{") {
 			t.Fatalf("warmup exported as a pause at %s", now.Sub(start))
 		}
 	}

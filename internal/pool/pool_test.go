@@ -70,7 +70,7 @@ func TestAdmitOnPressureAndWorkingSet(t *testing.T) {
 		"cache at memory.high reclaims": {"23.51", 8 << 30, 7 << 30, false},
 	} {
 		ok, status, err := slice(t, test.pressure, test.current, test.cache).Admit()
-		if err != nil || ok != test.admit {
+		if err != nil || ok != test.admit || (status.Refusal() == "") != test.admit {
 			t.Errorf("%s: admit=%t %v %v", name, ok, status, err)
 		}
 	}

@@ -70,6 +70,27 @@ type Status struct {
 	Pressured, Saturated bool
 }
 
+// Refusal reasons are the bounded causes of a refused admission, for metrics.
+const (
+	RefusalPressure   = "pressure"
+	RefusalWorkingSet = "working_set"
+	RefusalUnreadable = "unreadable"
+	RefusalDisk       = "disk"
+	RefusalWarmup     = "warmup"
+	RefusalHeadroom   = "headroom"
+)
+
+// Refusal is the reason s refuses admission, else "".
+func (s Status) Refusal() string {
+	switch {
+	case s.Pressured:
+		return RefusalPressure
+	case s.Saturated:
+		return RefusalWorkingSet
+	}
+	return ""
+}
+
 func (s Status) String() string {
 	return fmt.Sprintf("memory pressure some avg10=%.2f%%, working set %s of memory.high %s", s.SomeAvg10, Size(s.WorkingSet), Size(s.High))
 }

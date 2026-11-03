@@ -35,7 +35,7 @@ func TestExportedContract(t *testing.T) {
 	m.Client("multica", "QUERY", "/api/daemon/heartbeat", 0, "request-timeout", time.Second)
 	m.Retry("multica", http.MethodPost, "/api/daemon/tasks/{id}/complete")
 	m.Pool(PoolReading{Pressure: 0.42, Usage: 3 << 30, Limit: 4 << 30})
-	m.Paused(true)
+	m.Paused(true, "pressure")
 	m.Draining(true)
 	m.Workspaces(2)
 
@@ -51,9 +51,10 @@ func TestExportedContract(t *testing.T) {
 		"sandbox_pool_memory_pressure_ratio":       {{}},
 		"sandbox_pool_memory_usage_bytes":          {{}},
 		"sandbox_pool_memory_limit_bytes":          {{}},
-		"sandbox_claims_paused":                    {{}},
+		"sandbox_claims_paused":                    {{"reason"}},
 		"sandbox_claims_draining":                  {{}},
 		"sandbox_workspaces_ready":                 {{}},
+		"sandbox_build_info":                       {{"revision"}},
 	}
 	for name, labelSets := range want {
 		family, ok := families[name]
@@ -81,8 +82,11 @@ func TestExportedContract(t *testing.T) {
 			t.Errorf("%s: label sets %v, want %v", name, got, labelSets)
 		}
 	}
+	if _, ok := families["go_goroutines"]; !ok {
+		t.Error("missing Go runtime collector")
+	}
 	for name := range families {
-		if _, ok := want[name]; !ok {
+		if _, ok := want[name]; !ok && !strings.HasPrefix(name, "go_") && !strings.HasPrefix(name, "process_") {
 			t.Errorf("unexpected family %s", name)
 		}
 	}
@@ -97,7 +101,8 @@ func TestExportedContract(t *testing.T) {
 		`sandbox_attempt_duration_seconds_bucket{kind="chat",reason="inference",status="failed",status_code="429",le="1"} 1`,
 		`http_client_request_duration_seconds_count{error_type="request-timeout",method="other",path="/api/daemon/heartbeat",target_service_name="multica"} 1`,
 		`sandbox_pool_memory_pressure_ratio 0.42`,
-		`sandbox_claims_paused 1`,
+		`sandbox_claims_paused{reason="pressure"} 1`,
+		`sandbox_build_info{revision="unknown"} 1`,
 	} {
 		if !strings.Contains(text, line) {
 			t.Errorf("exposition lacks %s", line)
@@ -133,7 +138,7 @@ func TestNilRecordsNothing(t *testing.T) {
 	m.Client("multica", http.MethodGet, "/", 200, "", time.Second)
 	m.Retry("multica", http.MethodGet, "/")
 	m.Pool(PoolReading{})
-	m.Paused(true)
+	m.Paused(true, "pressure")
 	m.Draining(true)
 	m.Workspaces(1)
 }
@@ -149,7 +154,7 @@ func TestServeExposesOnlyThePath(t *testing.T) {
 	if err = m.Serve(t.Context(), addr); err != nil {
 		t.Fatal(err)
 	}
-	for path, status := range map[string]int{Path: http.StatusOK, ReadyPath: http.StatusServiceUnavailable, "/metrics": http.StatusNotFound, "/": http.StatusNotFound} {
+	for path, status := range map[string]int{Path: http.StatusOK, ReadyPath: http.StatusServiceUnavailable, "/metrics-text": http.StatusNotFound, "/": http.StatusNotFound} {
 		if got := get(t, "http://"+addr+path); got != status {
 			t.Errorf("%s: %d, want %d", path, got, status)
 		}

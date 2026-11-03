@@ -82,14 +82,16 @@ func (a *AutoAdmission) floor(high int64) int64 {
 // Started records one newly claimed attempt. Only one can pass each warmup window.
 func (a *AutoAdmission) Started(now time.Time) { a.lastStart = now }
 
-func (a *AutoAdmission) Admit(active int, now time.Time) (bool, string) {
+// Admit reports whether a new attempt may start, the bounded refusal reason (empty when
+// admitted) and a detail for logs.
+func (a *AutoAdmission) Admit(active int, now time.Time) (bool, string, string) {
 	read := a.ReadDisk
 	if read == nil {
 		read = ReadDisk
 	}
 	d, err := read(a.DiskPath)
 	if err != nil || d.Total == 0 {
-		return false, "host Docker filesystem unreadable"
+		return false, RefusalUnreadable, "host Docker filesystem unreadable"
 	}
 	low, high := max(uint64(2<<30), d.Total/10), max(uint64(3<<30), d.Total*15/100)
 	lowInodes := d.Files > 0 && d.FilesFree < d.Files/20
@@ -101,24 +103,24 @@ func (a *AutoAdmission) Admit(active int, now time.Time) (bool, string) {
 		a.diskPaused = false
 	}
 	if a.diskPaused {
-		return false, fmt.Sprintf("host Docker filesystem low: free=%d bytes, free_inodes=%d", d.Available, d.FilesFree)
+		return false, RefusalDisk, fmt.Sprintf("host Docker filesystem low: free=%d bytes, free_inodes=%d", d.Available, d.FilesFree)
 	}
 	if active == 0 {
-		return true, "auto admission: first attempt"
+		return true, "", "auto admission: first attempt"
 	}
 	if now.Sub(a.lastStart) < ColdStartInterval {
-		return false, Warmup
+		return false, RefusalWarmup, Warmup
 	}
 	_, s, err := a.Pool.Admit()
 	if err != nil {
-		return false, "auto admission: pool unreadable"
+		return false, RefusalUnreadable, "auto admission: pool unreadable"
 	}
 	// Begin at the cold floor, then use the decaying observed peak, with 25% extra.
 	// This prevents empty cgroups admitting a cold burst.
 	estimate := max(a.floor(s.High), a.observed(now))
 	estimate = int64(math.Ceil(float64(estimate) * 1.25))
 	if float64(s.High)*a.Pool.MaxWorkingSet-float64(s.WorkingSet) < float64(estimate) {
-		return false, fmt.Sprintf("auto admission: build headroom below estimate %s", Size(estimate))
+		return false, RefusalHeadroom, fmt.Sprintf("auto admission: build headroom below estimate %s", Size(estimate))
 	}
-	return true, "auto admission: warm pool with build headroom"
+	return true, "", "auto admission: warm pool with build headroom"
 }

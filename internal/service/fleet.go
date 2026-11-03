@@ -47,10 +47,12 @@ type fleet struct {
 	// attempt, also on shutdown.
 	done chan completion
 	// admit, when set, defers claims while the attempt pool is under memory pressure;
-	// paused records the state so changes are logged once, refused the last refusal.
-	admit         func() (bool, string)
+	// paused records the state so changes are logged once, refused the last refusal
+	// and reason its bounded cause.
+	admit         func() (bool, string, string)
 	paused        bool
 	refused       time.Time
+	reason        string
 	clock         func() time.Time
 	autoAdmission *pool.AutoAdmission
 	// wake carries daemon WebSocket hints and connection changes from listen; runtimes
@@ -89,7 +91,7 @@ func newFleetState(api fleetAPI, daemon, dir string, log *slog.Logger, known map
 		wake: make(chan wakeEvent, 64), runtimes: make(chan []string, 1)}
 }
 
-func serveFleet(ctx context.Context, c Config, dir string, api fleetAPI, p *controller.Probe, admit func() (bool, string)) error {
+func serveFleet(ctx context.Context, c Config, dir string, api fleetAPI, p *controller.Probe, admit func() (bool, string, string)) error {
 	known, err := readRegistry(dir)
 	if err != nil {
 		return err
@@ -253,14 +255,14 @@ func (f *fleet) admitted() bool {
 	if f.admit == nil {
 		return true
 	}
-	ok, status := f.admit()
+	ok, reason, status := f.admit()
 	now := f.clock()
 	if ok && f.autoAdmission != nil {
-		ok, status = f.autoAdmission.Admit(len(f.active), now)
+		ok, reason, status = f.autoAdmission.Admit(len(f.active), now)
 	}
 	// Warmup paces starts: it neither pauses claims nor restarts the cooldown.
-	if !ok && status != pool.Warmup {
-		f.refused = now
+	if !ok && reason != pool.RefusalWarmup {
+		f.refused, f.reason = now, reason
 	}
 	calm := now.Sub(f.refused) >= admissionCooldown
 	switch {
@@ -270,7 +272,7 @@ func (f *fleet) admitted() bool {
 		f.log.Warn("claims paused", "pool", status)
 	}
 	f.paused = !calm
-	f.metrics.Paused(f.paused)
+	f.metrics.Paused(f.paused, f.reason)
 	return ok && calm
 }
 

@@ -1,7 +1,8 @@
 // Package metrics exports controller quality metrics in the Prometheus text format
 // (ADR 0025). Names use OpenTelemetry notation; the exporter adds unit and _total
-// suffixes. Labels take only bounded values: never task, workspace, session or agent
-// IDs, credentials, prompts or agent output. A nil *Metrics records nothing.
+// suffixes. Go runtime and process collectors keep their Prometheus names. Labels take
+// only bounded values: never task, workspace, session or agent IDs, credentials,
+// prompts or agent output. A nil *Metrics records nothing.
 package metrics
 
 import (
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/otlptranslator"
 	"go.opentelemetry.io/otel/attribute"
@@ -26,11 +28,14 @@ import (
 )
 
 // Path is the scrape endpoint, served on its own listener.
-const Path = "/metrics-text"
+const Path = "/metrics"
 
 // ReadyPath answers 200 once the controller serves at least one workspace, else 503.
 // The host deploy gate polls it after a controller restart.
 const ReadyPath = "/readyz"
+
+// Revision is the controller source commit, set at build time with -ldflags -X.
+var Revision = "unknown"
 
 // CardinalityLimit caps series per instrument; excess combinations go to the
 // otel_metric_overflow series.
@@ -57,7 +62,8 @@ type Metrics struct {
 	active                          metric.Int64UpDownCounter
 	events, retries                 metric.Int64Counter
 	pool                            atomic.Pointer[PoolReading]
-	paused, draining, workspaces    atomic.Int64
+	paused                          atomic.Pointer[string]
+	draining, workspaces            atomic.Int64
 }
 
 // PoolReading is the attempt pool state of the last admission check.
@@ -69,6 +75,7 @@ type PoolReading struct {
 
 func New() (*Metrics, error) {
 	registry := prometheus.NewRegistry()
+	registry.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 	exporter, err := otelprom.New(otelprom.WithRegisterer(registry), otelprom.WithoutScopeInfo(), otelprom.WithoutTargetInfo(),
 		otelprom.WithTranslationStrategy(otlptranslator.UnderscoreEscapingWithSuffixes))
 	if err != nil {
@@ -105,9 +112,13 @@ func New() (*Metrics, error) {
 	poolGauge("sandbox.pool.memory.pressure", "1", "Attempt pool PSI some avg10.", func(r PoolReading) float64 { return r.Pressure })
 	poolGauge("sandbox.pool.memory.usage", "By", "Attempt pool working set.", func(r PoolReading) float64 { return float64(r.Usage) })
 	poolGauge("sandbox.pool.memory.limit", "By", "Attempt pool memory.high.", func(r PoolReading) float64 { return float64(r.Limit) })
-	_, err = meter.Int64ObservableGauge("sandbox.claims.paused", metric.WithDescription("1 while claims wait for the attempt pool."),
+	_, err = meter.Int64ObservableGauge("sandbox.claims.paused", metric.WithDescription("1 while claims wait for the attempt pool, by the last refusal reason."),
 		metric.WithInt64Callback(func(_ context.Context, o metric.Int64Observer) error {
-			o.Observe(m.paused.Load())
+			if reason := m.paused.Load(); reason != nil {
+				o.Observe(1, metric.WithAttributes(attribute.String("reason", *reason)))
+			} else {
+				o.Observe(0)
+			}
 			return nil
 		}))
 	errs = append(errs, err)
@@ -120,6 +131,12 @@ func New() (*Metrics, error) {
 	_, err = meter.Int64ObservableGauge("sandbox.workspaces.ready", metric.WithUnit("{workspace}"), metric.WithDescription("Registered and recovered workspaces."),
 		metric.WithInt64Callback(func(_ context.Context, o metric.Int64Observer) error {
 			o.Observe(m.workspaces.Load())
+			return nil
+		}))
+	errs = append(errs, err)
+	_, err = meter.Int64ObservableGauge("sandbox.build.info", metric.WithDescription("Always 1; the controller source revision."),
+		metric.WithInt64Callback(func(_ context.Context, o metric.Int64Observer) error {
+			o.Observe(1, metric.WithAttributes(attribute.String("revision", Revision)))
 			return nil
 		}))
 	errs = append(errs, err)
@@ -228,15 +245,17 @@ func (m *Metrics) Pool(r PoolReading) {
 	m.pool.Store(&r)
 }
 
-func (m *Metrics) Paused(paused bool) {
+// Paused records whether claims wait for the attempt pool; reason is the bounded
+// refusal reason (pool.Refusal*) and is ignored when not paused.
+func (m *Metrics) Paused(paused bool, reason string) {
 	if m == nil {
 		return
 	}
-	var v int64
-	if paused {
-		v = 1
+	if !paused {
+		m.paused.Store(nil)
+		return
 	}
-	m.paused.Store(v)
+	m.paused.Store(&reason)
 }
 
 func (m *Metrics) Draining(draining bool) {

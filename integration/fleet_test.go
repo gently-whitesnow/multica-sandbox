@@ -140,7 +140,7 @@ func fleetMetrics(t *testing.T, addr, task string) {
 	var text string
 	// Attempts end after cleanup, which can follow the task's completed status.
 	eventually(t, "completed attempt exported and no attempt active", func() bool {
-		resp, err := http.Get("http://" + addr + "/metrics-text")
+		resp, err := http.Get("http://" + addr + "/metrics")
 		if err != nil {
 			return false
 		}

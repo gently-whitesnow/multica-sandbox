@@ -99,7 +99,7 @@ func TestBusyWorkspaceSharesAdmissionFairly(t *testing.T) {
 	a := &fleetFake{}
 	f := newFleet(t, a)
 	f.ready = map[string]string{"a": "a", "b": "b", "c": "c"}
-	f.admit = func() (bool, string) { return len(f.active) < 3, "test pool" }
+	f.admit = func() (bool, string, string) { return len(f.active) < 3, "pressure", "test pool" }
 	execute, started, release := track()
 	defer close(release)
 	if err := f.claim(context.Background(), execute); err != nil {
@@ -121,7 +121,7 @@ func TestClaimsUntilAdmissionOrMulticaStops(t *testing.T) {
 	now := time.Now()
 	f.clock = func() time.Time { return now }
 	admitted := 80
-	f.admit = func() (bool, string) { return len(f.active) < admitted, "test pool" }
+	f.admit = func() (bool, string, string) { return len(f.active) < admitted, "pressure", "test pool" }
 	execute, _, release := track()
 	defer close(release)
 	if err := f.claim(context.Background(), execute); err != nil {
@@ -184,7 +184,7 @@ func TestRefusedRoundKeepsFairness(t *testing.T) {
 	f.ready = map[string]string{"a": "a", "b": "b", "c": "c"}
 	now := time.Now()
 	f.clock = func() time.Time { return now }
-	f.admit = func() (bool, string) { return len(f.active) == 0, "test pool" }
+	f.admit = func() (bool, string, string) { return len(f.active) == 0, "pressure", "test pool" }
 	seen := map[string]bool{}
 	execute := func(context.Context, multica.Task) error { return nil }
 	for range 3 {

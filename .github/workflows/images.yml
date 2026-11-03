@@ -61,7 +61,9 @@ jobs:
           file: ${{ matrix.file }}
           target: ${{ matrix.target }}
           build-contexts: ${{ steps.upstream.outputs.contexts }}
-          build-args: ${{ steps.upstream.outputs.args }}
+          build-args: |
+            ${{ steps.upstream.outputs.args }}
+            SANDBOX_REVISION=${{ github.sha }}
           platforms: ${{ inputs.platform }}
           push: true
           provenance: false

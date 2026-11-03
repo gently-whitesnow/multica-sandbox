@@ -19,16 +19,16 @@ func autoPool(t *testing.T) *AutoAdmission {
 func TestAutoAdmissionPacesColdStartsAndPreservesHeadroom(t *testing.T) {
 	a := autoPool(t)
 	now := time.Now()
-	if ok, _ := a.Admit(0, now); !ok {
+	if ok, _, _ := a.Admit(0, now); !ok {
 		t.Fatal("first attempt blocked")
 	}
 	a.Started(now)
 	for _, elapsed := range []time.Duration{0, time.Second, ColdStartInterval - time.Nanosecond} {
-		if ok, _ := a.Admit(1, now.Add(elapsed)); ok {
+		if ok, _, _ := a.Admit(1, now.Add(elapsed)); ok {
 			t.Fatal("cold burst admitted", elapsed)
 		}
 	}
-	if ok, reason := a.Admit(1, now.Add(ColdStartInterval)); !ok {
+	if ok, _, reason := a.Admit(1, now.Add(ColdStartInterval)); !ok {
 		t.Fatal(reason)
 	}
 	// A compiler grows late, after warmup. Its observed working set raises the
@@ -36,18 +36,18 @@ func TestAutoAdmissionPacesColdStartsAndPreservesHeadroom(t *testing.T) {
 	late := now.Add(2 * ColdStartInterval)
 	host(t, a.Pool.Dir, mem{}, mem{anon: 5 << 30})
 	a.Observe(1, late)
-	if ok, _ := a.Admit(1, late); ok {
+	if ok, _, _ := a.Admit(1, late); ok {
 		t.Fatal("new build without headroom admitted")
 	}
 	host(t, a.Pool.Dir, mem{}, mem{anon: 1 << 30})
 	a.Observe(1, late)
-	if ok, _ := a.Admit(1, late); ok {
+	if ok, _, _ := a.Admit(1, late); ok {
 		t.Fatal("observed peak lost when current usage dropped")
 	}
-	if ok, _ := a.Admit(0, late); !ok {
+	if ok, _, _ := a.Admit(0, late); !ok {
 		t.Fatal("history deadlocked an empty pool")
 	}
-	if ok, reason := a.Admit(1, late.Add(EstimateHalfLife)); !ok {
+	if ok, _, reason := a.Admit(1, late.Add(EstimateHalfLife)); !ok {
 		t.Fatal("finished heavy build still limits starts:", reason)
 	}
 }
@@ -100,7 +100,7 @@ func TestAutoAdmissionFloorFollowsAttemptCeiling(t *testing.T) {
 		if got := a.floor(c.high); got != c.floor {
 			t.Fatalf("%s: floor %s, want %s", c.name, Size(got), Size(c.floor))
 		}
-		if ok, reason := a.Admit(1, time.Now().Add(ColdStartInterval)); ok != c.admitted {
+		if ok, _, reason := a.Admit(1, time.Now().Add(ColdStartInterval)); ok != c.admitted {
 			t.Fatalf("%s: admitted %v: %s", c.name, ok, reason)
 		}
 	}
@@ -111,32 +111,32 @@ func TestAutoAdmissionDiskHysteresisAndReadErrors(t *testing.T) {
 	d := Disk{Total: 100 << 30, Available: 9 << 30, Files: 1000, FilesFree: 900}
 	a.ReadDisk = func(string) (Disk, error) { return d, nil }
 	now := time.Now()
-	if ok, _ := a.Admit(0, now); ok {
-		t.Fatal("low disk admitted")
+	if ok, refusal, _ := a.Admit(0, now); ok || refusal != RefusalDisk {
+		t.Fatalf("low disk admitted %v: %q", ok, refusal)
 	}
 	d.Available = 12 << 30
-	if ok, _ := a.Admit(0, now); ok {
+	if ok, _, _ := a.Admit(0, now); ok {
 		t.Fatal("disk gate flapped below recovery watermark")
 	}
 	d.Available = 16 << 30
-	if ok, reason := a.Admit(0, now); !ok {
+	if ok, _, reason := a.Admit(0, now); !ok {
 		t.Fatal(reason)
 	}
 	d.FilesFree = 40
-	if ok, _ := a.Admit(0, now); ok {
+	if ok, _, _ := a.Admit(0, now); ok {
 		t.Fatal("inode exhaustion admitted")
 	}
 	d.FilesFree = 70
-	if ok, _ := a.Admit(0, now); ok {
+	if ok, _, _ := a.Admit(0, now); ok {
 		t.Fatal("inode gate flapped")
 	}
 	d.FilesFree = 100
-	if ok, reason := a.Admit(0, now); !ok {
+	if ok, _, reason := a.Admit(0, now); !ok {
 		t.Fatal(reason)
 	}
 	a.ReadDisk = func(string) (Disk, error) { return Disk{}, errors.New("missing mount") }
-	if ok, _ := a.Admit(0, now); ok {
-		t.Fatal("missing disk mount admitted")
+	if ok, refusal, _ := a.Admit(0, now); ok || refusal != RefusalUnreadable {
+		t.Fatalf("missing disk mount admitted %v: %q", ok, refusal)
 	}
 }
 
@@ -200,17 +200,17 @@ var coding = mem{anon: 900 << 20, cache: 1200 << 20, inactive: 200 << 20, kernel
 func TestAutoAdmissionIgnoresReclaimablePageCache(t *testing.T) {
 	a := hostAdmission(t)
 	start := time.Now()
-	if ok, reason := a.Admit(0, start); !ok {
+	if ok, _, reason := a.Admit(0, start); !ok {
 		t.Fatal(reason)
 	}
 	a.Started(start)
 	host(t, a.Pool.Dir, idle, coding)
-	if ok, reason := a.Admit(1, start.Add(ColdStartInterval-time.Second)); ok || reason != Warmup {
+	if ok, refusal, reason := a.Admit(1, start.Add(ColdStartInterval-time.Second)); ok || refusal != RefusalWarmup || reason != Warmup {
 		t.Fatal("second attempt skipped warmup:", reason)
 	}
 	second := start.Add(ColdStartInterval)
 	a.Observe(1, second)
-	if ok, reason := a.Admit(1, second); !ok {
+	if ok, _, reason := a.Admit(1, second); !ok {
 		t.Fatal("second attempt refused with real headroom:", reason)
 	}
 	a.Started(second)
@@ -218,16 +218,16 @@ func TestAutoAdmissionIgnoresReclaimablePageCache(t *testing.T) {
 	host(t, a.Pool.Dir, mem{cache: 300 << 20, inactive: 200 << 20, kernel: 185 << 20}, coding, coding)
 	third := second.Add(ColdStartInterval)
 	a.Observe(2, third)
-	if ok, _ := a.Admit(2, third.Add(-time.Second)); ok {
+	if ok, _, _ := a.Admit(2, third.Add(-time.Second)); ok {
 		t.Fatal("third attempt skipped warmup")
 	}
-	if ok, reason := a.Admit(2, third); !ok {
+	if ok, _, reason := a.Admit(2, third); !ok {
 		t.Fatal("third attempt refused with real headroom:", reason)
 	}
 	a.ReadDisk = func(string) (Disk, error) {
 		return Disk{Total: 100 << 30, Available: 5 << 30, Files: 1000, FilesFree: 900}, nil
 	}
-	if ok, _ := a.Admit(2, third); ok {
+	if ok, _, _ := a.Admit(2, third); ok {
 		t.Fatal("low disk admitted")
 	}
 }
@@ -243,8 +243,8 @@ func TestAutoAdmissionRefusesUnreclaimableShortage(t *testing.T) {
 		host(t, a.Pool.Dir, mem{cache: 200 << 20, kernel: 150 << 20}, attempts...)
 		now := time.Now().Add(ColdStartInterval)
 		a.Observe(len(attempts), now)
-		if ok, reason := a.Admit(len(attempts), now); ok || !strings.Contains(reason, "build headroom below estimate") {
-			t.Errorf("%s: admitted %v: %s", name, ok, reason)
+		if ok, refusal, reason := a.Admit(len(attempts), now); ok || refusal != RefusalHeadroom || !strings.Contains(reason, "build headroom below estimate") {
+			t.Errorf("%s: admitted %v: %s %s", name, ok, refusal, reason)
 		}
 	}
 }

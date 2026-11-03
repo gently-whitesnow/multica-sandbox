@@ -141,17 +141,18 @@ func attemptCeiling(p *PoolConfig, attempts *pool.Pool) (int64, error) {
 }
 
 // admission defers claims while the pool is under memory pressure and records each
-// reading in m; without a pool every claim is admitted.
-func admission(p *pool.Pool, m *metrics.Metrics) func() (bool, string) {
+// reading in m; without a pool every claim is admitted. It returns the bounded refusal
+// reason (empty when admitted) and the pool status for logs.
+func admission(p *pool.Pool, m *metrics.Metrics) func() (bool, string, string) {
 	if p == nil {
 		return nil
 	}
-	return func() (bool, string) {
+	return func() (bool, string, string) {
 		ok, status, err := p.Admit()
 		if err != nil {
-			return false, "attempt pool unreadable: " + err.Error()
+			return false, pool.RefusalUnreadable, "attempt pool unreadable: " + err.Error()
 		}
 		m.Pool(metrics.PoolReading{Pressure: status.SomeAvg10 / 100, Usage: status.WorkingSet, Limit: status.High})
-		return ok, status.String()
+		return ok, status.Refusal(), status.String()
 	}
 }
