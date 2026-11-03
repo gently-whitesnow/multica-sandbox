@@ -22,8 +22,8 @@ The relay must do three things together:
    streams (SSE, streamed completions, MCP streamable HTTP), not only new requests.
 3. **A closed policy per upstream.** One fixed origin and credential per grant;
    Multica API path deny-list; inference on one route with attribution, reserved
-   `x-litellm-*` headers and withheld error bodies; Git smart HTTP only for the
-   claim's repositories; MCP only to the approved URL without caller queries.
+   `x-litellm-*` headers and withheld error bodies; Git smart HTTP only to the
+   workspace's bound hosts; MCP only to the approved URL without caller queries.
 
 Candidates as of 2026-10, judged from upstream documentation:
 
@@ -40,7 +40,7 @@ Candidates as of 2026-10, judged from upstream documentation:
 Keep `internal/relay` and its specializations. It is not a generic credential proxy:
 callers never select an upstream or credential, every grant names one
 controller-approved origin, there is no `CONNECT` or TLS passthrough, and the Git
-relay's HTTP proxy mode admits only the claim's repositories. It issues no OAuth
+relay's HTTP proxy mode admits only the workspace's bound hosts. It issues no OAuth
 tokens and implements no cryptographic primitives: opaque credentials, their SHA-256
 lookup keys and the forge relay's name-constrained CA use the Go standard library.
 

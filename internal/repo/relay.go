@@ -15,16 +15,18 @@ import (
 const (
 	// GitPrefix marks per-attempt Git relay credentials.
 	GitPrefix = "msg_"
+	// GitConfigPath is the global Git configuration under the attempt's XDG_CONFIG_HOME.
+	GitConfigPath = "/workspace/config/git/config"
 	// PushLimit bounds a pushed pack, as large forges do; PushTimeout bounds the
 	// upstream's pack processing before it answers.
 	PushLimit   = 2 << 30
 	PushTimeout = 5 * time.Minute
 )
 
-// Relay authorizes Git smart HTTP for the claim's repositories of each attempt. It is
+// Relay authorizes Git smart HTTP to the hosts each attempt's workspace binds. It is
 // the HTTP proxy of per-host http://<host>/ remote aliases, so remotes keep a forge
 // host gh resolves (ADR 0016). Fetch and push follow the native runtime: the
-// deployment credential's scope and forge branch protection bound refs.
+// deployment credential's scope and forge branch protection bound repositories and refs.
 type Relay struct {
 	URL    string
 	hosts  *Hosts
@@ -37,29 +39,27 @@ type Relay struct {
 
 type access struct {
 	workspace string
-	// repos are granted repository keys; rewrites are the remote prefixes the attempt
-	// environment maps to host aliases.
-	repos, rewrites map[string]bool
+	// rewrites are the remote prefixes the attempt environment maps to host aliases.
+	rewrites map[string]bool
 }
 
 func NewRelay(relayURL string, hosts *Hosts) *Relay {
 	return &Relay{URL: strings.TrimRight(relayURL, "/"), hosts: hosts, grants: relay.NewGrants(GitPrefix), access: map[string]access{}}
 }
 
-// Issue grants the attempt its claim repositories and returns the Git environment that
-// proxies every host the workspace binds through the relay, so workspace repositories
-// granted later by Allow need no new environment. origin keeps the real URL. With the
-// forge relay, the same credential is the gh token for the workspace's forge APIs.
+// Issue grants the attempt its workspace's hosts and returns the Git environment that
+// proxies each through the relay; claim URLs add their remote prefixes. origin keeps the
+// real URL. With the forge relay, the same credential is the gh token for the
+// workspace's forge APIs.
 func (g *Relay) Issue(attempt, workspace string, urls []string) (map[string]string, error) {
-	a := access{workspace: workspace, repos: map[string]bool{}, rewrites: map[string]bool{}}
+	a := access{workspace: workspace, rewrites: map[string]bool{}}
 	prefixes := map[string][]string{}
 	for _, raw := range urls {
-		host, key, prefix, ok := repoKey(raw)
+		host, _, prefix, ok := repoKey(raw)
 		if !ok || !g.hosts.Has(workspace, host) {
 			continue
 		}
 		prefixes[host] = append(prefixes[host], prefix)
-		a.repos[key] = true
 	}
 	opaque, err := g.grants.Bind(attempt)
 	if err != nil {
@@ -99,18 +99,17 @@ func rewrites(host string) []string {
 	return []string{"https://" + host + "/", "http://" + host + "/", "git@" + host + ":", "ssh://git@" + host + "/"}
 }
 
-// Allow grants a live attempt a workspace repository its claim did not list, as upstream
-// admits workspace repositories on checkout. It returns the host alias and, when the
-// attempt environment does not rewrite the URL's remote prefix, that prefix.
+// Allow admits a live attempt's checkout of a repository on a bound host. It returns the
+// host alias and, when the attempt environment does not rewrite the URL's remote
+// prefix, that prefix.
 func (g *Relay) Allow(attempt, raw string) (string, string, bool) {
-	host, key, prefix, valid := repoKey(raw)
+	host, _, prefix, valid := repoKey(raw)
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	a, granted := g.access[attempt]
 	if !valid || !granted || !g.hosts.Has(a.workspace, host) {
 		return "", "", false
 	}
-	a.repos[key] = true
 	if a.rewrites[prefix] {
 		prefix = ""
 	}
@@ -145,6 +144,15 @@ func (g *Relay) Revoke(attempt string) {
 	g.mu.Unlock()
 }
 
+// GitConfig is the attempt's global Git configuration, GitConfigPath: the workspace
+// commit identity stands in for the native host's global one, so clones made without
+// checkout commit too. Checkouts write their host's identity over it.
+func (g *Relay) GitConfig(workspace, agent string) []byte {
+	name, email := g.hosts.WorkspaceIdentity(workspace, agent)
+	quote := strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace
+	return []byte("[user]\n\tname = \"" + quote(name) + "\"\n\temail = \"" + quote(email) + "\"\n")
+}
+
 // CA is the forge relay certificate attempts trust, nil without the forge relay.
 func (g *Relay) CA() []byte { return g.ca }
 
@@ -161,11 +169,9 @@ func (g *Relay) Authorize(r *http.Request) (relay.Lease, bool) {
 		return lease, false
 	}
 	host := strings.ToLower(r.URL.Host)
-	repo, service := smartHTTP(r.URL.Path)
-	// Allow extends repos concurrently: read the set only under the lock.
+	_, service := smartHTTP(r.URL.Path)
 	g.mu.Lock()
 	a, granted := g.access[lease.Attempt]
-	granted = granted && a.repos[host+strings.TrimSuffix(repo, ".git")]
 	g.mu.Unlock()
 	if service == "info/refs" {
 		service = r.URL.Query().Get("service")

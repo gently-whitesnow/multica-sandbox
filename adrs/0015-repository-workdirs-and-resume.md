@@ -18,10 +18,9 @@ Our attempts are offline, with a 256 MB tmpfs workspace and a fresh session each
 time. ADR 0001 requires explicit, exclusive, retained state for resume. ADR 0003
 requires mediated external Git. The #48 spike (Docker Engine 29.2.1, OpenCode
 1.18.35) established these facts:
-- `OPENCODE_DB` moves only the session database out of `$XDG_DATA_HOME/opencode`,
-  which also holds `auth.json` and `mcp-auth.json`. A new container resumed a
-  session from a volume holding just the workdir and that database, and the
-  volume held no projected secrets.
+- `OPENCODE_DB` moves only the session database out of `$XDG_DATA_HOME/opencode`
+  (which also holds auth stores); a new container resumed a session from a volume
+  holding just the workdir and that database.
 - A Git smart HTTP reverse proxy can swap credentials, restrict repositories and
   check `git-receive-pack` refs before streaming the pack.
 - The unchanged upstream CLI reaches a controller endpoint through an
@@ -70,23 +69,22 @@ It then runs `git` through `docker exec` as uid 65532 with the image's `git`,
 reproducing upstream path, branch, base-ref, kept and `fresh` semantics and the
 `info/exclude` entries. Credentials never enter a context that executes
 agent-writable hooks or configuration. Repository tasks therefore require `git`
-in the agent image; official-base users add it with `FROM`.
+in the agent image.
 
 **Git relay.** A controller relay mediates Git smart HTTP with a per-attempt
 opaque credential. The attempt receives it only through `GIT_CONFIG_*`
 environment entries that route HTTPS and scp-style remotes to the relay (ADR 0016).
 
 `origin` keeps the real URL. The relay attaches controller-only, workspace-scoped
-credentials per Git host and serves only the attempt's granted repositories. Grants end at
+credentials per Git host and serves the attempt's workspace hosts. Grants end at
 cleanup and on controller restart. Credential issuance and rotation (GitHub App
 tokens) stay external, as files the controller rereads.
 
 Rejected alternatives:
 - Credentialed checkout in the controller or a sidecar: agent hooks and
   configuration would run with the credentials.
-- Persisting the whole OpenCode data directory: it holds auth stores.
-- Host bind mounts: the controller runs in a container.
-- A sidecar in the attempt's network namespace: lifecycle without isolation gain.
+- Persisting the OpenCode data directory (auth stores); host bind mounts (the
+  controller runs in a container); a sidecar in the attempt's network namespace.
 - SSH agent forwarding; hosting a Git service; pre-cloned mirrors (#5).
 
 Refinement (#50, 2026-10-08). The helper is a separate digest-pinned image (Dockerfile
@@ -99,14 +97,18 @@ Refinement (#52, 2026-10-08). Push follows the native runtime, not an
 name) and upstream's Co-authored-by hook, following the setting polled every 10 s (#61).
 
 Refinement (#55, 2026-10-08). Pull requests use the unchanged `gh`. Attempts
-resolve forge API names to loopback; the helper forwards 443 to a controller TLS relay. A per-process CA, name-constrained to those names and
-trusted via `SSL_CERT_DIR`, signs its certificates. The relay swaps the Git
-relay credential, sent as the `gh` token, for the workspace token.
+resolve forge API names to loopback, where the helper forwards 443 to a controller TLS
+relay with a name-constrained per-process CA. The relay swaps the Git relay credential,
+sent as the `gh` token, for the workspace token.
 
 Refinement (#81, 2026-10-30). Project resources follow upstream: Project Context
 and `.multica/project/resources.json`. As upstream `ensureRepoReady`, checkout outside
-the claim rereads workspace repositories and extends the grant; aliases cover all bound
-hosts. A `local_directory` pinned here rejects the claim.
+the claim rereads workspace repositories; aliases cover all bound hosts. A `local_directory` pinned here rejects the claim.
+
+Refinement (2026-11-03). As natively, the relay serves any bound-host repository the
+credential allows; per-repository grants bounded Git alone, not the forge API. Checkout
+keeps upstream's workspace check. The global Git config holds the hosts' agreed commit
+identity, else the agent default.
 
 ## Consequences
 
@@ -114,8 +116,8 @@ Agents work on repositories and continue sessions without credentials in the
 attempt. Retained volumes are part of the trust boundary. They are reused
 only for the same workspace, agent and issue, and must not be returned to any
 clean pool (ADR 0004). Each session pays for its first clone. The relay bounds
-pushes to granted repositories; deployment-owned credential scope and forge
-branch protection bound their refs.
+pushes to the workspace's hosts; deployment-owned credential scope and forge
+branch protection bound repositories and refs.
 
 Implementation follows #47. Kubernetes (#6) needs equivalent volumes and a
 loopback-capable helper.

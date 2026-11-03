@@ -289,6 +289,9 @@ func (r *running) initialize(ctx context.Context, brief, project []byte) error {
 	if brief != nil {
 		files[BriefPath] = brief
 	}
+	if r.adapter.GitRelay != nil {
+		files[repo.GitConfigPath] = r.adapter.GitRelay.GitConfig(r.task.WorkspaceID, r.task.Agent.Name)
+	}
 	// gh trusts the forge relay through SSL_CERT_DIR; the certificate is public.
 	if r.gitEnv["SSL_CERT_DIR"] != "" {
 		files[repo.CAPath] = r.adapter.GitRelay.CA()

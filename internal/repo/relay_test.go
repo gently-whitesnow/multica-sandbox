@@ -45,7 +45,7 @@ func gitServer(t *testing.T, root string, seen *[]string) *httptest.Server {
 	return server
 }
 
-func TestGitRelayServesOnlyClaimRepositories(t *testing.T) {
+func TestGitRelayServesBoundHostRepositories(t *testing.T) {
 	bare := origin(t)
 	root := filepath.Dir(bare)
 	git(t, root, "clone", "-q", "--bare", bare, filepath.Join(root, "other.git"))
@@ -113,7 +113,7 @@ func TestGitRelayServesOnlyClaimRepositories(t *testing.T) {
 	if alias, _ := run("-C", work, "remote", "get-url", "origin"); stored != "https://git.example.test/fixture.git" || alias != "http://git.example.test/fixture.git" {
 		t.Fatalf("remote URLs: %q %q", stored, alias)
 	}
-	// Pushes follow the native runtime: any branch of a claim repository, nothing else.
+	// Pushes follow the native runtime: any branch of any repository on a bound host.
 	if err := attempt("-C", work, "commit", "-q", "--allow-empty", "-m", "agent"); err != nil {
 		t.Fatal(err)
 	}
@@ -123,17 +123,20 @@ func TestGitRelayServesOnlyClaimRepositories(t *testing.T) {
 	if git(t, bare, "rev-parse", "agent/a/1") != git(t, work, "rev-parse", "HEAD") {
 		t.Fatal("pushed branch did not reach the upstream")
 	}
-	if attempt("-C", work, "push", "-q", "https://git.example.test/other.git", "HEAD:refs/heads/agent/a/1") == nil {
-		t.Fatal("unlisted repository accepted a push")
+	if err := attempt("-C", work, "push", "-q", "https://git.example.test/other.git", "HEAD:refs/heads/agent/a/1"); err != nil {
+		t.Fatal("unlisted repository push failed:", err)
 	}
-	for _, url := range []string{"https://git.example.test/other.git", "https://other.example.test/other.git"} {
-		if clone(url) == nil {
-			t.Fatalf("%s cloned without a grant", url)
-		}
+	if err := clone("git@git.example.test:other.git"); err != nil {
+		t.Fatal("unlisted repository clone failed:", err)
+	}
+	// The other workspace's host is not proxied, so the clone never reaches its upstream.
+	before := len(seen)
+	if clone("https://other.example.test/other.git") == nil || len(seen) != before {
+		t.Fatal("another workspace's host cloned through the relay")
 	}
 	for _, request := range seen {
-		if strings.Contains(request, "Bearer") || (strings.Contains(request, "other.git") && strings.Contains(request, "Basic")) {
-			t.Fatalf("unexpected upstream request: %s", request)
+		if strings.Contains(request, "Bearer") {
+			t.Fatalf("relay credential reached the upstream: %s", request)
 		}
 	}
 	fetch := "/fixture.git/info/refs?service=git-upload-pack"
@@ -142,7 +145,7 @@ func TestGitRelayServesOnlyClaimRepositories(t *testing.T) {
 		ok             bool
 	}{
 		"claim fetch":     {"GET", "http://git.example.test" + fetch, true},
-		"unlisted push":   {"POST", "http://git.example.test/other.git/git-receive-pack", false},
+		"unlisted fetch":  {"GET", "http://git.example.test/other.git/info/refs?service=git-upload-pack", true},
 		"push refs GET":   {"POST", "http://git.example.test/fixture.git/info/refs?service=git-receive-pack", false},
 		"dumb":            {"GET", "http://git.example.test/fixture.git/HEAD", false},
 		"extra query":     {"GET", "http://git.example.test" + fetch + "&x=1", false},
@@ -160,7 +163,7 @@ func TestGitRelayServesOnlyClaimRepositories(t *testing.T) {
 			t.Errorf("%s: %d", name, w.Code)
 		}
 	}
-	// A workspace repository joins the live grant on checkout; other hosts and attempts do not.
+	// Checkout of a bound host's repository returns its alias; other hosts and attempts do not.
 	if _, _, ok := g.Allow("other-attempt", "https://git.example.test/other.git"); ok {
 		t.Fatal("unknown attempt extended")
 	}
@@ -170,9 +173,6 @@ func TestGitRelayServesOnlyClaimRepositories(t *testing.T) {
 	if alias, prefix, ok := g.Allow("attempt", "git@git.example.test:other.git"); !ok || alias != "http://git.example.test/" || prefix != "" {
 		t.Fatalf("workspace repository grant: %q %q %v", alias, prefix, ok)
 	}
-	if err := clone("https://git.example.test/other.git"); err != nil {
-		t.Fatal("granted workspace repository clone failed:", err)
-	}
 	if _, prefix, _ := g.Allow("attempt", "ssh://ops@git.example.test:2200/other.git"); prefix != "ssh://ops@git.example.test:2200/" {
 		t.Fatalf("unrewritten prefix not returned: %q", prefix)
 	}
@@ -181,11 +181,11 @@ func TestGitRelayServesOnlyClaimRepositories(t *testing.T) {
 		t.Fatal("revoked grant still clones or pushes")
 	}
 	if _, _, ok := g.Allow("attempt", "https://git.example.test/other.git"); ok {
-		t.Fatal("revoked attempt extended")
+		t.Fatal("revoked attempt admitted")
 	}
 }
 
-// Checkout extends a grant while the attempt fetches; run under -race.
+// Checkout admits repositories while the attempt fetches; run under -race.
 func TestGitRelayAllowsDuringAuthorize(t *testing.T) {
 	hosts, err := NewHosts(Config{Version: 1, Hosts: []Host{{WorkspaceID: workspace, Host: "git.example.test"}}})
 	if err != nil {
@@ -210,7 +210,7 @@ func TestGitRelayAllowsDuringAuthorize(t *testing.T) {
 			r := httptest.NewRequest(http.MethodPost, "http://git.example.test/fixture.git/git-upload-pack", nil)
 			r.Header.Set("Authorization", env["GIT_CONFIG_VALUE_0"][len("Authorization: "):])
 			if lease, ok := g.Authorize(r); !ok {
-				t.Error("granted repository refused")
+				t.Error("bound host repository refused")
 			} else {
 				lease.Release()
 			}
@@ -282,6 +282,33 @@ func TestHostConfigRequiresSafeBindings(t *testing.T) {
 	for url, want := range map[string]string{"https://github.com/o/r.git": "Bot bot@example.invalid", "https://gitlab.com/o/r": "Agent x " + DefaultEmail} {
 		if name, email := hosts.Identity(workspace, url, "Agent <x>\n"); name+" "+email != want {
 			t.Errorf("%s: %s %s", url, name, email)
+		}
+	}
+	// The global identity is the one the workspace's hosts agree on, else the agent's.
+	quoted := bot
+	quoted.Host, quoted.CommitName = "gitlab.com", `Bot "q" \ x`
+	other := quoted
+	other.WorkspaceID = "10000000-0000-4000-8000-000000000002"
+	for name, c := range map[string]struct {
+		hosts []Host
+		want  string
+	}{
+		"agreed":    {[]Host{bot, func() Host { h := bot; h.Host = "gitlab.com"; return h }()}, "Bot bot@example.invalid"},
+		"differ":    {[]Host{bot, quoted}, "Agent x " + DefaultEmail},
+		"none":      {[]Host{valid}, "Agent x " + DefaultEmail},
+		"workspace": {[]Host{valid, other}, "Agent x " + DefaultEmail},
+		"quoted":    {[]Host{quoted}, `Bot "q" \ x bot@example.invalid`},
+	} {
+		hosts, err := NewHosts(Config{Version: 1, Hosts: c.hosts})
+		if err != nil {
+			t.Fatal(name, err)
+		}
+		file := filepath.Join(t.TempDir(), "config")
+		if err := os.WriteFile(file, NewRelay("http://relay.example.test", hosts).GitConfig(workspace, "Agent <x>\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if got := git(t, filepath.Dir(file), "config", "-f", file, "user.name") + " " + git(t, filepath.Dir(file), "config", "-f", file, "user.email"); got != c.want {
+			t.Errorf("%s: %s", name, got)
 		}
 	}
 }

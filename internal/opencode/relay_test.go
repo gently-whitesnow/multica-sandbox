@@ -124,6 +124,9 @@ func TestRepositoryAttemptGetsCheckoutAndGitRelay(t *testing.T) {
 	if env["MULTICA_DAEMON_PORT"] != repo.DaemonPort || env["GIT_CONFIG_KEY_1"] != "http.http://git.example.invalid/.proxy" || env["GIT_CONFIG_VALUE_1"] != "http://git-relay:8093" || !strings.HasPrefix(env["GIT_CONFIG_VALUE_0"], "Authorization: Bearer "+repo.GitPrefix) {
 		t.Fatalf("unexpected repository environment: %v", env)
 	}
+	if config := string(workload.files[repo.GitConfigPath]); !strings.Contains(config, "email = \""+repo.DefaultEmail+"\"") {
+		t.Fatalf("global Git identity: %q", config)
+	}
 	brief := string(workload.files[BriefPath])
 	if !strings.Contains(brief, "- `multica repo checkout <url>") || !strings.Contains(brief, "- https://git.example.invalid/team/fixture.git — Fixture (starts from `release`)") || strings.Contains(brief, "no local checkout") {
 		t.Fatalf("checkout brief missing: %s", brief)
