@@ -25,9 +25,9 @@ fixed provider key and, as the adapter did before ADR 0023, a remote MCP in
 MCP fixture in `session/new` with a static header and allows its tools, as the
 adapter now does through its relay.
 
-## Results (2026-10-30, Docker Desktop arm64)
+## Results (2026-11-02, Docker Desktop arm64)
 
-| Check | 1.18.35 | 2.2.0, 2.2.2 |
+| Check | 1.18.35 | 2.2.0, 2.2.2, 2.2.5 |
 | --- | --- | --- |
 | `loadSession`, HTTP MCP advertised | yes | yes |
 | Tool `in_progress` with input before completion | yes, 6.04 s early | yes |

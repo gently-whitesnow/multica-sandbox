@@ -25,7 +25,11 @@ type serviceFixture struct {
 
 func (f serviceFixture) compose(args ...string) string {
 	f.t.Helper()
-	base := []string{"compose", "-p", f.project, "-f", "../compose.yaml", "-f", f.override}
+	base := []string{"compose", "-p", f.project, "-f", "../compose.yaml"}
+	if image := os.Getenv("MULTICA_TEST_CONTROLLER_COMPOSE"); image != "" {
+		base = append(base, "-f", image)
+	}
+	base = append(base, "-f", f.override)
 	return dockerTest(f.t, append(base, args...)...)
 }
 func dockerTest(t *testing.T, args ...string) string {

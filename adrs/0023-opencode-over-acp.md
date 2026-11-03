@@ -47,11 +47,11 @@ MCP tools the permissions deny, and registers session MCP tools shortly after
 
 ## Decision
 
-**Version.** The target is OpenCode 2.2.2, the newest release on 2026-10-30, pinned
-by its multi-platform index `sha256:7c8cd91b6055e39306fa9040b9abf4e7d2808b1fccfe2d0389e3f0cdc654a048`.
-GitHub still labels 1.19.5 "Latest"; the target follows the newest release, not the
-label. No floating tag is used. A release enters `images.txt`, and so `Supported`,
-only when the conformance suite passes on the ACP adapter; 2.2.2 did.
+**Version.** The target is OpenCode 2.2.5, verified on 2026-11-02 and pinned
+by its multi-platform index in `internal/opencode/images.txt`.
+No floating tag is used. A release enters that file, and so `Supported`,
+only when the conformance suite passes on the ACP adapter. Numeric compaction
+buffers retain the same `min(input, context) - buffer` ceiling in 2.2.5.
 `scripts/opencode-release.sh` resolves a new release's index digest, runs the spike
 and the MCP rotation conformance, and appends the release for review.
 
@@ -110,5 +110,5 @@ them on every candidate.
 - [Agent Client Protocol](https://agentclientprotocol.com)
 - [coder/acp-go-sdk](https://github.com/coder/acp-go-sdk)
 - [Upstream OpenCode ACP backend](https://github.com/multica-ai/multica/blob/main/server/pkg/agent/opencode_acp.go)
-- [OpenCode v2.2.2](https://github.com/anomalyco/opencode/releases/tag/v2.2.2)
+- [OpenCode v2.2.5](https://github.com/anomalyco/opencode/releases/tag/v2.2.5)
 - [Spike](../examples/acp-spike/README.md)

@@ -13,6 +13,7 @@ SERVER="$NAME-server"
 cleanup() {
  docker rm -fv "$SERVER" "$DB" >/dev/null 2>&1 || true
  docker network rm "$NAME" >/dev/null 2>&1 || true
+ for part in controller agent cli tool-jq helper; do docker image rm "$NAME-$part:local" >/dev/null 2>&1 || true; done
  rm -rf "$TMP"
 }
 trap cleanup EXIT
@@ -62,19 +63,26 @@ until curl -fsS "$MULTICA_TEST_URL/health" >/dev/null 2>&1; do
  if [ "$ATTEMPT" -ge 60 ]; then docker logs --tail 20 "$SERVER"; exit 1; fi
  sleep 1
 done
-if [ "${VERIFY_SERVICE:-0}" = 1 ]; then docker build -t multica-sandbox-controller:local .; fi
+if [ "${VERIFY_SERVICE:-0}" = 1 ]; then
+ docker build -t "$NAME-controller:local" .
+ CONTROLLER=$(docker image inspect "$NAME-controller:local" --format '{{index .RepoDigests 0}}')
+ test -n "$CONTROLLER"
+ MULTICA_TEST_CONTROLLER_COMPOSE="$TMP/controller-image.yaml"
+ printf 'services:\n  controller:\n    image: %s\n' "$CONTROLLER" > "$MULTICA_TEST_CONTROLLER_COMPOSE"
+ export MULTICA_TEST_CONTROLLER_COMPOSE
+fi
 if [ "${VERIFY_SERVICE:-0}" = 1 ] && [ "${VERIFY_OPENCODE:-0}" = 1 ]; then
  mkdir "$TMP/agent"
- docker build -q -t multica-sandbox-agent:local -f examples/agent-image/debian.Dockerfile "$TMP/agent" >/dev/null
- docker build -q -t multica-sandbox-cli:local -f deploy/multica-cli.Dockerfile --build-context multica="$UPSTREAM" "$TMP/agent" >/dev/null
- docker build -q -t multica-sandbox-tool-jq:local -f examples/tool-bundle/Dockerfile "$TMP/agent" >/dev/null
- docker build -q -t multica-sandbox-helper:local --target helper . >/dev/null
+ docker build -q -t "$NAME-agent:local" -f examples/agent-image/debian.Dockerfile "$TMP/agent" >/dev/null
+ docker build -q -t "$NAME-cli:local" -f deploy/multica-cli.Dockerfile --build-context multica="$UPSTREAM" "$TMP/agent" >/dev/null
+ docker build -q -t "$NAME-tool-jq:local" -f examples/tool-bundle/Dockerfile "$TMP/agent" >/dev/null
+ docker build -q -t "$NAME-helper:local" --target helper . >/dev/null
  for IMAGE in $(grep '^ghcr' internal/opencode/images.txt); do docker pull -q "$IMAGE" >/dev/null; done
  # Digest references need the containerd image store; the backend accepts only pinned images.
- MULTICA_TEST_AGENT_IMAGE=$(docker image inspect multica-sandbox-agent:local --format '{{index .RepoDigests 0}}')
- MULTICA_TEST_CLI_IMAGE=$(docker image inspect multica-sandbox-cli:local --format '{{index .RepoDigests 0}}')
- MULTICA_TEST_TOOL_IMAGE=$(docker image inspect multica-sandbox-tool-jq:local --format '{{index .RepoDigests 0}}')
- MULTICA_TEST_HELPER_IMAGE=$(docker image inspect multica-sandbox-helper:local --format '{{index .RepoDigests 0}}')
+ MULTICA_TEST_AGENT_IMAGE=$(docker image inspect "$NAME-agent:local" --format '{{index .RepoDigests 0}}')
+ MULTICA_TEST_CLI_IMAGE=$(docker image inspect "$NAME-cli:local" --format '{{index .RepoDigests 0}}')
+ MULTICA_TEST_TOOL_IMAGE=$(docker image inspect "$NAME-tool-jq:local" --format '{{index .RepoDigests 0}}')
+ MULTICA_TEST_HELPER_IMAGE=$(docker image inspect "$NAME-helper:local" --format '{{index .RepoDigests 0}}')
  export MULTICA_TEST_AGENT_IMAGE MULTICA_TEST_CLI_IMAGE MULTICA_TEST_TOOL_IMAGE MULTICA_TEST_HELPER_IMAGE
 fi
 MULTICA_TEST_SERVER_CONTAINER="$SERVER" MULTICA_TEST_DB_CONTAINER="$DB" go test -tags=upstream -run "${UPSTREAM_TEST_FILTER:-.}" -count=1 -v ./integration
