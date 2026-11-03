@@ -5,10 +5,10 @@
 FROM debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f AS base
 
 FROM base AS opencode-amd64
-ADD --checksum=sha256:3a38b8c284450a5ca81a2c1ebbf29ebe05e618518f095da0066652167eb0eb33 https://github.com/anomalyco/opencode/releases/download/v2.2.2/opencode-linux-x64.tar.gz /opencode.tar.gz
+ADD --checksum=sha256:09f44302c10fd036912f59c81fd1aef5df45dd06f649197f9dfc9bbe2a79614e https://github.com/anomalyco/opencode/releases/download/v2.2.5/opencode-linux-x64.tar.gz /opencode.tar.gz
 
 FROM base AS opencode-arm64
-ADD --checksum=sha256:dd866cebb72d11c91a7a7c4c3fd961ee06e03a9d0a5ff8eaa2a8ebebf25de7ba https://github.com/anomalyco/opencode/releases/download/v2.2.2/opencode-linux-arm64.tar.gz /opencode.tar.gz
+ADD --checksum=sha256:5a528f42caf576c6cdece6a191eb273d3db54effa5518e0402684d8f8026aeb6 https://github.com/anomalyco/opencode/releases/download/v2.2.5/opencode-linux-arm64.tar.gz /opencode.tar.gz
 
 FROM opencode-${TARGETARCH} AS opencode
 RUN tar -xzf /opencode.tar.gz -C /usr/local/bin opencode
