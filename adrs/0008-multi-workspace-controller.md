@@ -32,17 +32,16 @@ Public runtimes are optional sharing inside each workspace, never tenant isolati
 
 Start with a dedicated service user using the existing PAT path, membership-based
 workspace discovery. Discovery is always enabled, without workspace-mode selectors.
-One or many accessible workspaces use the same scheduler; concurrency controls
-capacity independently of membership count. Leave public visibility
+One or many accessible workspaces use the same scheduler; agent limits control
+concurrency independently of membership count. Leave public visibility
 under the runtime owner's manual control. Serving the whole server requires provisioning membership
 for existing and newly created workspaces. Membership is required for the service user;
 this is not a new upstream service-account credential type. A shared PAT broadens
 controller compromise impact. Evaluate workspace-scoped token sets when separate
 revocation or smaller authority is required, without adding controller processes.
 
-Use upstream batch claims and heartbeat mechanisms with bounded global capacity.
-Reserve capacity before claiming, and verify per-workspace fairness and limits;
-no second durable task queue. Target 100 registered workspaces, not 100 simultaneous
+Use upstream batch claims and heartbeats; Multica enforces agent limits at claim.
+Verify per-workspace fairness; no second durable task queue. Target 100 registered workspaces, not 100 simultaneous
 sandboxes. Measure idle API load, claim latency and revocation behavior before
 claiming that scale. One busy workspace must not starve the others.
 
@@ -89,7 +88,8 @@ busy workspace drains its queue without starving peers. The per-agent limit stay
 server-side. Membership loss cancels every attempt of that workspace. Each
 attempt network takes a subnet from Docker's address pools; when the daemon
 refuses one, only that task fails (`environment_prepare_failed`) and the
-controller keeps serving after removing the network best-effort.
+controller keeps serving after removing the network best-effort. ADR 0028 removed
+both controller limits.
 
 Attempts no longer heartbeat; the runtime's 15-second heartbeat (the upstream
 default) alone answers pending requests and logs failed answers. HTTP 403/404

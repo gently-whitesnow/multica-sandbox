@@ -65,8 +65,9 @@ func (c *Client) UseOutbox(dir string) error {
 }
 
 // Deliver sends a terminal callback. A persisted callback gets one online attempt and
-// otherwise returns ErrDeferred: replay retries it with backoff, so the attempt's slot
-// is not held through the retry schedule. Without the outbox it follows the upstream
+// otherwise returns ErrDeferred: replay retries it with backoff, so the attempt does not
+// wait through the retry schedule; Multica counts the task against its agent's
+// max_concurrent_tasks until delivery. Without the outbox it follows the upstream
 // retry schedule online.
 func (c *Client) Deliver(ctx context.Context, t Terminal) error {
 	if !validID(t.Task) {

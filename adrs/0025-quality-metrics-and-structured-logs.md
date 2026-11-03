@@ -37,7 +37,7 @@ without scope labels and `target_info`, with a limit of 2000 series per instrume
 | --- | --- | --- | --- |
 | `sandbox_attempt_duration_seconds` | histogram | `kind`, `status`, `reason`, `status_code` | Success and failure share and causes; attempt time from claim to report |
 | `sandbox_attempt_prepare_duration_seconds` | histogram | `kind`, `continuity` | Time from claim to agent start; how often sessions resume |
-| `sandbox_attempt_active` | gauge | — | Busy slots |
+| `sandbox_attempt_active` | gauge | — | Running attempts |
 | `sandbox_attempt_events_total` | counter | `event` | Attempts cancelled, gone or settled elsewhere; start and report problems |
 | `sandbox_relay_request_duration_seconds` | histogram | `relay`, `status_code` or `error_type` | Relay refusals and upstream answers, for example inference 403/422/429 |
 | `http_client_request_duration_seconds` | histogram | shared contract, `target_service_name="multica"` | Multica API errors and latency |

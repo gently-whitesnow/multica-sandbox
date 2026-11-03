@@ -534,7 +534,7 @@ func createNetwork(ctx context.Context, owner, name string) error {
 	_ = removeNetwork(ctx, name, nil)
 	switch {
 	case strings.Contains(stderr.String(), "address pools have been fully subnetted"):
-		return &execution.RejectedError{Err: errors.New("Docker address pools are exhausted: raise default-address-pools or lower concurrency")}
+		return &execution.RejectedError{Err: errors.New("Docker address pools are exhausted: raise default-address-pools or lower agent max_concurrent_tasks")}
 	}
 	return &execution.RejectedError{Err: errors.New("Docker refused the attempt network")}
 }

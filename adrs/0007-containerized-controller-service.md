@@ -18,12 +18,11 @@ controller per daemon identity and Docker engine. Docker restart policy manages
 the controller; workload containers retain restart=no and never serve two attempts.
 
 The service discovers accessible workspaces and processes attempts through one
-shared scheduler. Global concurrency limits capacity; one accessible workspace
-uses the same execution path as many. A slot becomes available only after
-confirmed cleanup and a terminal callback that Multica acknowledged or that is
-durably queued in the state volume. A queued callback gets one online attempt;
-replay then retries it with doubling backoff from 5 s, so the slot is not held
-through the retry schedule. Queued callbacks hold no credentials and are replayed
+shared scheduler. Multica agent limits bound concurrency; one accessible workspace
+uses the same execution path as many. An attempt ends only after confirmed cleanup
+and a terminal callback that Multica acknowledged or that is durably queued in the
+state volume. A queued callback gets one online attempt; replay then retries it with
+doubling backoff from 5 s, so the attempt does not wait through the retry schedule. Queued callbacks hold no credentials and are replayed
 before workspace recovery on start, so recovery does not rerun finished work. Like the upstream daemon, transient Multica errors are retried
 or deferred; protocol violations and cleanup uncertainty exit. A normal termination signal stops active execution before exit;
 Multica reconciles the interrupted task on the next service start.

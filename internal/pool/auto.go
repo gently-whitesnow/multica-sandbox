@@ -50,17 +50,15 @@ type AutoAdmission struct {
 	diskPaused        bool
 }
 
-// Observe samples even while all slots are occupied, so busy periods contribute
-// to the estimate. Aggregate working set per active attempt is an estimate, not
-// a promise about the next build. Pool MemoryMax remains the final memory bound.
+// Observe samples on every claim poll, also while admission refuses, so busy periods
+// contribute to the estimate. The largest attempt cgroup's working set is an estimate,
+// not a promise about the next build. Pool MemoryMax remains the final memory bound.
 func (a *AutoAdmission) Observe(active int, now time.Time) {
 	if active == 0 {
 		return
 	}
-	if _, s, err := a.Pool.Admit(); err == nil {
-		if sample := s.WorkingSet / int64(active); sample >= a.observed(now) {
-			a.peak, a.peakAt = sample, now
-		}
+	if sample, err := a.Pool.largestAttempt(); err == nil && sample >= a.observed(now) {
+		a.peak, a.peakAt = sample, now
 	}
 }
 

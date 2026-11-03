@@ -19,8 +19,8 @@ outside the attempt pool. Logical agent roles own no memory reservation.
 
 The explicit `resources.cpu_mode: shared` removes per-attempt CPU quotas; omitting
 it preserves the fixed legacy default. `resources.cpus` conflicts with shared mode.
-The deployment derives a global concurrency ceiling from host CPUs, capped by the
-controller's supported maximum. This ceiling is not a promise of parallel builds.
+Concurrency is set in one place, each Multica agent's `max_concurrent_tasks`; the
+controller has no concurrency setting (see the ECO-149 refinement).
 
 `pool.auto_admission: true` requires `pool.disk_path`, a read-only mount of the host
 filesystem backing Docker and attempt workdirs. It adds to existing PSI admission:
@@ -33,7 +33,7 @@ filesystem backing Docker and attempt workdirs. It adds to existing PSI admissio
   observed working set per active attempt, halved every 10 minutes after it was last
   seen, and at least a cold floor. The floor is `pool.attempt_memory_max` (else the
   legacy 4 GiB attempt limit), at most a quarter of MemoryHigh and at least 512 MiB,
-  so it does not grow with the host. Samples continue when all slots are occupied.
+  so it does not grow with the host. Samples continue while admission refuses.
   Estimates reset on restart; cold-start pacing applies again. There is no learned
   cross-host model.
 - Claims pause below 10% free space (at least 2 GiB) or 5% free inodes. They resume
@@ -47,7 +47,8 @@ existing no-sessions path; deployments that retain sessions keep the existing GC
 ## Alternatives
 
 Fixed per-role budgets preserve unnecessary coupling between identity and capacity.
-An unbounded concurrency setting plus PSI still admits a cold burst. A second task
+A controller concurrency ceiling duplicates the agent limits and drifts from them;
+PSI alone still admits a cold burst. A second task
 scheduler duplicates Multica authority. Global Docker prune may delete unrelated
 workloads and cannot provide an execution disk quota.
 
@@ -63,3 +64,43 @@ requires rerunning host sizing. Multi-host scheduling remains outside this chang
 Tests cover cold bursts, warmup, decaying observed headroom, the ceiling-based floor, disk and inode hysteresis,
 unreadable mounts, conflicting CPU modes and unchanged legacy defaults. Host
 sizing and real compiler/nested-engine pressure require deployment acceptance.
+
+Refinement (ECO-149, 2026-11-02). On vps-worker attempts ran one at a time at
+`concurrency: 3`. The working set was `memory.current` without inactive file cache,
+and the estimate divided it by the active attempts. Page cache stays charged to the
+slice after attempts and their nested engines exit: with no attempt running the slice
+held 2.5 GiB of file cache, 0.7 GiB of it active, and no anon or shmem. With one
+attempt that cache entered both occupancy and the per-attempt estimate, so every
+second start was refused as `build headroom below estimate`, followed by the calm
+cooldown.
+
+- The working set, for admission, the estimate, `max_working_set` and the pool usage
+  metric, is the memory the kernel cannot reclaim without swapping or killing:
+  `memory.current` minus file cache other than shmem and minus reclaimable slab, that
+  is anon, shmem (tmpfs, `/dev/shm`) and other kernel memory (stacks, page tables,
+  sockets, unreclaimable slab). The subtraction keeps a `memory.stat` key that is
+  missing counted as used.
+- The estimate samples the largest attempt cgroup in the slice (`docker-<id>.scope`
+  or `<id>`), not the slice divided by active attempts. A heavy build is not averaged
+  with light ones, a claimed attempt whose container does not exist yet does not
+  dilute the sample, and memory left in the slice counts in occupancy only.
+
+PSI stays the guard for cache: when admitted work makes the kernel reclaim hot cache
+at MemoryHigh, refaults and stalls raise `memory.pressure` and pause claims. Warmup,
+the floor, the 25% margin, disk watermarks and MemoryHigh/MemoryMax are unchanged.
+Counting active file cache would again refuse starts on reclaimable memory; anon
+alone would miss tmpfs and kernel memory. Tests replay the vps-worker slice: the
+second and third attempts start after warmup, large anon, shmem or kernel memory
+still refuses, and PSI pauses claims. Throughput on the host requires deployment
+acceptance.
+
+Only each Multica agent's `max_concurrent_tasks` limits concurrency (owner decision,
+2026-11-02). Multica v0.7.2 enforces it atomically at claim: the transaction locks the
+agent row and claims nothing once its running tasks reach the limit. A controller
+ceiling was a second limit to keep consistent with the agents. `concurrency` and
+`workspace_concurrency` are removed and rejected in config, so vps-worker stops
+rendering them before this controller is deployed. The claim loop keeps one task per
+workspace per round and stops on drain, an admission refusal or when Multica returns
+no task. The peak is the sum of the agent limits served; each attempt needs one Docker
+address pool subnet. A deferred terminal report keeps its task counted until replay.
+Tests cover claims past 64, refusal, drain, shutdown and the rejected keys.

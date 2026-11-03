@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/gently-whitesnow/multica-sandbox/internal/attempt"
@@ -16,17 +17,15 @@ import (
 )
 
 type Config struct {
-	OpenCode             *OpenCodeConfig `json:"opencode,omitempty"`
-	Server               string          `json:"server"`
-	AllowHTTP            bool            `json:"allow_http,omitempty"`
-	Concurrency          int             `json:"concurrency,omitempty"`
-	WorkspaceConcurrency int             `json:"workspace_concurrency,omitempty"`
-	Daemon               string          `json:"daemon"`
-	Image                string          `json:"image"`
-	Tools                []Tool          `json:"tools,omitempty"`
-	Command              []string        `json:"command"`
-	Timeout              string          `json:"timeout"`
-	Debug                bool            `json:"debug,omitempty"`
+	OpenCode  *OpenCodeConfig `json:"opencode,omitempty"`
+	Server    string          `json:"server"`
+	AllowHTTP bool            `json:"allow_http,omitempty"`
+	Daemon    string          `json:"daemon"`
+	Image     string          `json:"image"`
+	Tools     []Tool          `json:"tools,omitempty"`
+	Command   []string        `json:"command"`
+	Timeout   string          `json:"timeout"`
+	Debug     bool            `json:"debug,omitempty"`
 	// MetricsListen, when set, serves metrics.Path on this host:port (ADR 0025).
 	MetricsListen string      `json:"metrics_listen,omitempty"`
 	Drain         <-chan bool `json:"-"`
@@ -75,6 +74,9 @@ func ReadConfig(path string) (Config, error) {
 	dec := json.NewDecoder(io.LimitReader(f, 65537))
 	dec.DisallowUnknownFields()
 	if err = dec.Decode(&c); err != nil {
+		if field, ok := strings.CutPrefix(err.Error(), "json: unknown field "); ok && (field == `"concurrency"` || field == `"workspace_concurrency"`) {
+			return c, fmt.Errorf("controller %s was removed: set max_concurrent_tasks on Multica agents", field)
+		}
 		return c, fmt.Errorf("invalid controller configuration")
 	}
 	var extra any
@@ -82,8 +84,8 @@ func ReadConfig(path string) (Config, error) {
 		return c, fmt.Errorf("unexpected trailing configuration")
 	}
 	duration, err := time.ParseDuration(c.Timeout)
-	if err != nil || duration <= 0 || !uuid.MatchString(c.Daemon) || c.Concurrency < 0 || c.Concurrency > MaxConcurrency || c.WorkspaceConcurrency < 0 || c.WorkspaceConcurrency > MaxConcurrency || c.Image == "" || (len(c.Command) == 0 && c.OpenCode == nil) {
-		return c, fmt.Errorf("daemon UUID, concurrency and workspace_concurrency 0-64, image, command and positive timeout required")
+	if err != nil || duration <= 0 || !uuid.MatchString(c.Daemon) || c.Image == "" || (len(c.Command) == 0 && c.OpenCode == nil) {
+		return c, fmt.Errorf("daemon UUID, image, command and positive timeout required")
 	}
 	if _, _, err := net.SplitHostPort(c.MetricsListen); c.MetricsListen != "" && err != nil {
 		return c, fmt.Errorf("metrics_listen must be host:port")
@@ -96,16 +98,8 @@ func ReadConfig(path string) (Config, error) {
 			return c, err
 		}
 	}
-	if c.Concurrency == 0 {
-		c.Concurrency = DefaultConcurrency
-	}
 	return c, nil
 }
-
-const (
-	DefaultConcurrency = 10
-	MaxConcurrency     = 64
-)
 
 type OpenCodeConfig struct {
 	IdentityFile string       `json:"identity_file,omitempty"`
@@ -129,8 +123,7 @@ type OpenCodeConfig struct {
 	// GitFile holds workspace Git host bindings (repo.Config); GitRelay serves them (ADR 0015).
 	GitFile  string       `json:"git_file,omitempty"`
 	GitRelay *RelayConfig `json:"git_relay,omitempty"`
-	// ForgeRelay serves gh for Git hosts with an api; its https url names the listener
-	// the attempt helper forwards loopback 443 to.
+	// ForgeRelay serves gh for Git hosts with an api; the helper forwards loopback 443 to its url.
 	ForgeRelay *RelayConfig `json:"forge_relay,omitempty"`
 	// Sessions, with the helper, retains issue workdirs and resumes sessions (ADR 0015).
 	Sessions     *SessionsConfig `json:"sessions,omitempty"`
