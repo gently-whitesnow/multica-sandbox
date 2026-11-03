@@ -57,6 +57,13 @@ Revisit when a maintained component supports orchestrator-issued, revocable
 per-session credentials that cancel open streams, or when a Kubernetes backend (#6)
 brings a gateway with external authorization to controller state.
 
+Refinement (2026-11-03). Every relay refused redirects, which broke Actions logs,
+artifacts and archives: GitHub answers them with 302/303 to presigned storage, and
+`gh` got 502. Forge grants now pass 304 and redirects to absolute `https` locations;
+the caller follows them through egress. The location only grants data the forge
+grant already reads, and the workspace token stays in the relay. Multica, inference,
+Git and MCP grants still refuse redirects.
+
 ## Consequences
 
 The controller owns about 830 lines of security-critical proxy code, covered by

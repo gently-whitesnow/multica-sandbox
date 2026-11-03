@@ -133,7 +133,9 @@ func (f *Forge) Authorize(r *http.Request) (relay.Lease, bool) {
 		lease.Origin = nil
 		return lease, true
 	}
-	lease.Origin, lease.Path, lease.RawPath = api.origin, r.URL.Path, r.URL.EscapedPath()
+	// Log, artifact and archive downloads redirect to presigned storage URLs that gh follows
+	// through egress; Go clients drop the relay credential on the cross-host hop.
+	lease.Origin, lease.Path, lease.RawPath, lease.Redirects = api.origin, r.URL.Path, r.URL.EscapedPath(), true
 	if api.header == "Authorization" {
 		lease.Authorization = api.auth
 	} else {

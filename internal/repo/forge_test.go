@@ -29,7 +29,16 @@ func TestForgeRelaysGhToTheWorkspaceAPI(t *testing.T) {
 		mu.Lock()
 		seen = append(seen, r.Method+" "+r.URL.RequestURI()+" "+r.Header.Get("Authorization")+" "+r.Host+" "+string(body))
 		mu.Unlock()
-		w.WriteHeader(http.StatusCreated)
+		switch r.URL.Path {
+		case "/repos/team/fixture/actions/jobs/1/logs":
+			http.Redirect(w, r, "https://storage.example.test/log?sig=x", http.StatusFound)
+		case "/repos/team/fixture/actions/jobs/2/logs":
+			http.Redirect(w, r, "http://storage.example.test/log?sig=x", http.StatusFound)
+		case "/repos/team/fixture":
+			w.WriteHeader(http.StatusNotModified)
+		default:
+			w.WriteHeader(http.StatusCreated)
+		}
 	}))
 	defer api.Close()
 	// requests returns and clears what the upstream received.
@@ -82,18 +91,25 @@ func TestForgeRelaysGhToTheWorkspaceAPI(t *testing.T) {
 	}
 	roots := x509.NewCertPool()
 	roots.AppendCertsFromPEM(g.CA())
-	call := func(name, host, path, token string) (int, error) {
+	do := func(method, name, host, path, token string) (*http.Response, error) {
 		client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, ServerName: name},
 			DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
 				return (&net.Dialer{}).DialContext(ctx, network, server.Listener.Addr().String())
-			}}}
-		r, _ := http.NewRequest(http.MethodPost, "https://"+host+path, strings.NewReader(createPR))
+			}}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		r, _ := http.NewRequest(method, "https://"+host+path, strings.NewReader(createPR))
 		r.Header.Set("Authorization", "token "+token)
 		resp, err := client.Do(r)
 		if err != nil {
-			return 0, err
+			return nil, err
 		}
 		resp.Body.Close()
+		return resp, nil
+	}
+	call := func(name, host, path, token string) (int, error) {
+		resp, err := do(http.MethodPost, name, host, path, token)
+		if err != nil {
+			return 0, err
+		}
 		return resp.StatusCode, nil
 	}
 	upstream := api.Listener.Addr().String() + " " + createPR
@@ -107,6 +123,21 @@ func TestForgeRelaysGhToTheWorkspaceAPI(t *testing.T) {
 			t.Fatalf("%s%s: %d %v %v", c.name, c.path, code, err, got)
 		}
 	}
+	// gh follows log/artifact redirects to presigned storage itself; others stay refused.
+	for path, want := range map[string]struct {
+		code     int
+		location string
+	}{
+		"/repos/team/fixture/actions/jobs/1/logs": {http.StatusFound, "https://storage.example.test/log?sig=x"},
+		"/repos/team/fixture/actions/jobs/2/logs": {http.StatusBadGateway, ""},
+		"/repos/team/fixture":                     {http.StatusNotModified, ""},
+	} {
+		resp, err := do(http.MethodGet, "api.github.com", "api.github.com", path, hub["GH_TOKEN"])
+		if err != nil || resp.StatusCode != want.code || resp.Header.Get("Location") != want.location {
+			t.Fatalf("%s: %v %v", path, resp, err)
+		}
+	}
+	requests()
 	denials := map[string]struct{ name, host, path, token string }{
 		"other workspace API":       {"api.github.com", "api.github.com", "/graphql", env["GH_TOKEN"]},
 		"other workspace GHES":      {"git.example.test", "git.example.test", "/api/graphql", hub["GH_TOKEN"]},
