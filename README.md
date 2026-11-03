@@ -64,7 +64,7 @@ docker compose up -d --build
 docker compose logs -f controller
 ```
 
-One controller serves all accessible workspaces with a shared `concurrency` limit (default 10, maximum 64) and an optional `workspace_concurrency` cap (default 0: none); each attempt takes one Docker network, so Docker `default-address-pools` must hold `concurrency` more subnets (for example base `10.200.0.0/16`, size 24). Offline attempts get fresh non-root, networkless containers with configurable
+One controller serves all accessible workspaces. Only each Multica agent's `max_concurrent_tasks`, enforced by Multica at claim, limits concurrency: the controller claims one task per workspace per round until Multica returns none, pool admission refuses or a deploy drains it, and rejects a config that sets `concurrency` or `workspace_concurrency`. Each attempt takes one Docker network, so Docker `default-address-pools` must hold enough subnets for the expected peak, the sum of the agent limits served (for example base `10.200.0.0/16`, size 24). Offline attempts get fresh non-root, networkless containers with configurable
 resource bounds and temporary storage. The OpenCode Sysbox path starts a namespaced
 root engine supervisor and runs agent commands as uid 65532. Custom images
 need no inheritance; image-declared volumes are rejected. No service tokens or
@@ -74,7 +74,7 @@ rotation and external attempt leases. Optional [inference](internal/inference/RE
 uses a controller relay that swaps an opaque attempt credential for a workspace key. Native messages, reported usage, terminal
 text/session IDs and safe repository references are mapped to existing Multica APIs.
 See the [capability matrix and walkthrough](internal/opencode/README.md); repository checkout, mediated push/PR and retained issue/chat sessions are opt-in;
-artifact publication remains unsupported. For host-sized execution, deployment derives the bounded attempt pool and concurrency ceiling from host capacity, reserving memory for trusted services and engines. `resources.cpu_mode: shared` removes per-attempt CPU quotas; `pool.auto_admission: true` with read-only Docker filesystem `disk_path` adds cold-start pacing, observed headroom and disk/inode watermarks to PSI admission. Omitting concurrency still means 10, not auto sizing. See [ADR 0028](adrs/0028-auto-host-resources.md) for defaults and limitations.
+artifact publication remains unsupported. For host-sized execution, deployment derives the bounded attempt pool from host capacity, reserving memory for trusted services and engines. `resources.cpu_mode: shared` removes per-attempt CPU quotas; `pool.auto_admission: true` with read-only Docker filesystem `disk_path` adds cold-start pacing, observed headroom and disk/inode watermarks to PSI admission. See [ADR 0028](adrs/0028-auto-host-resources.md) for defaults and limitations.
 
 Docker restarts a crashed controller. On startup it removes its old executions
 before asking Multica to recover tasks. Persistent state binds the shared lock to
@@ -91,8 +91,8 @@ sets public visibility in Multica. Public does not share across workspaces.
 An mdt_ token discovers only its bound workspace; registration never sweeps active containers.
 
 Workspace discovery is always enabled. A single accessible workspace uses the same
-execution path as many workspaces; `concurrency: 1` limits global execution to one
-attempt at a time. Membership determines which workspaces are served. The controller logs JSON lines; each attempt ends with an `attempt finished` event (status, reason, timings, session continuity). `"debug": true` adds `DEBUG` events naming identity and inference sources, clients, gateways, relay refusals, failed Multica requests and refusal reasons (such as the token endpoint's error code), never secrets. `"metrics_listen": "0.0.0.0:9464"` serves Prometheus metrics on `/metrics-text` at that address; see [ADR 0025](adrs/0025-quality-metrics-and-structured-logs.md) for metrics, labels and log events.
+execution path as many workspaces; an agent with `max_concurrent_tasks` 1 runs
+one task at a time. Membership determines which workspaces are served. The controller logs JSON lines; each attempt ends with an `attempt finished` event (status, reason, timings, session continuity). `"debug": true` adds `DEBUG` events naming identity and inference sources, clients, gateways, relay refusals, failed Multica requests and refusal reasons (such as the token endpoint's error code), never secrets. `"metrics_listen": "0.0.0.0:9464"` serves Prometheus metrics on `/metrics` and readiness on `/readyz` at that address; see [ADR 0025](adrs/0025-quality-metrics-and-structured-logs.md) for metrics, labels and log events.
 
 `docker compose stop` gracefully removes active execution and intentionally leaves
 the controller stopped. Restart with `docker compose up -d`; interrupted tasks are

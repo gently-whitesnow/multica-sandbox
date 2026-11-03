@@ -44,7 +44,7 @@ from verified behavior.
 - `examples/acp-spike/`: `opencode acp` capability spike with fixtures (ADR 0023).
 - `examples/sysbox-host/`: Lima/Linux Sysbox host recipe, attempt pool slice and engine test image (ADR 0019, 0020).
 - `internal/pool/`: attempt pool slice limits, PSI admission and attempt memory events (ADR 0020).
-- `internal/metrics/`: controller metrics on `/metrics-text` (ADR 0025).
+- `internal/metrics/`: controller metrics on `/metrics` (ADR 0025).
 - `internal/opencode/`: OpenCode ACP adapter, MCP relay, native reporting, conformance
   (verified behavior, deployment-owned boundaries, limitations) and the verified
   official base images (`images.txt`).

@@ -64,7 +64,7 @@ func (f *fleet) sync(ctx context.Context) error {
 func (f *fleet) remove(ws, rt string) {
 	delete(f.ready, ws)
 	delete(f.served, rt)
-	// Every attempt of the runtime ends; slots are released as they complete.
+	// Every attempt of the runtime ends; each leaves active as it completes.
 	for _, attempt := range f.active {
 		if attempt.runtime == rt {
 			attempt.cancel()

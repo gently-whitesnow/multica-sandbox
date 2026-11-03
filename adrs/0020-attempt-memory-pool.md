@@ -38,8 +38,8 @@ Attempts may share one host cgroup slice, the pool, instead of fixed limits.
 - **Preflight.** The parent must fit the engine's cgroup driver, and the slice must set
   `memory.high` and `memory.max` with high not above max. Otherwise startup fails.
 - **Admission.** Before each claim the controller reads the slice: PSI `memory.pressure`
-  "some" `avg10` above `max_pressure` (default 10 %) or a working set (`memory.current`
-  without inactive file cache) above `max_working_set` of `memory.high` (default 0.9)
+  "some" `avg10` above `max_pressure` (default 10 %) or a working set (memory the
+  kernel cannot reclaim, ADR 0028) above `max_working_set` of `memory.high` (default 0.9)
   defers claims; an unreadable slice too. Claims resume after 15 s without a refusal:
   under load the working set hovers at `memory.high`. Tasks stay queued in Multica; the
   log records each pause and resume once.
@@ -66,8 +66,8 @@ in nested engines) held the pool at `memory.high` with up to 3.7 GiB in swap and
 "some" up to 22 %, without an OOM kill; a run took 45–67 s instead of 40 s. A task can still die when the
 pool reaches `MemoryMax` or its own ceiling; it then fails once with an explicit
 message. Admission bounds only new claims: attempts already running can push the pool
-into `MemoryMax`, so `MemoryHigh` must leave headroom, and the controller's concurrency
-remains the upper bound. Tasks waiting under sustained pressure can expire in the
+into `MemoryMax`, so `MemoryHigh` must leave headroom, and the agents'
+`max_concurrent_tasks` remain the upper bound. Tasks waiting under sustained pressure can expire in the
 Multica queue. Sizing the slice, swap and its disk are host decisions
 (`examples/sysbox-host`). The controller reads host cgroup files, which a stopped and
 restarted slice invalidates until the controller restarts. Tests: unit tests of the

@@ -4,7 +4,9 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY cmd/ ./cmd/
 COPY internal/ ./internal/
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /controller ./cmd/sandbox-controller \
+# The source commit for sandbox_build_info (ADR 0025); images.yml passes it.
+ARG SANDBOX_REVISION=unknown
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X github.com/gently-whitesnow/multica-sandbox/internal/metrics.Revision=${SANDBOX_REVISION}" -o /controller ./cmd/sandbox-controller \
  && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /sandbox-helper ./cmd/sandbox-helper
 
 # Controller-owned attempt helper (ADR 0015): `docker build --target helper .`, then

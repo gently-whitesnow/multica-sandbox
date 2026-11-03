@@ -17,8 +17,8 @@ store. Its conventions for services:
 - metrics use the OpenTelemetry SDK and its Prometheus exporter; names come from
   OpenTelemetry semantic conventions where they define the measurement, and own
   names follow `<domain>.<object>.<measurement>`;
-- a service without its own HTTP server serves `/metrics-text` on a dedicated port;
-  the scraper adds `service_name` and the instance label;
+- a service without its own HTTP server serves metrics on a dedicated port; the
+  scraper adds `service_name` and the instance label;
 - labels carry only bounded values, a missing value is a fixed fallback, and an
   inapplicable label is omitted; an SDK cardinality limit backs this up;
 - next to a histogram no separate counter is added: counts come from `_count`;
@@ -28,22 +28,27 @@ store. Its conventions for services:
 
 ## Decision
 
-**Metrics.** With `metrics_listen` set, the controller serves `/metrics-text` on that
-address and nothing else there. The listener is separate from the relays, which
-attempts can reach. Instruments use the OpenTelemetry Go SDK and Prometheus exporter,
-without scope labels and `target_info`, with a limit of 2000 series per instrument:
+**Metrics.** With `metrics_listen` set, the controller serves `/metrics`, the
+Prometheus default scrape path, and `/readyz` (ADR 0031) on that address and nothing
+else there; scrapers need no path override. The listener is separate from the relays,
+which attempts can reach. Instruments use the OpenTelemetry Go SDK and Prometheus
+exporter, without scope labels and `target_info`, with a limit of 2000 series per
+instrument; the standard Go runtime and process collectors (`go_*`, `process_*`) keep
+their Prometheus names:
 
 | Metric (Prometheus) | Type | Labels | Question |
 | --- | --- | --- | --- |
 | `sandbox_attempt_duration_seconds` | histogram | `kind`, `status`, `reason`, `status_code` | Success and failure share and causes; attempt time from claim to report |
 | `sandbox_attempt_prepare_duration_seconds` | histogram | `kind`, `continuity` | Time from claim to agent start; how often sessions resume |
-| `sandbox_attempt_active` | gauge | — | Busy slots |
+| `sandbox_attempt_active` | gauge | — | Running attempts |
 | `sandbox_attempt_events_total` | counter | `event` | Attempts cancelled, gone or settled elsewhere; start and report problems |
 | `sandbox_relay_request_duration_seconds` | histogram | `relay`, `status_code` or `error_type` | Relay refusals and upstream answers, for example inference 403/422/429 |
 | `http_client_request_duration_seconds` | histogram | shared contract, `target_service_name="multica"` | Multica API errors and latency |
 | `http_client_request_retries_total` | counter | shared contract | Multica requests resent by the controller |
 | `sandbox_pool_memory_pressure_ratio`, `sandbox_pool_memory_usage_bytes`, `sandbox_pool_memory_limit_bytes` | gauge | — | Attempt pool pressure at the last admission check |
-| `sandbox_claims_paused` | gauge | — | Claims waiting for the pool |
+| `sandbox_claims_paused` | gauge | `reason` while paused | Claims waiting for the pool, and why |
+| `sandbox_claims_draining`, `sandbox_workspaces_ready` | gauge | — | Deploy drain and served workspaces (ADR 0031) |
+| `sandbox_build_info` | gauge, always 1 | `revision` | Which controller commit runs; deploys on a timeline |
 
 Label values:
 
@@ -53,6 +58,10 @@ Label values:
   `internal`. An `inference` failure adds the provider's HTTP `status_code`.
 - `continuity`: `fresh`, `resumed`, or `lost` when a prior session could not be
   continued.
+- Paused `reason`, the last refusal before the calm cooldown: `pressure`,
+  `working_set`, `disk`, `headroom` or `unreadable`. The cold-start warmup paces
+  starts and never pauses claims (ADR 0028).
+- `revision`: the source commit set at image build, else `unknown`.
 - `event`: `start-rejected`, `message-deferred`, `report-deferred`, `cancelled`,
   `gone`, `settled` or `other`.
 - `relay`: `multica`, `inference`, `git`, `forge` or `mcp`.

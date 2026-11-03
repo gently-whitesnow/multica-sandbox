@@ -3,6 +3,7 @@ package service
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -50,29 +51,26 @@ func TestConfigRejectsUnknownAndInvalidFields(t *testing.T) {
 	}
 }
 
-func TestConfigCapacity(t *testing.T) {
+// Concurrency is each Multica agent's max_concurrent_tasks: a controller config that
+// still sets its own limit is refused with a pointer to the agent setting.
+func TestConfigRejectsControllerConcurrency(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	valid := `{"server":"https://example.invalid","daemon":"10000000-0000-4000-8000-000000000002","image":"test","command":["/bin/true"],"timeout":"1s"}`
-	if err := os.WriteFile(path, []byte(valid), 0600); err != nil {
-		t.Fatal(err)
-	}
-	c, err := ReadConfig(path)
-	if err != nil || c.Concurrency != DefaultConcurrency || c.WorkspaceConcurrency != 0 {
-		t.Fatalf("default fleet capacity: %+v %v", c, err)
-	}
-	for _, extra := range []string{`,"workspace":"10000000-0000-4000-8000-000000000001"}`, `,"workspaces":"all-accessible"}`, `,"concurrency":65}`, `,"concurrency":-1}`, `,"workspace_concurrency":-1}`, `,"workspace_concurrency":65}`} {
+	for _, extra := range []string{`,"concurrency":10}`, `,"workspace_concurrency":2}`} {
 		if err := os.WriteFile(path, []byte(valid[:len(valid)-1]+extra), 0600); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := ReadConfig(path); err == nil {
-			t.Fatal("invalid scope/capacity accepted")
+		if _, err := ReadConfig(path); err == nil || !strings.Contains(err.Error(), "was removed: set max_concurrent_tasks on Multica agents") {
+			t.Fatalf("%s: %v", extra, err)
 		}
 	}
-	if err := os.WriteFile(path, []byte(valid[:len(valid)-1]+`,"concurrency":64,"workspace_concurrency":3}`), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if c, err := ReadConfig(path); err != nil || c.Concurrency != 64 || c.WorkspaceConcurrency != 3 {
-		t.Fatalf("configured capacity: %+v %v", c, err)
+	for _, extra := range []string{`,"workspace":"10000000-0000-4000-8000-000000000001"}`, `,"workspaces":"all-accessible"}`} {
+		if err := os.WriteFile(path, []byte(valid[:len(valid)-1]+extra), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ReadConfig(path); err == nil || err.Error() != "invalid controller configuration" {
+			t.Fatalf("%s: %v", extra, err)
+		}
 	}
 }
 

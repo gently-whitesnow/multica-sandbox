@@ -43,14 +43,16 @@ type fleet struct {
 	// active holds attempts by key; perRuntime counts them per workspace runtime.
 	active     map[string]running
 	perRuntime map[string]int
-	// workspaceLimit caps attempts per workspace; 0 leaves only the global capacity.
-	workspaceLimit int
-	done           chan completion
+	// done is unbuffered: each attempt sends once, and serve receives every active
+	// attempt, also on shutdown.
+	done chan completion
 	// admit, when set, defers claims while the attempt pool is under memory pressure;
-	// paused records the state so changes are logged once, refused the last refusal.
-	admit         func() (bool, string)
+	// paused records the state so changes are logged once, refused the last refusal
+	// and reason its bounded cause.
+	admit         func() (bool, string, string)
 	paused        bool
 	refused       time.Time
+	reason        string
 	clock         func() time.Time
 	autoAdmission *pool.AutoAdmission
 	// wake carries daemon WebSocket hints and connection changes from listen; runtimes
@@ -83,18 +85,18 @@ type wakeEvent struct {
 // load the working set hovers at memory.high and single readings flap.
 const admissionCooldown = 15 * time.Second
 
-func newFleetState(api fleetAPI, daemon, dir string, log *slog.Logger, known map[string]string, capacity, workspaceLimit int) *fleet {
+func newFleetState(api fleetAPI, daemon, dir string, log *slog.Logger, known map[string]string) *fleet {
 	return &fleet{api: api, daemon: daemon, dir: dir, log: log, known: known, ready: map[string]string{}, served: map[string]bool{},
-		active: map[string]running{}, perRuntime: map[string]int{}, workspaceLimit: workspaceLimit, done: make(chan completion, capacity), clock: time.Now,
+		active: map[string]running{}, perRuntime: map[string]int{}, done: make(chan completion), clock: time.Now,
 		wake: make(chan wakeEvent, 64), runtimes: make(chan []string, 1)}
 }
 
-func serveFleet(ctx context.Context, c Config, dir string, api fleetAPI, p *controller.Probe, admit func() (bool, string)) error {
+func serveFleet(ctx context.Context, c Config, dir string, api fleetAPI, p *controller.Probe, admit func() (bool, string, string)) error {
 	known, err := readRegistry(dir)
 	if err != nil {
 		return err
 	}
-	f := newFleetState(api, c.Daemon, dir, c.logger(), known, c.Concurrency, c.WorkspaceConcurrency)
+	f := newFleetState(api, c.Daemon, dir, c.logger(), known)
 	f.admit, f.metrics, f.drain = admit, c.metrics, c.Drain
 	if c.OpenCode != nil && c.OpenCode.Pool != nil && c.OpenCode.Pool.AutoAdmission {
 		pc := c.OpenCode.Pool
@@ -107,10 +109,10 @@ func serveFleet(ctx context.Context, c Config, dir string, api fleetAPI, p *cont
 			return err
 		}
 	}
-	return f.serve(ctx, c.Concurrency, p.Execute)
+	return f.serve(ctx, p.Execute)
 }
 
-func (f *fleet) serve(ctx context.Context, capacity int, execute func(context.Context, multica.Task) error) (result error) {
+func (f *fleet) serve(ctx context.Context, execute func(context.Context, multica.Task) error) (result error) {
 	defer func() {
 		if ctx.Err() != nil && result == ctx.Err() {
 			result = nil
@@ -132,7 +134,7 @@ func (f *fleet) serve(ctx context.Context, capacity int, execute func(context.Co
 		return err
 	}
 	f.metrics.Workspaces(len(f.ready))
-	f.log.Info("controller ready", "workspaces", len(f.ready), "capacity", capacity, "workspace_capacity", f.workspaceLimit)
+	f.log.Info("controller ready", "workspaces", len(f.ready))
 	if api, ok := f.api.(wakeupAPI); ok {
 		listenCtx, stop := context.WithCancel(ctx)
 		defer stop()
@@ -170,11 +172,11 @@ func (f *fleet) serve(ctx context.Context, capacity int, execute func(context.Co
 			}
 			f.publish()
 		case e := <-f.wake:
-			if err := f.wakeup(ctx, e, capacity, execute); err != nil {
+			if err := f.wakeup(ctx, e, execute); err != nil {
 				return err
 			}
 		case <-poll.C:
-			if err := f.tolerate("claim", f.claim(ctx, capacity, execute)); err != nil {
+			if err := f.tolerate("claim", f.claim(ctx, execute)); err != nil {
 				return err
 			}
 		case <-replay.C:
@@ -183,9 +185,10 @@ func (f *fleet) serve(ctx context.Context, capacity int, execute func(context.Co
 	}
 }
 
-// claim fills free capacity one task per workspace per round, so a busy workspace cannot
-// starve its peers; unused capacity is never pre-claimed and Multica keeps the queue.
-func (f *fleet) claim(ctx context.Context, capacity int, execute func(context.Context, multica.Task) error) error {
+// claim takes one task per workspace per round, so a busy workspace cannot starve its
+// peers, until draining, pool admission or Multica stops it. Concurrency is each agent's
+// max_concurrent_tasks, which Multica enforces at claim; Multica keeps the queue.
+func (f *fleet) claim(ctx context.Context, execute func(context.Context, multica.Task) error) error {
 	if f.draining {
 		return nil
 	}
@@ -193,10 +196,10 @@ func (f *fleet) claim(ctx context.Context, capacity int, execute func(context.Co
 		f.autoAdmission.Observe(len(f.active), f.clock())
 	}
 	claimed := false
-	for len(f.active) < capacity && f.admitted() {
+	for f.admitted() {
 		scopes := map[string]string{}
 		for ws, rt := range f.ready {
-			if !f.served[rt] && (f.workspaceLimit == 0 || f.perRuntime[rt] < f.workspaceLimit) {
+			if !f.served[rt] {
 				scopes[rt] = ws
 			}
 		}
@@ -252,14 +255,14 @@ func (f *fleet) admitted() bool {
 	if f.admit == nil {
 		return true
 	}
-	ok, status := f.admit()
+	ok, reason, status := f.admit()
 	now := f.clock()
 	if ok && f.autoAdmission != nil {
-		ok, status = f.autoAdmission.Admit(len(f.active), now)
+		ok, reason, status = f.autoAdmission.Admit(len(f.active), now)
 	}
 	// Warmup paces starts: it neither pauses claims nor restarts the cooldown.
-	if !ok && status != pool.Warmup {
-		f.refused = now
+	if !ok && reason != pool.RefusalWarmup {
+		f.refused, f.reason = now, reason
 	}
 	calm := now.Sub(f.refused) >= admissionCooldown
 	switch {
@@ -269,11 +272,11 @@ func (f *fleet) admitted() bool {
 		f.log.Warn("claims paused", "pool", status)
 	}
 	f.paused = !calm
-	f.metrics.Paused(f.paused)
+	f.metrics.Paused(f.paused, f.reason)
 	return ok && calm
 }
 
-// finish releases a completed attempt's slot.
+// finish forgets a completed attempt.
 func (f *fleet) finish(done completion) {
 	if attempt, ok := f.active[done.attempt]; ok {
 		attempt.cancel()
@@ -399,7 +402,7 @@ func (f *fleet) notify(e wakeEvent) {
 
 // wakeup acts on a hint as the upstream daemon does: a heartbeat for pending runtime
 // work (model lists), a claim round for tasks, a sync for membership changes.
-func (f *fleet) wakeup(ctx context.Context, e wakeEvent, capacity int, execute func(context.Context, multica.Task) error) error {
+func (f *fleet) wakeup(ctx context.Context, e wakeEvent, execute func(context.Context, multica.Task) error) error {
 	switch {
 	case e.connected:
 		if !f.wsUp {
@@ -418,7 +421,7 @@ func (f *fleet) wakeup(ctx context.Context, e wakeEvent, capacity int, execute f
 			}
 		}
 	case e.Event == multica.WakeupTask:
-		return f.tolerate("claim", f.claim(ctx, capacity, execute))
+		return f.tolerate("claim", f.claim(ctx, execute))
 	case e.Event == multica.WakeupWorkspaces:
 		err := f.tolerate("sync", f.sync(ctx))
 		f.publish()

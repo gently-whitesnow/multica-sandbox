@@ -70,12 +70,33 @@ type Status struct {
 	Pressured, Saturated bool
 }
 
+// Refusal reasons are the bounded causes of a refused admission, for metrics.
+const (
+	RefusalPressure   = "pressure"
+	RefusalWorkingSet = "working_set"
+	RefusalUnreadable = "unreadable"
+	RefusalDisk       = "disk"
+	RefusalWarmup     = "warmup"
+	RefusalHeadroom   = "headroom"
+)
+
+// Refusal is the reason s refuses admission, else "".
+func (s Status) Refusal() string {
+	switch {
+	case s.Pressured:
+		return RefusalPressure
+	case s.Saturated:
+		return RefusalWorkingSet
+	}
+	return ""
+}
+
 func (s Status) String() string {
 	return fmt.Sprintf("memory pressure some avg10=%.2f%%, working set %s of memory.high %s", s.SomeAvg10, Size(s.WorkingSet), Size(s.High))
 }
 
-// Admit reports whether a new attempt may start: PSI and the working set (memory.current
-// without inactive file cache) stay under the thresholds. Unreadable files refuse.
+// Admit reports whether a new attempt may start: PSI and the working set stay under
+// the thresholds. Unreadable files refuse.
 func (p *Pool) Admit() (bool, Status, error) {
 	var s Status
 	data, err := os.ReadFile(filepath.Join(p.Dir, "memory.pressure"))
@@ -85,21 +106,53 @@ func (p *Pool) Admit() (bool, Status, error) {
 	if s.SomeAvg10, err = someAvg10(string(data)); err != nil {
 		return false, s, err
 	}
-	current, err := readValue(filepath.Join(p.Dir, "memory.current"))
-	if err != nil {
-		return false, s, err
-	}
-	stat, err := os.ReadFile(filepath.Join(p.Dir, "memory.stat"))
-	if err != nil {
+	if s.WorkingSet, err = workingSet(p.Dir); err != nil {
 		return false, s, err
 	}
 	if s.High, err = readValue(filepath.Join(p.Dir, "memory.high")); err != nil {
 		return false, s, err
 	}
-	s.WorkingSet = max(current-keyed(string(stat))["inactive_file"], 0)
 	s.Pressured = s.SomeAvg10 > p.MaxPressure
 	s.Saturated = s.High != Unlimited && float64(s.WorkingSet) > p.MaxWorkingSet*float64(s.High)
 	return !s.Pressured && !s.Saturated, s, nil
+}
+
+// workingSet is the memory of a cgroup the kernel cannot reclaim without swapping or
+// killing: memory.current without file cache (shmem excepted) and reclaimable slab,
+// so anon, shmem and other kernel memory. Cache left by finished attempts and nested
+// engines stays charged to the pool until reclaimed at memory.high; counting it held
+// back starts with real headroom (ADR 0028). Keys missing from memory.stat count as used.
+func workingSet(dir string) (int64, error) {
+	current, err := readValue(filepath.Join(dir, "memory.current"))
+	if err != nil {
+		return 0, err
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "memory.stat"))
+	if err != nil {
+		return 0, err
+	}
+	stat := keyed(string(data))
+	return max(current-max(stat["file"]-stat["shmem"], 0)-stat["slab_reclaimable"], 0), nil
+}
+
+var attemptDir = regexp.MustCompile(`^(docker-[0-9a-f]{64}\.scope|[0-9a-f]{64})$`)
+
+// largestAttempt is the largest working set among the attempt cgroups in the pool,
+// 0 without any. A cgroup removed while it is read is skipped.
+func (p *Pool) largestAttempt() (int64, error) {
+	entries, err := os.ReadDir(p.Dir)
+	if err != nil {
+		return 0, err
+	}
+	var largest int64
+	for _, e := range entries {
+		if e.IsDir() && attemptDir.MatchString(e.Name()) {
+			if n, err := workingSet(filepath.Join(p.Dir, e.Name())); err == nil {
+				largest = max(largest, n)
+			}
+		}
+	}
+	return largest, nil
 }
 
 // Attempt returns the cgroup directory of a container in the pool: docker-<id>.scope
