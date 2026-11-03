@@ -82,6 +82,8 @@ end at cleanup and on restart.
   `PullRequestForBranch` and `PullRequestCreate`, to `https://api.github.com/graphql`
   or `https://<host>/api/graphql`. REST calls use `/api/v3/` on Enterprise Server.
   The relay forwards both paths unchanged to the configured `api` origin.
+- Log, artifact and archive downloads redirect to presigned storage. The relay passes `304`
+  and absolute `https` redirects; `gh` follows them through egress without the relay credential.
 - Images add `gh` or `glab` themselves; the Debian example has `gh`.
 
 Deployment-owned bounds, as under the native runtime:
@@ -94,12 +96,10 @@ Deployment-owned bounds, as under the native runtime:
 - **Branch protection.** Pushes may update any ref the credential allows. Protect
   default and release branches with rulesets or branch protection on the forge.
 
-Limits: apart from token rotation the relay inspects neither REST paths nor GraphQL
-operations; merges and other API actions are bounded only by the credential's role and
-protected branches (#62).
-`GH_HOST` is unset when a workspace binds several API hosts; `gh` then resolves only
-`github.com` remotes, so pass `--repo <host>/<owner>/<repo>` or `GH_HOST` for
-Enterprise Server; behavior beyond the fixture is unverified.
+Limits: apart from token rotation the relay inspects neither REST paths nor GraphQL operations;
+merges and other API actions are bounded only by the credential's role and protected branches (#62).
+`GH_HOST` is unset when a workspace binds several API hosts; `gh` then resolves only `github.com` remotes,
+so pass `--repo <host>/<owner>/<repo>` or `GH_HOST` for Enterprise Server; behavior beyond the fixture is unverified.
 
 `/repo/checkout` authorizes requests in this order, with upstream's messages:
 1. the attempt's Multica relay credential;

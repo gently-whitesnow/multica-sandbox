@@ -1,6 +1,6 @@
 // Package relay is the controller's narrow credential-translation boundary
 // (ADR 0012 and 0014): each grant fixes one trusted origin, caller authorization is
-// replaced, redirects are refused and upstream details never reach the caller.
+// replaced, redirects are refused (forge: ADR 0024) and upstream details never reach the caller.
 package relay
 
 import (
@@ -33,6 +33,8 @@ type Lease struct {
 	Header                       http.Header
 	// DropQuery discards caller parameters; WithholdErrors protects secret-bearing paths.
 	DropQuery, WithholdErrors bool
+	// Redirects passes 304 and absolute https redirects; the caller follows them itself.
+	Redirects bool
 	// Context ends when the grant is revoked, cancelling in-flight requests.
 	Context context.Context
 	Release func()
@@ -155,7 +157,7 @@ func New(auth Authorizer, p Policy) (*Relay, error) {
 				r.Responded(x.lease.Attempt, resp.StatusCode)
 			}
 			// The transport never follows redirects; refusing them also withholds upstream locations.
-			if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+			if resp.StatusCode >= 300 && resp.StatusCode < 400 && (!x.lease.Redirects || !passed(resp)) {
 				return ErrRedirect
 			}
 			r.record(x.in, resp.StatusCode, nil, x.start)
@@ -225,6 +227,15 @@ func (r *Relay) record(req *http.Request, status int, err error, start time.Time
 	if r.policy.Record != nil {
 		r.policy.Record(req, status, err, time.Since(start))
 	}
+}
+
+// passed admits a 304 or a redirect to an absolute https location without userinfo.
+func passed(resp *http.Response) bool {
+	if resp.StatusCode == http.StatusNotModified {
+		return true
+	}
+	u, err := url.Parse(resp.Header.Get("Location"))
+	return err == nil && u.Scheme == "https" && u.Host != "" && u.User == nil
 }
 
 // cleanPath rejects traversal, empty segments and encoded separators the upstream router could decode.
