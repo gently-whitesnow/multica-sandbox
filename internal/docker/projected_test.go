@@ -13,6 +13,7 @@ import (
 
 	"github.com/gently-whitesnow/multica-sandbox/internal/execution"
 	"github.com/gently-whitesnow/multica-sandbox/internal/opencode"
+	"github.com/gently-whitesnow/multica-sandbox/internal/repo"
 )
 
 func TestProjectedAttemptIsolation(t *testing.T) {
@@ -48,6 +49,13 @@ func TestProjectedAttemptIsolation(t *testing.T) {
 	}
 	if err := a.Write(ctx, "/workspace/opencode.json", []byte(`{"a":"private-a"}`)); err != nil {
 		t.Fatal(err)
+	}
+	// git reads the global identity from $XDG_CONFIG_HOME/git/config.
+	if err := a.Write(ctx, repo.GitConfigPath, []byte("[user]\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Execute(ctx, []string{"/bin/sh", "-c", `set -e; test "$XDG_CONFIG_HOME/git/config" = ` + repo.GitConfigPath + `; test "$(stat -c %a:%u "$XDG_CONFIG_HOME/git/config")" = 600:65532`}); err != nil {
+		t.Fatal("global Git config not projected for the attempt user:", err)
 	}
 	// Exec sessions inherit the controller PATH; the mounted CLI stays read-only.
 	if err := b.Execute(ctx, []string{"/bin/sh", "-c", `set -e; test "$(command -v multica)" = /opt/multica-sandbox/multica/bin/multica; multica >/dev/null; ! touch /opt/multica-sandbox/multica/bin/x`}); err != nil {

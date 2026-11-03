@@ -212,6 +212,29 @@ func (h *Hosts) Identity(workspace, repository, agent string) (string, string) {
 			return b.name, b.email
 		}
 	}
+	return agentIdentity(agent)
+}
+
+// WorkspaceIdentity is the identity the workspace's hosts configure when they agree on
+// one, else the agent identity checkouts of unconfigured hosts use.
+func (h *Hosts) WorkspaceIdentity(workspace, agent string) (string, string) {
+	var name, email string
+	for key, b := range h.bindings {
+		if key[0] != workspace || b.name == "" {
+			continue
+		}
+		if name != "" && (b.name != name || b.email != email) {
+			return agentIdentity(agent)
+		}
+		name, email = b.name, b.email
+	}
+	if name == "" {
+		return agentIdentity(agent)
+	}
+	return name, email
+}
+
+func agentIdentity(agent string) (string, string) {
 	name := strings.Join(strings.Fields(strings.Map(func(r rune) rune {
 		if r < 0x20 || r == 0x7f || r == '<' || r == '>' {
 			return ' '

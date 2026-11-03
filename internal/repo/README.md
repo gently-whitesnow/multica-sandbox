@@ -53,9 +53,9 @@ Attempts receive `GIT_CONFIG_*` entries per host the workspace binds, around the
 
 `origin` keeps the real URL, and `git remote -v` shows the alias on the forge host,
 so `gh` resolves the repository as natively. The relay accepts only proxy requests
-and serves only smart HTTP fetch and push (`git-upload-pack`, `git-receive-pack`) for
-granted repositories on bound hosts (the claim's and those checkout admits). It replaces the credential and refuses
-redirects. Packs may reach 2 GiB, and the upstream gets 5 minutes to answer. Grants
+and serves only smart HTTP fetch and push (`git-upload-pack`, `git-receive-pack`) to
+the hosts the attempt's workspace binds, for any repository there, as the native host's
+credentials do. It replaces the credential and refuses redirects. Packs may reach 2 GiB, and the upstream gets 5 minutes to answer. Grants
 end at cleanup and on restart.
 
 `forge_relay` (`listen`, an `https` `url` on the controller alias) serves `gh`, as native
@@ -88,8 +88,7 @@ end at cleanup and on restart.
 
 Deployment-owned bounds, as under the native runtime:
 - **Credential scope.** Pushes and `gh` may do anything the host's deployment
-  credential may do, on any repository it reaches; the relay limits only Git
-  transport to granted repositories. Use a GitHub App installation token or a
+  credential may do, on any repository it reaches. Use a GitHub App installation token or a
   fine-grained token restricted to the intended repositories, with
   `contents: write` and `pull_requests: write`, and no administration rights. On
   GitLab, use a group or project access token with the Developer role and `api` scope.
@@ -120,8 +119,10 @@ v0.5.2) with a fresh clone instead of the bare cache:
   commits.
 - **Agent files:** `info/exclude` lists the upstream agent files.
 - **Busy:** a concurrent checkout waits 10 s, then returns 503 `repo-busy`.
-- **Commits:** every checkout writes the host's commit identity to the repository
-  config, standing in for the native host's global identity. It also reconciles
+- **Commits:** the attempt's global Git config (`/workspace/config/git/config`) holds
+  the identity the workspace's hosts agree on, else the agent default, standing in for
+  the native host's global identity; every checkout writes its host's identity to the
+  repository config. It also reconciles
   upstream's `prepare-commit-msg` hook, which adds
   `Co-authored-by: multica-agent <github@multica.ai>` while the workspace's
   `github_enabled` and `co_authored_by_enabled` are on (default).
@@ -143,8 +144,6 @@ Differences from upstream:
 - every retained workdir pays for its own clone;
 - setting changes reach live hooks within 10 s rather than on a websocket hint, and a
   failed settings read keeps the last value instead of failing the checkout;
-- the identity is repository config of the checkout, not a global one, so clones made
-  without `multica repo checkout` have none;
 - claim URLs take upstream's forms (https, http, ssh, git, scp-like), but are fetched
   over HTTPS from the bound `upstream`: SSH and git ports are ignored, and URLs with a
   password, query or fragment reject the claim.

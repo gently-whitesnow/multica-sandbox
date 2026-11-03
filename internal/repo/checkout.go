@@ -55,7 +55,7 @@ type Settings interface {
 	WorkspaceRepositories(context.Context, string) ([]string, error)
 }
 
-// Granter extends a live attempt's Git relay grant to a workspace repository.
+// Granter admits a live attempt's checkout of a workspace repository through the Git relay.
 type Granter interface {
 	Allow(attempt, url string) (alias, prefix string, ok bool)
 }
@@ -327,7 +327,7 @@ func Branch(agent, task string) string {
 	return "agent/" + name + "/" + key[max(0, len(key)-12):]
 }
 
-// grant extends the attempt's Git relay grant to a workspace repository. A remote prefix
+// grant admits a workspace repository checkout through the Git relay. A remote prefix
 // the attempt environment does not rewrite is added for the clone and kept in the
 // checkout's configuration.
 func (c *Checkout) grant(attempt, url string, base map[string]string) (map[string]string, []string) {
