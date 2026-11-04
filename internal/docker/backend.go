@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os/exec"
 	"regexp"
 	"slices"
 	"strings"
@@ -153,7 +154,7 @@ func (b *Backend) Start(ctx context.Context, attempt string) (execution.Run, err
 	}
 	r := &run{name: b.name(attempt)}
 	if _, err := command(ctx, b.createArgs(r.name, probeResources)...); err != nil {
-		return nil, cleaned(err, b.cleanupUncertainCreate(r))
+		return nil, cleaned(err, b.cleanupUncertainCreate(r, err))
 	}
 	if err := r.check(ctx); err != nil {
 		return nil, cleaned(err, r.cleanup())
@@ -179,10 +180,16 @@ type uncertainError struct{ error }
 
 func (e *uncertainError) Unwrap() error { return e.error }
 
-func (b *Backend) cleanupUncertainCreate(r *run) error {
+func (b *Backend) cleanupUncertainCreate(r *run, created error) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	owner, err := command(ctx, "inspect", "--format", `{{index .Config.Labels "io.multica-sandbox.owner"}}`, r.name)
+	// An engine that answered the create with an error (no space left, say) and has no
+	// such container left nothing behind; a killed create may still land.
+	var exit *exec.ExitError
+	if err != nil && errors.As(created, &exit) && exit.Exited() && strings.Contains(err.Error(), "No such object") {
+		return nil
+	}
 	if err == nil && strings.TrimSpace(string(owner)) != b.Owner {
 		err = fmt.Errorf("refusing cleanup of a container with a different owner")
 	}

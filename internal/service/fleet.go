@@ -249,9 +249,12 @@ func (f *fleet) setDraining(draining bool) {
 	}
 	f.draining = draining
 	f.metrics.Draining(draining)
-	if draining {
+	switch {
+	case draining:
 		f.log.Info("claims draining", "active", len(f.active))
-	} else {
+	case f.stopping != nil:
+		f.log.Info("drain released; claims stay stopped until the restart", "active", len(f.active))
+	default:
 		f.log.Info("claims resumed after drain", "active", len(f.active))
 	}
 }

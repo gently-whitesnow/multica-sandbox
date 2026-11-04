@@ -55,6 +55,36 @@ esac
 	}
 }
 
+// A create the engine refused (no space left) leaves no container: the task alone is
+// rejected and retried. A killed create may still land, so it stays uncertain.
+func TestRefusedCreateWithoutContainer(t *testing.T) {
+	for create, transient := range map[string]bool{
+		`echo 'no space left on device' >&2; exit 125`: true,
+		`kill -9 $$`: false,
+	} {
+		dir := t.TempDir()
+		t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+		script := `#!/bin/sh
+case "$1" in
+info) printf '%s' '{"Architecture":"x86_64","OSType":"linux","CgroupVersion":"2","MemoryLimit":true,"SwapLimit":true,"PidsLimit":true,"CpuCfsPeriod":true,"CpuCfsQuota":true,"SecurityOptions":["name=seccomp,profile=builtin"]}' ;;
+image) printf '%s' '{"Os":"linux","Architecture":"amd64"}' ;;
+create) ` + create + ` ;;
+inspect) echo 'Error: No such object: attempt' >&2; exit 1 ;;
+*) exit 2 ;;
+esac
+`
+		if err := os.WriteFile(filepath.Join(dir, "docker"), []byte(script), 0700); err != nil {
+			t.Fatal(err)
+		}
+		b := &Backend{Owner: "90000000-0000-4000-8000-000000000001", Image: "example.invalid/test@sha256:" + strings.Repeat("a", 64), Command: []string{"/bin/true"}}
+		_, err := b.Start(context.Background(), "attempt")
+		var rejected *execution.RejectedError
+		if got := errors.As(err, &rejected) && rejected.Transient(); got != transient {
+			t.Fatalf("create %q: transient=%v, want %v: %v", create, got, transient, err)
+		}
+	}
+}
+
 func TestImagePlatform(t *testing.T) {
 	for image, want := range map[string]string{
 		`{"Os":"linux","Architecture":"amd64"}`:                                   "",

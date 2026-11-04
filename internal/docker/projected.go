@@ -235,7 +235,7 @@ func (b *Projected) launch(ctx context.Context, r *run, want expected, extra []s
 	args = append(args[:len(args)-len(b.Command)-2], b.entrypoint()...)
 	out, err := command(ctx, args...)
 	if err != nil {
-		return "", errors.Join(err, b.cleanupUncertainCreate(r))
+		return "", errors.Join(err, b.cleanupUncertainCreate(r, err))
 	}
 	id := strings.TrimSpace(string(out))
 	data, err := command(ctx, "inspect", r.name)
@@ -334,7 +334,7 @@ func (b *Projected) Output(ctx context.Context, args []string) ([]byte, error) {
 	}
 	r := &run{name: probe.name("image-inspection")}
 	if _, err := command(ctx, probe.createArgs(r.name, probe.limits(), bundles...)...); err != nil {
-		return nil, errors.Join(err, probe.cleanupUncertainCreate(r))
+		return nil, errors.Join(err, probe.cleanupUncertainCreate(r, err))
 	}
 	data, err := command(ctx, "inspect", r.name)
 	if err == nil {
