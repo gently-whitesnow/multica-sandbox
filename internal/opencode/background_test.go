@@ -194,3 +194,15 @@ func TestBackgroundShellResumedToolCountsAsRunning(t *testing.T) {
 		t.Fatalf("resumed tool result: %+v", last)
 	}
 }
+
+func TestBackgroundShellFailureReportsTheAnsweredTurnOnce(t *testing.T) {
+	reporter := &reportStub{}
+	agent := &fakeAgent{version: "2.2.5", updates: backgroundUpdates(), stop: "end_turn", usage: map[string]any{"inputTokens": 10, "outputTokens": 4}}
+	r := &running{events: &eventStream{reporter: reporter}, workload: &stubWorkload{api: func(string) string { return "not json" }}}
+	if err := turnWith(t, context.Background(), agent, r); !errors.Is(err, errFollow) {
+		t.Fatalf("unreadable session: %v", err)
+	}
+	if len(reporter.usage) != 1 || reporter.usage[0].Input != 10 || reporter.usage[0].Output != 4 {
+		t.Fatalf("usage %+v", reporter.usage)
+	}
+}

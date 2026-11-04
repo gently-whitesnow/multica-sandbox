@@ -60,6 +60,22 @@ at the pool as `runtime_recovery` (ADR 0020), and counted with
 `memory.high` turns most stalls into OOM kills of the largest process, which the
 agent sees as a failed command.
 
+**Usage and diagnosis on every path.** Usage was reported only after the prompt
+answered, so a watchdog, stream cut, OOM, stall, cancellation or timeout lost the
+tokens already spent; the native daemon reports once at the end on any path. ACP
+`usage_update` carries only context size and cost. The adapter now keeps the answered
+turn's usage with its resumed turns, and an unanswered turn sums the assistant steps
+the session store recorded since the prompt (session API on 2.x, export on 1.x),
+read with a 15 s context detached from the attempt. Either total is reported once,
+before the final flush, so it precedes the terminal report.
+
+Agent stderr was discarded, so stream cuts, panics and OOMs looked alike. The workload
+hands it to the adapter (`execution.StderrStreamer`), which keeps the last 8 KiB from a
+line start and, when the attempt fails other than by cancellation, logs it at warn
+level with task and attempt after redacting the attempt's credentials, the agent's
+custom env values and credential-shaped text. It never reaches Multica. Session API
+and export helpers keep discarding theirs.
+
 ## Consequences
 
 Background checks finish inside their attempt, and their result reaches Multica with

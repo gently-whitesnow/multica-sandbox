@@ -27,6 +27,8 @@ const (
 	acpSetup      = 2 * time.Minute
 	cancelGrace   = 10 * time.Second
 	exportTimeout = 30 * time.Second
+	// usageTimeout bounds reading an unanswered turn's usage after the attempt ended.
+	usageTimeout = 15 * time.Second
 )
 
 // mcpSettle covers 2.x registering MCP tools after session/new or session/load answers: a
@@ -48,6 +50,7 @@ func (r *running) converse(ctx context.Context, stdin io.Writer, stdout io.Reade
 	conn.SetLogger(quiet)
 	stop := r.events.flushEvery(reportInterval)
 	defer stop()
+	defer r.reportSpent(ctx)
 	setup, cancel := context.WithTimeout(ctx, acpSetup)
 	defer cancel()
 	init, err := conn.Initialize(setup, acp.InitializeRequest{ProtocolVersion: acp.ProtocolVersionNumber, ClientCapabilities: acp.ClientCapabilities{}})
@@ -130,6 +133,7 @@ func (r *running) ask(ctx context.Context, conn *acp.ClientSideConnection, clien
 	defer end()
 	replied := make(chan answer, 1)
 	since := time.Now()
+	r.spent.session, r.spent.since = id, since
 	go func() {
 		response, err := conn.Prompt(turn, acp.PromptRequest{SessionId: id, Prompt: []acp.ContentBlock{acp.TextBlock(string(r.prompt))}})
 		replied <- answer{response, err}
@@ -151,13 +155,13 @@ func (r *running) ask(ctx context.Context, conn *acp.ClientSideConnection, clien
 		return r.failure(ctx, conn, a.err)
 	}
 	usage := r.turnUsage(ctx, id, since, a.response.Usage)
+	r.spent.usage, r.spent.answered = usage, true
 	// A turn that left shells running has produced a tool call; it ends with them.
 	if a.response.StopReason == acp.StopReasonEndTurn && r.v2 && client.waiting() > 0 {
 		resumed, err := r.follow(ctx, client, id, since, time.Now())
-		r.events.reportUsage(addUsage(usage, resumed))
+		r.spent.usage = addUsage(usage, resumed)
 		return err
 	}
-	r.events.reportUsage(usage)
 	switch a.response.StopReason {
 	case acp.StopReasonEndTurn:
 		if !client.produced() && usage == (multica.Usage{}) {
@@ -252,6 +256,13 @@ func (r *running) turnUsage(ctx context.Context, id acp.SessionId, since time.Ti
 	if r.v2 {
 		return u
 	}
+	if exported, err := r.exportedUsage(ctx, id, since); err == nil {
+		return exported
+	}
+	return u
+}
+
+func (r *running) exportedUsage(ctx context.Context, id acp.SessionId, since time.Time) (multica.Usage, error) {
 	exportCtx, cancel := context.WithTimeout(ctx, exportTimeout)
 	defer cancel()
 	var exported multica.Usage
@@ -260,8 +271,46 @@ func (r *running) turnUsage(ctx context.Context, id acp.SessionId, since time.Ti
 		exported, err = exportUsage(stdout, since.UnixMilli())
 		return err
 	})
-	if err == nil {
-		return exported
+	return exported, err
+}
+
+// spentUsage is the turn's usage: the prompt answer's with its resumed turns, else
+// what the session store recorded before the turn failed unanswered.
+type spentUsage struct {
+	session  acp.SessionId
+	since    time.Time
+	usage    multica.Usage
+	answered bool
+}
+
+// reportSpent reports the turn's usage once on any path, before the final flush, like
+// the native daemon; the store is read with a short context detached from the attempt.
+func (r *running) reportSpent(ctx context.Context) {
+	s := r.spent
+	if !s.answered && s.session != "" {
+		read, cancel := context.WithTimeout(context.WithoutCancel(ctx), usageTimeout)
+		defer cancel()
+		s.usage = r.storedUsage(read, s.session, s.since)
+	}
+	r.events.reportUsage(s.usage)
+}
+
+// storedUsage sums the turn's assistant messages: through the session API on 2.x, else
+// from the export. Steps still running have no tokens yet.
+func (r *running) storedUsage(ctx context.Context, id acp.SessionId, since time.Time) multica.Usage {
+	if !r.v2 {
+		u, _ := r.exportedUsage(ctx, id, since)
+		return u
+	}
+	var u multica.Usage
+	messages, err := r.nativeMessages(ctx, id, since.UnixMilli())
+	if err != nil {
+		return u
+	}
+	for _, m := range messages {
+		if m.Type == "assistant" {
+			u = addUsage(u, m.usage())
+		}
 	}
 	return u
 }

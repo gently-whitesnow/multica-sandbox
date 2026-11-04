@@ -126,6 +126,8 @@ type running struct {
 	workDir, resume, retired string
 	// skills are the claim's skill files under SkillsDir, upstream tasks only (ADR 0017).
 	skills map[string][]byte
+	stderr stderrTail
+	spent  spentUsage
 }
 
 // attemptLease bounds an authority lease and how long renewal rides out transient
@@ -421,7 +423,7 @@ func (r *running) loop(ctx context.Context) {
 	}
 	agent := make(chan error, 1)
 	go func() {
-		agent <- r.workload.Stream(ctx, command, r.environment(), func(stdin io.Writer, stdout io.Reader) error {
+		agent <- r.streamAgent(ctx, command, func(stdin io.Writer, stdout io.Reader) error {
 			return r.converse(ctx, stdin, stdout)
 		})
 	}()
@@ -462,6 +464,7 @@ loop:
 	if !agentDone {
 		<-agent
 	}
+	r.logStderr(err)
 	r.done <- err
 }
 

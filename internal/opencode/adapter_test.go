@@ -113,8 +113,10 @@ type stubWorkload struct {
 	// capture answers bounded Capture and streamed exports; captured records their argv.
 	capture  []byte
 	captured []string
-	// api answers `opencode api` by request path.
+	// api answers `opencode api` by request path; nil fails the read.
 	api func(path string) string
+	// stderr is what the agent writes to stderr.
+	stderr string
 	// refuse fails Start like a backend that created nothing.
 	refuse error
 }
@@ -346,6 +348,9 @@ func (s *stubWorkload) Stream(ctx context.Context, args []string, env map[string
 		return converse(io.Discard, strings.NewReader(string(s.capture)))
 	}
 	if len(args) > 1 && args[0] == "opencode" && args[1] == "api" {
+		if s.api == nil {
+			return errors.New("session API unavailable")
+		}
 		return converse(io.Discard, strings.NewReader(s.api(args[len(args)-1])))
 	}
 	if s.agent == nil {
@@ -374,6 +379,11 @@ func (s *stubWorkload) Stream(ctx context.Context, args []string, env map[string
 	_ = inW.Close()
 	<-served
 	return err
+}
+
+func (s *stubWorkload) StreamStderr(ctx context.Context, args []string, env map[string]string, stderr io.Writer, converse func(io.Writer, io.Reader) error) error {
+	_, _ = io.WriteString(stderr, s.stderr)
+	return s.Stream(ctx, args, env, converse)
 }
 
 // sentPrompt keys the prompt the fake agent received in stubWorkload.files.
@@ -450,5 +460,32 @@ func TestMCPWithoutAuthority(t *testing.T) {
 	a.Issuer = nil
 	if _, err = a.Start(context.Background(), safeTask()); err == nil {
 		t.Fatal("MCP without identity accepted")
+	}
+}
+
+func TestIdleWatchdogReportsSpentUsageOnce(t *testing.T) {
+	reads := 0
+	reporter := &reportStub{}
+	updates := []map[string]any{{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": "thinking aloud"}}}
+	workload := &stubWorkload{agent: &fakeAgent{version: "2.2.5", updates: updates}, api: turnStore(&reads)}
+	a := Adapter{Server: "https://multica.example.invalid", Controller: "controller", Issuer: &stubIssuer{}, MCPRelay: NewMCPRelay(), Authority: &stubAuthority{}, Workloads: workload, Status: stubStatus{}, Reporter: reporter, IdleWatchdog: 100 * time.Millisecond}
+	run, err := a.Start(context.Background(), safeTask())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer run.Remove(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	var idle *execution.IdleError
+	if err := run.Wait(ctx); !errors.As(err, &idle) {
+		t.Fatalf("silent agent: %v", err)
+	}
+	reporter.mu.Lock()
+	defer reporter.mu.Unlock()
+	if len(reporter.usage) != 1 || reporter.usage[0].Input != 7 || reporter.usage[0].Output != 3 || reads != 1 {
+		t.Fatalf("usage %+v after %d reads", reporter.usage, reads)
+	}
+	if got := run.Result().Telemetry; got.InputTokens != 7 || got.OutputTokens != 3 {
+		t.Fatalf("telemetry %+v", got)
 	}
 }

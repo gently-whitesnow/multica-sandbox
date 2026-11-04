@@ -587,8 +587,16 @@ func reconcileNetworks(ctx context.Context, owner string) error {
 // exitGrace bounds the agent's exit after its stdin closes.
 const exitGrace = 10 * time.Second
 
+var _ execution.StderrStreamer = (*projectedRun)(nil)
+
 // Stream keeps native stdout out of diagnostics and bounds it in the adapter.
 func (r *projectedRun) Stream(ctx context.Context, args []string, env map[string]string, converse func(io.Writer, io.Reader) error) error {
+	return r.StreamStderr(ctx, args, env, nil, converse)
+}
+
+// StreamStderr is Stream with the agent's stderr, also the exec client's, written to
+// stderr, which must not fail; nil discards it.
+func (r *projectedRun) StreamStderr(ctx context.Context, args []string, env map[string]string, stderr io.Writer, converse func(io.Writer, io.Reader) error) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -613,6 +621,7 @@ func (r *projectedRun) Stream(ctx context.Context, args []string, env map[string
 	if err != nil {
 		return fmt.Errorf("agent output pipe failed")
 	}
+	cmd.Stderr = stderr
 	if err = cmd.Start(); err != nil {
 		return fmt.Errorf("agent execution failed")
 	}

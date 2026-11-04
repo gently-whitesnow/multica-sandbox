@@ -68,6 +68,12 @@ type ProjectedRun interface {
 	Workdir() (string, bool)
 }
 
+// StderrStreamer is a ProjectedRun that also hands the adapter the agent's stderr;
+// the adapter bounds and redacts it and logs it only for failed attempts.
+type StderrStreamer interface {
+	StreamStderr(context.Context, []string, map[string]string, io.Writer, func(io.Writer, io.Reader) error) error
+}
+
 // RejectedError is safe to report as a task failure: no execution resources remain.
 type RejectedError struct{ Err error }
 

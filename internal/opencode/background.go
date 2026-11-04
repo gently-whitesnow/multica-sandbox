@@ -258,6 +258,10 @@ func (s *eventStream) native(client *acpClient, m nativeMessage) multica.Usage {
 			client.mu.Unlock()
 		}
 	}
+	return m.usage()
+}
+
+func (m nativeMessage) usage() multica.Usage {
 	if m.Tokens == nil {
 		return multica.Usage{}
 	}

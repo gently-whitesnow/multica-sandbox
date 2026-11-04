@@ -153,6 +153,13 @@ cp "$TMPDIR/run" /tmp/run; ! /tmp/run; df -k /workspace | awk 'NR==2 { exit !($2
 	}); err != nil || echoed != "ping\n" {
 		t.Fatalf("stream stdin not delivered: %q %v", echoed, err)
 	}
+	var stderr strings.Builder
+	if err := a.(execution.StderrStreamer).StreamStderr(ctx, []string{"/bin/sh", "-c", "echo out; echo fatal >&2"}, nil, &stderr, func(_ io.Writer, r io.Reader) error {
+		_, err := io.Copy(io.Discard, r)
+		return err
+	}); err != nil || stderr.String() != "fatal\n" {
+		t.Fatalf("agent stderr not delivered: %q %v", stderr.String(), err)
+	}
 	if err := a.Stream(ctx, []string{"true"}, map[string]string{"BAD=NAME": "x"}, func(io.Writer, io.Reader) error { return nil }); err == nil {
 		t.Fatal("invalid environment name accepted")
 	}

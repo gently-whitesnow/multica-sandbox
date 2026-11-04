@@ -433,3 +433,66 @@ func TestRunningToolBoundsSilenceByToolBudget(t *testing.T) {
 		t.Fatal("idle window did not apply without a running tool")
 	}
 }
+
+// turnStore answers the session API with one turn step and one older step.
+func turnStore(reads *int) func(string) string {
+	return func(string) string {
+		*reads++
+		data, _ := json.Marshal(map[string]any{"data": []map[string]any{
+			{"id": "msg_step", "type": "assistant", "time": at(time.Now().Add(time.Hour)), "tokens": map[string]any{"input": 7, "output": 2, "reasoning": 1, "cache": map[string]any{"read": 4}}},
+			{"id": "msg_old", "type": "assistant", "time": at(time.Now().Add(-time.Hour)), "tokens": map[string]any{"input": 100, "output": 100}},
+		}, "cursor": map[string]any{}})
+		return string(data)
+	}
+}
+
+func TestACPUsageIsReportedOnceOnEveryPath(t *testing.T) {
+	text := []map[string]any{{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": "partial"}}}
+	stored := multica.Usage{Input: 7, Output: 3, CacheRead: 4}
+	for name, c := range map[string]struct {
+		agent  *fakeAgent
+		cancel bool
+		want   multica.Usage
+		reads  int
+	}{
+		"answered":   {&fakeAgent{updates: text, stop: "end_turn", usage: map[string]any{"inputTokens": 30, "outputTokens": 9}}, false, multica.Usage{Input: 30, Output: 9}, 0},
+		"stream end": {&fakeAgent{updates: text, hangup: true}, false, stored, 1},
+		"error":      {&fakeAgent{updates: text, fail: map[string]any{"errorName": "APIError"}}, false, stored, 1},
+		"cancel":     {&fakeAgent{updates: text, prompted: make(chan string, 1)}, true, stored, 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c.agent.version = "2.2.5"
+			reads := 0
+			reporter := &reportStub{}
+			r := &running{events: &eventStream{reporter: reporter}, workload: &stubWorkload{api: turnStore(&reads)}}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if c.cancel {
+				go func() { <-c.agent.prompted; cancel() }()
+			}
+			_ = turnWith(t, ctx, c.agent, r)
+			if len(reporter.usage) != 1 || reads != c.reads {
+				t.Fatalf("usage %+v after %d store reads", reporter.usage, reads)
+			}
+			if got := reporter.usage[0]; got.Input != c.want.Input || got.Output != c.want.Output || got.CacheRead != c.want.CacheRead || got.Provider != "opencode" {
+				t.Fatalf("usage %+v, want %+v", got, c.want)
+			}
+			if _, _, u := r.events.result(); u.Input != c.want.Input {
+				t.Fatalf("telemetry usage %+v", u)
+			}
+		})
+	}
+}
+
+func TestACPVersionOneUnansweredUsageComesFromExport(t *testing.T) {
+	export := `{"messages":[{"info":{"role":"assistant","time":{"created":9999999999999},"tokens":{"input":11,"output":5}}}]}`
+	reporter := &reportStub{}
+	workload := &stubWorkload{capture: []byte(export)}
+	agent := &fakeAgent{version: "1.18.35", updates: toolUpdates(), hangup: true}
+	if err := turnWith(t, context.Background(), agent, &running{events: &eventStream{reporter: reporter}, workload: workload}); !errors.Is(err, streamCut) {
+		t.Fatalf("stream end: %v", err)
+	}
+	if len(reporter.usage) != 1 || reporter.usage[0].Input != 11 || reporter.usage[0].Output != 5 {
+		t.Fatalf("usage %+v", reporter.usage)
+	}
+}
