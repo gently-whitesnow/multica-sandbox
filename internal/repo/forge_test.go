@@ -274,9 +274,9 @@ func TestForgeRelaysGlabToGitLab(t *testing.T) {
 	}{
 		"encoded traversal":     {"gitlab.example.test", "GET", "/api/v4/projects/team%2F..%2Fother", token(env["GITLAB_TOKEN"]), http.StatusForbidden},
 		"encoded dot":           {"gitlab.example.test", "GET", "/api/v4/projects/%2e%2e", token(env["GITLAB_TOKEN"]), http.StatusForbidden},
-		"not an API path":       {"gitlab.example.test", "GET", "/team/fixture.git/info/refs", token(env["GITLAB_TOKEN"]), http.StatusUnauthorized},
+		"not an API path":       {"gitlab.example.test", "GET", "/team/fixture.git/info/refs", token(env["GITLAB_TOKEN"]), http.StatusForbidden},
 		"two credentials":       {"gitlab.example.test", "GET", "/api/v4/user", http.Header{"Private-Token": {env["GITLAB_TOKEN"]}, "Authorization": {"Bearer " + env["GITLAB_TOKEN"]}}, http.StatusUnauthorized},
-		"other workspace token": {"gitlab.example.test", "GET", "/api/v4/user", token(bearer["GITLAB_TOKEN"]), http.StatusUnauthorized},
+		"other workspace token": {"gitlab.example.test", "GET", "/api/v4/user", token(bearer["GITLAB_TOKEN"]), http.StatusForbidden},
 		"job token":             {"gitlab.example.test", "GET", "/api/v4/user", http.Header{"Job-Token": {env["GITLAB_TOKEN"]}}, http.StatusUnauthorized},
 	} {
 		if code := call(c.host, c.method, c.target, c.header, ""); code != c.want {

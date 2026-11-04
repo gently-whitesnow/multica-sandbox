@@ -44,7 +44,7 @@ func (f *dynamicMCPFixture) run(ctx context.Context, adapter *opencode.Adapter, 
 			f.Unlock()
 			err = dynamicRelayStatus(ctx, grant, "/anonymous?override=must-not-forward", 405)
 			if err == nil {
-				err = dynamicRelayStatus(ctx, grant, "/not-selected", 401)
+				err = dynamicRelayStatus(ctx, grant, "/not-selected", 403)
 			}
 		}
 		close(f.release)

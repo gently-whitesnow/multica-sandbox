@@ -13,6 +13,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/gently-whitesnow/multica-sandbox/internal/relay"
 )
 
 // Config binds Git hosts to workspace-scoped credentials. Files are reread per request,
@@ -169,7 +171,7 @@ type upstreamAPI struct {
 
 // api resolves the workspace's forge API by the name the CLI called, with its credential:
 // "token" for GitHub as gh sends it, PRIVATE-TOKEN or a bearer for GitLab.
-func (h *Hosts) api(workspace, name string) (upstreamAPI, bool) {
+func (h *Hosts) api(workspace, name string) (upstreamAPI, error) {
 	for _, host := range h.apiHosts(workspace, "") {
 		if APIName(host) == name {
 			b := h.bindings[[2]string{workspace, host}]
@@ -181,10 +183,13 @@ func (h *Hosts) api(workspace, name string) (upstreamAPI, bool) {
 			case b.forge == GitLab:
 				out.header, out.auth = "Private-Token", password
 			}
-			return out, ok
+			if !ok {
+				return upstreamAPI{}, relay.ErrUpstreamCredential
+			}
+			return out, nil
 		}
 	}
-	return upstreamAPI{}, false
+	return upstreamAPI{}, relay.ErrPolicy
 }
 
 // gitHosts lists the workspace's bound Git hosts, sorted.
@@ -266,19 +271,19 @@ func plain(s string) bool {
 }
 
 // resolve returns the upstream origin and the Authorization value, empty for anonymous hosts.
-func (h *Hosts) resolve(workspace, host string) (*url.URL, string, bool) {
+func (h *Hosts) resolve(workspace, host string) (*url.URL, string, error) {
 	b, ok := h.bindings[[2]string{workspace, host}]
 	if !ok {
-		return nil, "", false
+		return nil, "", relay.ErrPolicy
 	}
 	if b.password == "" {
-		return b.origin, "", true
+		return b.origin, "", nil
 	}
 	password, ok := secret(b.password)
 	if !ok {
-		return nil, "", false
+		return nil, "", relay.ErrUpstreamCredential
 	}
-	return b.origin, "Basic " + basic(b.username, password), true
+	return b.origin, "Basic " + basic(b.username, password), nil
 }
 
 // secret rereads a password file, so external issuers can rotate it.

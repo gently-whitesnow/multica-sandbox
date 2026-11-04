@@ -205,7 +205,7 @@ type fakeAuth string
 
 func (a fakeAuth) Authorize(r *http.Request) (relay.Lease, bool) {
 	if r.Header.Get("Authorization") == "Bearer busy" {
-		return relay.Lease{Busy: true}, false
+		return relay.Lease{Refused: relay.ErrBusy}, false
 	}
 	if r.Header.Get("Authorization") != "Bearer "+string(a) {
 		return relay.Lease{}, false

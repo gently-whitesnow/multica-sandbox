@@ -23,7 +23,9 @@ func TestPathCredentialTransportFailureNeverRecordsSecretURL(t *testing.T) {
 	var recorded string
 	var outcome error
 	proxy, err := New(fixedLease{lease}, Policy{Allow: func(string) bool { return true }, Limit: 1024,
-		Record: func(req *http.Request, _ int, err error, _ time.Duration) { recorded, outcome = req.URL.String(), err }})
+		Record: func(req *http.Request, _ string, _ int, err error, _ time.Duration) {
+			recorded, outcome = req.URL.String(), err
+		}})
 	if err != nil {
 		t.Fatal(err)
 	}

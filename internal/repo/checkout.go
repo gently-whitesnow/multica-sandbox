@@ -174,7 +174,7 @@ func (c *Checkout) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	lease, ok := c.Auth.Authorize(r)
-	if !ok && lease.Busy {
+	if !ok && lease.Refused == relay.ErrBusy {
 		w.Header().Set("Retry-After", "1")
 		http.Error(w, "too many concurrent requests", http.StatusTooManyRequests)
 		return

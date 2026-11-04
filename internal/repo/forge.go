@@ -123,10 +123,16 @@ func (f *Forge) Authorize(r *http.Request) (relay.Lease, bool) {
 		return lease, false
 	}
 	workspace, granted := f.relay.workspace(lease.Attempt)
-	api, resolved := f.relay.hosts.api(workspace, name)
-	if !granted || !resolved || strings.ToLower(r.Host) != name || (name != "api.github.com" && !strings.HasPrefix(r.URL.Path, "/api/")) {
+	api, err := f.relay.hosts.api(workspace, name)
+	if strings.ToLower(r.Host) != name || (name != "api.github.com" && !strings.HasPrefix(r.URL.Path, "/api/")) {
+		err = relay.ErrPolicy
+	}
+	if !granted || err != nil {
 		lease.Release()
-		return relay.Lease{}, false
+		if !granted {
+			return relay.Lease{}, false
+		}
+		return relay.Lease{Attempt: lease.Attempt, Refused: err}, false
 	}
 	if api.forge == GitLab && rotatesToken(r.URL.Path) {
 		// Without an origin the relay answers 403.

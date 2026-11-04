@@ -181,10 +181,17 @@ func (g *Relay) Authorize(r *http.Request) (relay.Lease, bool) {
 	} else if r.Method != http.MethodPost || r.URL.RawQuery != "" {
 		service = ""
 	}
-	origin, authorization, resolved := g.hosts.resolve(a.workspace, host)
-	if !granted || (service != "git-upload-pack" && service != "git-receive-pack") || !resolved {
+	origin, authorization, err := g.hosts.resolve(a.workspace, host)
+	if service != "git-upload-pack" && service != "git-receive-pack" {
+		err = relay.ErrPolicy
+	}
+	if !granted || err != nil {
+		// A revoked attempt's credential is invalid; a live grant's request is refused.
 		lease.Release()
-		return relay.Lease{}, false
+		if !granted {
+			return relay.Lease{}, false
+		}
+		return relay.Lease{Attempt: lease.Attempt, Refused: err}, false
 	}
 	lease.Origin, lease.Path, lease.Authorization = origin, r.URL.Path, authorization
 	return lease, true
