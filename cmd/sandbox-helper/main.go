@@ -25,6 +25,8 @@ func main() {
 		err = report(os.Stdout, os.Args[2], os.Args[1] == "prune")
 	case len(os.Args) == 3 && os.Args[1] == "dind-wait":
 		err = dindWait(os.Args[2])
+	case len(os.Args) >= 3 && os.Args[1] == "drop":
+		err = drop(os.Stdout, os.Args[2], os.Args[3:])
 	case len(os.Args) >= 4 && len(os.Args)%2 == 0 && os.Args[1] == "forward":
 		errs := make(chan error, len(os.Args))
 		for i := 2; i < len(os.Args); i += 2 {
@@ -32,7 +34,7 @@ func main() {
 		}
 		err = <-errs
 	default:
-		err = fmt.Errorf("usage: sandbox-helper init DIR | forward LISTEN TARGET [LISTEN TARGET]... | dind [FLAG]... | dind-wait TIMEOUT | prune DIR | du DIR")
+		err = fmt.Errorf("usage: sandbox-helper init DIR | forward LISTEN TARGET [LISTEN TARGET]... | dind [FLAG]... | dind-wait TIMEOUT | prune DIR | du DIR | drop DIR [MIRROR]...")
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

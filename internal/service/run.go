@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/gently-whitesnow/multica-sandbox/internal/execution"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -147,8 +148,9 @@ func newOpenCodeAdapter(ctx context.Context, c Config, stateDir string, api *mul
 		workloads.Sessions = &docker.Sessions{Dir: filepath.Join(stateDir, "sessions"), TTL: ttl, Max: s.Max, Interval: interval, Grace: grace,
 			Helper: c.OpenCode.Helper, ArtifactAge: age, Budget: budget,
 			Reclaimed: func(r docker.Reclaim) {
-				log.Info("session volumes reclaimed", "trigger", r.Trigger, "removed", r.Removed, "pruned", r.Pruned, "pruned_bytes", r.Artifacts, "freed_bytes", r.Freed)
-				c.metrics.Sessions(r.Trigger, r.Removed, r.Artifacts)
+				log.Info("session volumes reclaimed", "trigger", r.Trigger, "removed", r.Removed, "pruned", r.Pruned, "pruned_bytes", r.Artifacts,
+					"mirrors_removed", r.Mirrors, "mirror_bytes", r.MirrorBytes, "freed_bytes", r.Freed)
+				c.metrics.Sessions(r.Trigger, r.Removed, r.Artifacts, r.Mirrors, r.MirrorBytes)
 			},
 			Closed: func(ctx context.Context, workspace string, issues []string) map[string]time.Time {
 				// A failed check keeps the volumes (fail safe), as upstream GC skips them.
@@ -175,6 +177,9 @@ func newOpenCodeAdapter(ctx context.Context, c Config, stateDir string, api *mul
 	git := c.OpenCode.GitRelay != nil
 	if c.OpenCode.ForgeRelay != nil && !git {
 		return nil, nil, fmt.Errorf("forge_relay requires git_relay")
+	}
+	if c.OpenCode.Mirrors != nil && !git {
+		return nil, nil, fmt.Errorf("mirrors require git_relay")
 	}
 	if git != (c.OpenCode.GitFile != "") || (git && c.OpenCode.Helper == "") || (c.OpenCode.Helper != "" && c.OpenCode.MulticaRelay == nil) {
 		return nil, nil, fmt.Errorf("git_relay and git_file require each other and the helper; the helper requires multica_relay")
@@ -250,6 +255,12 @@ func newOpenCodeAdapter(ctx context.Context, c Config, stateDir string, api *mul
 			}
 			// The upstream CLI authenticates checkout with its Multica relay credential.
 			adapter.Checkout = &repo.Checkout{Auth: grants, Hosts: hosts, Settings: api, Git: adapter.GitRelay}
+			if c.OpenCode.Mirrors != nil {
+				if workloads.Mirrors, err = referenceMirrors(*c.OpenCode.Mirrors, stateDir, workloads, adapter.GitRelay, log); err != nil {
+					return nil, nil, err
+				}
+				adapter.Checkout.Mirrors = workloads.Mirrors
+			}
 			routes = map[string]http.Handler{"/repo/checkout": adapter.Checkout}
 		}
 		if err = c.serveRelay(ctx, "Multica", grants, *c.OpenCode.MulticaRelay, relay.Policy{Allow: multica.RelayPath}, routes, nil); err != nil {
@@ -270,6 +281,29 @@ func newOpenCodeAdapter(ctx context.Context, c Config, stateDir string, api *mul
 		go workloads.Sessions.Sweep(ctx, c.Daemon, func(err error) { log.Warn("session sweep failed", "error", err.Error()) })
 	}
 	return adapter, workloads, nil
+}
+
+// referenceMirrors configures reference mirrors, which the session sweep collects; their
+// state records last use and sizes. No new mirror starts below the claim pause watermark.
+func referenceMirrors(c MirrorsConfig, stateDir string, workloads *docker.Projected, git docker.MirrorGrants, log *slog.Logger) (*docker.Mirrors, error) {
+	sessions := workloads.Sessions
+	if sessions == nil {
+		return nil, fmt.Errorf("mirrors require sessions, whose sweep collects them")
+	}
+	refresh, err := optionalDuration(c.Refresh, 15*time.Minute)
+	wait, waitErr := optionalDuration(c.Wait, 2*time.Minute)
+	timeout, timeoutErr := optionalDuration(c.Timeout, 10*time.Minute)
+	ttl, ttlErr := optionalDuration(c.TTL, 720*time.Hour)
+	if err = errors.Join(err, waitErr, timeoutErr, ttlErr); err != nil || wait >= repo.CheckoutTimeout || timeout < wait || ttl <= timeout {
+		return nil, fmt.Errorf("mirrors require positive durations, wait below the checkout limit, timeout at least wait and ttl above it")
+	}
+	m := &docker.Mirrors{Workloads: workloads, Git: git, Dir: filepath.Join(stateDir, "mirrors"), Refresh: refresh, Wait: wait, Timeout: timeout, TTL: ttl,
+		Report: func(err error) { log.Warn("reference mirror failed", "error", err.Error()) }}
+	if disk := sessions.Disk; disk != nil {
+		m.Low = func() bool { d, err := disk(); return err == nil && d.Total > 0 && pool.DiskLow(d) }
+	}
+	sessions.Mirrors = m
+	return m, os.MkdirAll(m.Dir, 0700)
 }
 
 // attemptWorkloads builds the Docker backend of attempts: runtime, resources and pool.

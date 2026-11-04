@@ -160,3 +160,63 @@ func TestAcceptOnlyLoopbackForgeHosts(t *testing.T) {
 		}
 	}
 }
+
+func TestAcceptOnlyReadOnlyMirrorVolume(t *testing.T) {
+	cli := Bundle{Image: "example.invalid/cli@sha256:" + strings.Repeat("a", 64), Target: "/opt/multica-sandbox/multica"}
+	path := cli.Target + "/bin:/usr/bin:/bin"
+	const volume, mirror = "multica-sandbox-0123-work", "multica-sandbox-mirror-0123"
+	check := func(change func(c, host map[string]any), want expected) error {
+		var fixture []map[string]any
+		if err := json.Unmarshal([]byte(safePolicy), &fixture); err != nil {
+			t.Fatal(err)
+		}
+		c := fixture[0]
+		host := c["HostConfig"].(map[string]any)
+		c["Config"].(map[string]any)["Env"] = []string{"PATH=" + path}
+		host["Mounts"] = []any{map[string]any{"Type": "image", "Source": cli.Image, "Target": cli.Target},
+			map[string]any{"Type": "volume", "Source": volume, "Target": repo.WorkDir, "VolumeOptions": map[string]any{"NoCopy": true}},
+			map[string]any{"Type": "volume", "Source": mirror, "Target": repo.MirrorDir, "ReadOnly": true, "VolumeOptions": map[string]any{"NoCopy": true}}}
+		c["Mounts"] = []any{map[string]any{"Type": "image", "Name": cli.Image, "Destination": cli.Target, "RW": false},
+			map[string]any{"Type": "volume", "Name": volume, "Destination": repo.WorkDir, "RW": true},
+			map[string]any{"Type": "volume", "Name": mirror, "Destination": repo.MirrorDir, "RW": false}}
+		if change != nil {
+			change(c, host)
+		}
+		data, _ := json.Marshal(fixture)
+		return checkExpectedPolicy(data, want)
+	}
+	want := expected{network: "none", limits: probeResources, bundles: []Bundle{cli}, path: path, volume: volume, mirror: mirror}
+	if err := check(nil, want); err != nil {
+		t.Fatal(err)
+	}
+	withoutMirror := want
+	withoutMirror.mirror = ""
+	if check(nil, withoutMirror) == nil {
+		t.Fatal("unexpected mirror volume accepted")
+	}
+	for name, change := range map[string]func(c, host map[string]any){
+		"writable": func(c, host map[string]any) {
+			c["Mounts"].([]any)[2].(map[string]any)["RW"] = true
+			delete(host["Mounts"].([]any)[2].(map[string]any), "ReadOnly")
+		},
+		"rw inspect": func(c, _ map[string]any) { c["Mounts"].([]any)[2].(map[string]any)["RW"] = true },
+		"other": func(_, host map[string]any) {
+			host["Mounts"].([]any)[2].(map[string]any)["Source"] = "multica-sandbox-mirror-4567"
+		},
+		"target": func(c, _ map[string]any) {
+			c["Mounts"].([]any)[2].(map[string]any)["Destination"] = repo.WorkDir + "/mirrors"
+		},
+		"subpath": func(_, host map[string]any) {
+			host["Mounts"].([]any)[2].(map[string]any)["VolumeOptions"].(map[string]any)["Subpath"] = "x"
+		},
+		"missing": func(c, host map[string]any) {
+			c["Mounts"], host["Mounts"] = c["Mounts"].([]any)[:2], host["Mounts"].([]any)[:2]
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if check(change, want) == nil {
+				t.Fatal("unexpected mirror volume accepted")
+			}
+		})
+	}
+}

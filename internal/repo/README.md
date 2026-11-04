@@ -39,7 +39,8 @@ Add these to `opencode` (`deploy/opencode.example.json`). They require `multica_
     `agent@multica-sandbox.invalid`.
 
 The agent image must contain `git`; startup checks it. Official-base users add it with
-`FROM`, as `examples/agent-image/debian.Dockerfile` already does.
+`FROM`, as `examples/agent-image/debian.Dockerfile` already does. With `mirrors`, new
+checkouts borrow objects from read-only per-workspace mirrors (ADR 0035).
 
 ## Behavior
 

@@ -37,6 +37,12 @@
     "max": 64,
     "artifact_age": "12h"
   },
+  "mirrors": {
+    "refresh": "15m",
+    "wait": "2m",
+    "timeout": "10m",
+    "ttl": "720h"
+  },
   "resources": {
     "cpus": 2,
     "memory": "4g",

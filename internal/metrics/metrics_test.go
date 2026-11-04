@@ -40,8 +40,8 @@ func TestExportedContract(t *testing.T) {
 	m.Paused(true, "pressure")
 	m.Draining(true)
 	m.Workspaces(2)
-	m.Sessions("pressure", 2, 3<<30)
-	m.Sessions("workspace-id", 1, 0)
+	m.Sessions("pressure", 2, 3<<30, 1, 1<<30)
+	m.Sessions("workspace-id", 1, 0, 0, 0)
 
 	families := scrape(t, m)
 	want := map[string][][]string{
@@ -61,6 +61,8 @@ func TestExportedContract(t *testing.T) {
 		"sandbox_build_info":                       {{"revision", "version"}},
 		"sandbox_sessions_removed_total":           {{"trigger"}},
 		"sandbox_sessions_pruned_bytes_total":      {{"trigger"}},
+		"sandbox_mirrors_removed_total":            {{"trigger"}},
+		"sandbox_mirrors_freed_bytes_total":        {{"trigger"}},
 	}
 	for name, labelSets := range want {
 		family, ok := families[name]
@@ -112,6 +114,8 @@ func TestExportedContract(t *testing.T) {
 		`sandbox_sessions_removed_total{trigger="pressure"} 2`,
 		`sandbox_sessions_removed_total{trigger="other"} 1`,
 		`sandbox_sessions_pruned_bytes_total{trigger="pressure"} 3.221225472e+09`,
+		`sandbox_mirrors_removed_total{trigger="pressure"} 1`,
+		`sandbox_mirrors_freed_bytes_total{trigger="pressure"} 1.073741824e+09`,
 	} {
 		if !strings.Contains(text, line) {
 			t.Errorf("exposition lacks %s", line)
@@ -150,7 +154,7 @@ func TestNilRecordsNothing(t *testing.T) {
 	m.Paused(true, "pressure")
 	m.Draining(true)
 	m.Workspaces(1)
-	m.Sessions("age", 1, 1)
+	m.Sessions("age", 1, 1, 0, 0)
 }
 
 func TestServeExposesOnlyThePath(t *testing.T) {
