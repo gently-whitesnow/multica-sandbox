@@ -10,6 +10,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -39,6 +40,8 @@ type fakeAgent struct {
 	failCode int
 	// prompted receives the prompt text once it arrives.
 	prompted chan string
+	// pause delays the prompt answer after the updates.
+	pause time.Duration
 
 	mu      sync.Mutex
 	methods []string
@@ -119,6 +122,7 @@ func (f *fakeAgent) serve(out io.WriteCloser, in io.Reader) {
 					}
 					update(session, plain)
 				}
+				time.Sleep(f.pause)
 				switch {
 				case f.hangup:
 					out.Close()
@@ -140,6 +144,13 @@ func (f *fakeAgent) called(method string) (json.RawMessage, bool) {
 	defer f.mu.Unlock()
 	params, ok := f.params[method]
 	return params, ok
+}
+
+func (f *fakeAgent) calledAt(method string) (time.Time, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	t, ok := f.at[method]
+	return t, ok
 }
 
 // turnWith runs one adapter turn against the fake agent over in-memory pipes.
@@ -405,15 +416,83 @@ func TestToolOutputPreviewIsUTF8Safe(t *testing.T) {
 	}
 }
 
-func TestRunningToolPausesIdleWatchdog(t *testing.T) {
+func TestRunningToolBoundsSilenceByToolBudget(t *testing.T) {
 	var stream eventStream
 	stream.active.Store(time.Now().Add(-2 * time.Minute).UnixNano())
-	stream.running.Add(1)
-	if stream.idle(time.Minute) {
-		t.Fatal("watchdog fired while a tool runs")
+	for _, running := range []*atomic.Int64{&stream.running, &stream.background} {
+		running.Add(1)
+		if after, idle := stream.idle(time.Minute, time.Hour); idle || after != time.Hour {
+			t.Fatal("idle window applied while a tool or background shell runs")
+		}
+		if after, idle := stream.idle(time.Minute, 90*time.Second); !idle || after != 90*time.Second {
+			t.Fatal("tool budget did not bound a silent tool")
+		}
+		running.Add(-1)
 	}
-	stream.running.Add(-1)
-	if !stream.idle(time.Minute) {
-		t.Fatal("watchdog paused without a running tool")
+	if after, idle := stream.idle(time.Minute, time.Hour); !idle || after != time.Minute {
+		t.Fatal("idle window did not apply without a running tool")
+	}
+}
+
+// turnStore answers the session API with one turn step and one older step.
+func turnStore(reads *int) func(string) string {
+	return func(string) string {
+		*reads++
+		data, _ := json.Marshal(map[string]any{"data": []map[string]any{
+			{"id": "msg_step", "type": "assistant", "time": at(time.Now().Add(time.Hour)), "tokens": map[string]any{"input": 7, "output": 2, "reasoning": 1, "cache": map[string]any{"read": 4}}},
+			{"id": "msg_old", "type": "assistant", "time": at(time.Now().Add(-time.Hour)), "tokens": map[string]any{"input": 100, "output": 100}},
+		}, "cursor": map[string]any{}})
+		return string(data)
+	}
+}
+
+func TestACPUsageIsReportedOnceOnEveryPath(t *testing.T) {
+	text := []map[string]any{{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": "partial"}}}
+	stored := multica.Usage{Input: 7, Output: 3, CacheRead: 4}
+	for name, c := range map[string]struct {
+		agent  *fakeAgent
+		cancel bool
+		want   multica.Usage
+		reads  int
+	}{
+		"answered":   {&fakeAgent{updates: text, stop: "end_turn", usage: map[string]any{"inputTokens": 30, "outputTokens": 9}}, false, multica.Usage{Input: 30, Output: 9}, 0},
+		"stream end": {&fakeAgent{updates: text, hangup: true}, false, stored, 1},
+		"error":      {&fakeAgent{updates: text, fail: map[string]any{"errorName": "APIError"}}, false, stored, 1},
+		"cancel":     {&fakeAgent{updates: text, prompted: make(chan string, 1)}, true, stored, 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c.agent.version = "2.2.5"
+			reads := 0
+			reporter := &reportStub{}
+			r := &running{events: &eventStream{reporter: reporter}, workload: &stubWorkload{api: turnStore(&reads)}}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if c.cancel {
+				go func() { <-c.agent.prompted; cancel() }()
+			}
+			_ = turnWith(t, ctx, c.agent, r)
+			if len(reporter.usage) != 1 || reads != c.reads {
+				t.Fatalf("usage %+v after %d store reads", reporter.usage, reads)
+			}
+			if got := reporter.usage[0]; got.Input != c.want.Input || got.Output != c.want.Output || got.CacheRead != c.want.CacheRead || got.Provider != "opencode" {
+				t.Fatalf("usage %+v, want %+v", got, c.want)
+			}
+			if _, _, u := r.events.result(); u.Input != c.want.Input {
+				t.Fatalf("telemetry usage %+v", u)
+			}
+		})
+	}
+}
+
+func TestACPVersionOneUnansweredUsageComesFromExport(t *testing.T) {
+	export := `{"messages":[{"info":{"role":"assistant","time":{"created":9999999999999},"tokens":{"input":11,"output":5}}}]}`
+	reporter := &reportStub{}
+	workload := &stubWorkload{capture: []byte(export)}
+	agent := &fakeAgent{version: "1.18.35", updates: toolUpdates(), hangup: true}
+	if err := turnWith(t, context.Background(), agent, &running{events: &eventStream{reporter: reporter}, workload: workload}); !errors.Is(err, streamCut) {
+		t.Fatalf("stream end: %v", err)
+	}
+	if len(reporter.usage) != 1 || reporter.usage[0].Input != 11 || reporter.usage[0].Output != 5 {
+		t.Fatalf("usage %+v", reporter.usage)
 	}
 }

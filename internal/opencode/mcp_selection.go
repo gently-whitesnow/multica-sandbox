@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
@@ -49,40 +51,67 @@ func (r Remote) MarshalJSON() ([]byte, error) {
 func (r Remote) GoString() string           { return r.String() }
 func (r Remote) Format(f fmt.State, _ rune) { _, _ = io.WriteString(f, r.String()) }
 
+// maxMCPServers bounds the connections an attempt receives.
+const maxMCPServers = 16
+
 func Select(t multica.Task) (map[string]Remote, error) {
+	out, _, err := Selection(t)
+	return out, err
+}
+
+// Selection also names the servers left out: unsupported transports and features, broker
+// connections and servers beyond the limit, by name order. Malformed entries, credential
+// templates in URLs and invalid headers or IAM selection still deny the task.
+func Selection(t multica.Task) (map[string]Remote, []Skipped, error) {
 	if !t.ValidAttempt() || len(t.Agent.MCPConfig) > 65536 {
-		return nil, ErrDenied
+		return nil, nil, ErrDenied
 	}
-	if len(t.RemoteMCPConnections) != 0 {
-		return nil, fmt.Errorf("%w: broker MCP/OAuth connections are not supported; use an HTTP URL and headers", ErrDenied)
+	var skipped []Skipped
+	for i, raw := range t.RemoteMCPConnections {
+		var broker struct {
+			Key string `json:"contribution_key"`
+		}
+		name := fmt.Sprintf("remote-connection-%d", i+1)
+		if json.Unmarshal(raw, &broker) == nil && namePattern.MatchString(broker.Key) {
+			name = broker.Key
+		}
+		skipped = append(skipped, Skipped{name, "broker MCP connections are not supported"})
 	}
 	raw := bytes.TrimSpace(t.Agent.MCPConfig)
 	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
-		return map[string]Remote{}, nil
+		return map[string]Remote{}, skipped, nil
 	}
 	servers, err := mcpServers(raw)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	out := map[string]Remote{}
-	for name, data := range servers {
+	for _, name := range slices.Sorted(maps.Keys(servers)) {
 		if !namePattern.MatchString(name) {
-			return nil, fmt.Errorf("%w: invalid MCP server name", ErrDenied)
+			return nil, nil, fmt.Errorf("%w: invalid MCP server name", ErrDenied)
 		}
 		var connection mcpConnection
-		if bytes.Equal(bytes.TrimSpace(data), []byte("null")) || decodeMCP(data, &connection) != nil {
-			return nil, fmt.Errorf("%w: MCP server %q has an invalid configuration", ErrDenied, name)
+		if data := servers[name]; bytes.Equal(bytes.TrimSpace(data), []byte("null")) || decodeMCP(data, &connection) != nil {
+			return nil, nil, fmt.Errorf("%w: MCP server %q has an invalid configuration", ErrDenied, name)
 		}
 		if connection.Disabled || connection.Enabled != nil && !*connection.Enabled {
 			continue
 		}
+		if reason := unsupportedMCP(connection); reason != "" {
+			skipped = append(skipped, Skipped{name, reason})
+			continue
+		}
 		selected, err := selectMCP(name, connection)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
+		}
+		if len(out) == maxMCPServers {
+			skipped = append(skipped, Skipped{name, fmt.Sprintf("over the %d-server limit (the first %d by name are connected)", maxMCPServers, maxMCPServers)})
+			continue
 		}
 		out[name] = selected
 	}
-	return out, nil
+	return out, skipped, nil
 }
 
 func mcpServers(raw []byte) (map[string]json.RawMessage, error) {
@@ -98,29 +127,31 @@ func mcpServers(raw []byte) (map[string]json.RawMessage, error) {
 	if len(document.Native) > 0 {
 		entries = document.Native
 	}
-	if len(entries) > 0 && (json.Unmarshal(entries, &servers) != nil || servers == nil) || len(servers) > 16 {
-		return nil, fmt.Errorf("%w: invalid MCP server map or more than 16 servers", ErrDenied)
+	if len(entries) > 0 && (json.Unmarshal(entries, &servers) != nil || servers == nil) {
+		return nil, fmt.Errorf("%w: invalid MCP server map", ErrDenied)
 	}
 	return servers, nil
 }
 
-func selectMCP(name string, c mcpConnection) (Remote, error) {
-	unsupported := ""
+// unsupportedMCP names a transport or feature the relay cannot serve; such servers are
+// skipped, not connected.
+func unsupportedMCP(c mcpConnection) string {
 	switch {
 	case c.Type == "local" || c.Type == "stdio" || len(c.Command) > 0 || len(c.Args) > 0:
-		unsupported = "stdio MCP is not supported; use a remote HTTP MCP server"
+		return "stdio MCP is not supported; use a remote HTTP MCP server"
 	case len(c.OAuth) > 0 && !bytes.Equal(bytes.TrimSpace(c.OAuth), []byte("false")):
-		unsupported = "OAuth MCP is not supported; use an HTTP authorization header"
+		return "OAuth MCP is not supported; use an HTTP authorization header"
 	case len(c.Env) > 0 || len(c.Environment) > 0:
-		unsupported = "per-server ENV is not supported; reference agent ENV in HTTP headers with {env:NAME}"
+		return "per-server ENV is not supported; reference agent ENV in HTTP headers with {env:NAME}"
 	case len(c.Timeout) > 0:
-		unsupported = "per-server MCP timeout is not supported"
+		return "per-server MCP timeout is not supported"
 	case c.Type != "" && c.Type != "http" && c.Type != "remote" && c.Type != "streamable-http":
-		unsupported = "only streamable HTTP MCP is supported"
+		return "only streamable HTTP MCP is supported"
 	}
-	if unsupported != "" {
-		return Remote{}, fmt.Errorf("%w: MCP server %q: %s", ErrDenied, name, unsupported)
-	}
+	return ""
+}
+
+func selectMCP(name string, c mcpConnection) (Remote, error) {
 	decodedURL, _ := url.QueryUnescape(c.URL)
 	if strings.Contains(c.URL, "{env:") || strings.Contains(decodedURL, "{env:") || containsIAMTemplate(c.URL) || containsIAMTemplate(decodedURL) {
 		return Remote{}, fmt.Errorf("%w: MCP server %q URL cannot contain credential templates; use HTTP headers", ErrDenied, name)

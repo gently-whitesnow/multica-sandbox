@@ -71,6 +71,18 @@ using an independent bounded context and exit. Never rerun or requeue tasks loca
 start errors leave Multica recovery to the next invocation. Forced removal also
 reaps descendants and ephemeral state; unrelated owners are untouched.
 
+Refinement (2026-11-04). One host failure, typically `no space left on device`,
+restarted the controller and cancelled every running attempt, each spending one of
+Multica's attempts as `runtime_recovery`. A start failure after resources were
+created is now a transient rejection once its cleanup succeeded, and so are a
+refused, exhausted or unanswered-but-removed attempt network and a nested engine
+that did not become ready: Multica gets `runtime_recovery` and retries the task.
+Configuration, image and policy rejections stay `environment_prepare_failed`. Only
+a failed or uncertain cleanup (including a failed create whose container cannot be
+confirmed and removed) stays fatal: claims stop, the other attempts finish and
+report, then the controller exits for the restart that reconciles. Shutdown still
+cancels every attempt.
+
 ## Consequences
 
 An arbitrary test command can run offline, but this is not a production agent

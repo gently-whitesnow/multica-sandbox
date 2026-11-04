@@ -47,7 +47,7 @@ func TestSelectSkipsDisabledMCPServers(t *testing.T) {
 	}
 }
 
-func TestSelectUnsupportedMCPReportsFeatureWithoutCredentials(t *testing.T) {
+func TestSelectSkipsUnsupportedMCPWithoutCredentials(t *testing.T) {
 	for _, tc := range []struct {
 		entry, feature string
 	}{
@@ -55,13 +55,37 @@ func TestSelectUnsupportedMCPReportsFeatureWithoutCredentials(t *testing.T) {
 		{`{"type":"remote","url":"https://tools.example.invalid/mcp","oauth":{"clientSecret":"private-oauth"}}`, "OAuth"},
 		{`{"type":"remote","url":"https://tools.example.invalid/mcp","timeout":30000}`, "timeout"},
 		{`{"type":"remote","url":"https://tools.example.invalid/mcp","environment":{"TOKEN":"private-env"}}`, "ENV"},
+		{`{"type":"sse","url":"https://tools.example.invalid/mcp","headers":{"Authorization":"Bearer private-sse"}}`, "streamable HTTP"},
 	} {
 		task := safeTask()
-		task.Agent.MCPConfig = json.RawMessage(`{"mcp":{"docs":` + tc.entry + `}}`)
-		_, err := Select(task)
-		if !errors.Is(err, ErrDenied) || !strings.Contains(err.Error(), tc.feature) || strings.Contains(err.Error(), "private-") {
-			t.Fatalf("unsupported MCP feature not reported safely: %v", err)
+		task.Agent.MCPConfig = json.RawMessage(`{"mcp":{"docs":` + tc.entry + `,"ok":{"type":"remote","url":"https://ok.example.invalid/mcp"}}}`)
+		task.RemoteMCPConnections = []json.RawMessage{json.RawMessage(`{"contribution_key":"broker","credential_header":"private-broker"}`), json.RawMessage(`{"contribution_key":"bad name"}`)}
+		selected, skipped, err := Selection(task)
+		notice := fmt.Sprint(skipped) + Notices{MCP: skipped}.Section()
+		if err != nil || len(selected) != 1 || selected["ok"].URL == "" || len(skipped) != 3 || skipped[2].Name != "docs" || !strings.Contains(skipped[2].Reason, tc.feature) ||
+			skipped[0].Name != "broker" || skipped[1].Name != "remote-connection-2" || strings.Contains(notice, "private-") || strings.Contains(notice, "example.invalid") {
+			t.Fatalf("unsupported MCP not skipped safely: %v %v", err, notice)
 		}
+	}
+}
+
+func TestSelectConnectsFirstServersByName(t *testing.T) {
+	servers := []string{}
+	for i := maxMCPServers + 2; i > 0; i-- {
+		servers = append(servers, fmt.Sprintf(`"s%02d":{"url":"https://s%d.example.invalid/mcp"}`, i, i))
+	}
+	task := safeTask()
+	task.Agent.MCPConfig = json.RawMessage(`{"mcpServers":{` + strings.Join(servers, ",") + `,"off":{"url":"https://off.example.invalid/mcp","disabled":true}}}`)
+	for range 3 {
+		selected, skipped, err := Selection(task)
+		if err != nil || len(selected) != maxMCPServers || selected["s16"].URL == "" || len(skipped) != 2 || skipped[0].Name != "s17" || skipped[1].Name != "s18" || !strings.Contains(skipped[0].Reason, "16-server limit") {
+			t.Fatalf("limit selection: %v %d %v", err, len(selected), skipped)
+		}
+	}
+	// A server beyond the limit still denies the task when it is unsafe.
+	task.Agent.MCPConfig = json.RawMessage(`{"mcpServers":{` + strings.Join(servers, ",") + `,"zz":{"url":"https://user@zz.example.invalid/mcp"}}}`)
+	if _, _, err := Selection(task); !errors.Is(err, ErrDenied) {
+		t.Fatalf("unsafe server beyond the limit accepted: %v", err)
 	}
 }
 

@@ -31,11 +31,13 @@ Mirror upstream for tasks on the Multica relay path.
 
 **Claims.** The client advertises `platform-skill-v1` and parses inline skills.
 Claim responses may reach 16 MiB, since they carry skill content; other
-responses keep 2 MiB. A claim is
-rejected when it holds more than 64 skills, a skill has more than 256 files,
-a file exceeds 1 MiB, or all files exceed 8 MiB. Paths that are absolute, contain
-`..`, backslashes or NUL, appear twice or are also a directory reject it too.
-Upstream trusts the server here; the sandbox bounds what it writes.
+responses keep 2 MiB. Paths that are absolute, contain `..`, backslashes or NUL
+reject the claim. Otherwise skills install in claim order while they fit: a skill
+beyond the 64th, with more than 256 files, a file over 1 MiB, a path listed twice
+or also a directory, or past 8 MiB in all is skipped. The controller logs a warning
+and the brief's Sandbox Notices name each skipped skill; slugs, the Skills section
+and chat selection follow the installed set. Upstream trusts the server here; the
+sandbox bounds what it writes (refinement 2026-11-04: exceeding a limit used to reject the claim).
 
 **Layout.** Slugs, frontmatter rewriting and visibility are ported unchanged;
 a differential fuzz against upstream found no divergence. Skills go to

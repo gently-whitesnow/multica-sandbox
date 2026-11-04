@@ -87,7 +87,7 @@ task per workspace; a poll keeps starting rounds while any claim succeeded, so a
 busy workspace drains its queue without starving peers. The per-agent limit stays
 server-side. Membership loss cancels every attempt of that workspace. Each
 attempt network takes a subnet from Docker's address pools; when the daemon
-refuses one, only that task fails (`environment_prepare_failed`) and the
+refuses one, only that task fails (`runtime_recovery`) and the
 controller keeps serving after removing the network best-effort. ADR 0028 removed
 both controller limits.
 

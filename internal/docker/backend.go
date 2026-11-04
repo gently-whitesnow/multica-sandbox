@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os/exec"
 	"regexp"
 	"slices"
 	"strings"
@@ -153,27 +154,52 @@ func (b *Backend) Start(ctx context.Context, attempt string) (execution.Run, err
 	}
 	r := &run{name: b.name(attempt)}
 	if _, err := command(ctx, b.createArgs(r.name, probeResources)...); err != nil {
-		return nil, errors.Join(err, b.cleanupUncertainCreate(r))
+		return nil, cleaned(err, b.cleanupUncertainCreate(r, err))
 	}
 	if err := r.check(ctx); err != nil {
-		return nil, errors.Join(err, r.cleanup())
+		return nil, cleaned(err, r.cleanup())
 	}
 	if _, err := command(ctx, "start", r.name); err != nil {
-		return nil, errors.Join(err, r.cleanup())
+		return nil, cleaned(err, r.cleanup())
 	}
 	return r, nil
 }
-func (b *Backend) cleanupUncertainCreate(r *run) error {
+
+// cleaned rejects the task as transient once cleanup removed what the attempt created;
+// a failed or uncertain cleanup may leave host state behind and stays a backend error.
+func cleaned(err, cleanErr error) error {
+	var uncertain *uncertainError
+	if cleanErr != nil || errors.As(err, &uncertain) {
+		return errors.Join(err, cleanErr)
+	}
+	return execution.Transient(err)
+}
+
+// uncertainError is a failed removal of a container whose create failed.
+type uncertainError struct{ error }
+
+func (e *uncertainError) Unwrap() error { return e.error }
+
+func (b *Backend) cleanupUncertainCreate(r *run, created error) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	owner, err := command(ctx, "inspect", "--format", `{{index .Config.Labels "io.multica-sandbox.owner"}}`, r.name)
+	// An engine that answered the create with an error (no space left, say) and has no
+	// such container left nothing behind; a killed create may still land.
+	var exit *exec.ExitError
+	if err != nil && errors.As(created, &exit) && exit.Exited() && strings.Contains(err.Error(), "No such object") {
+		return nil
+	}
+	if err == nil && strings.TrimSpace(string(owner)) != b.Owner {
+		err = fmt.Errorf("refusing cleanup of a container with a different owner")
+	}
+	if err == nil {
+		err = r.Remove(ctx)
+	}
 	if err != nil {
-		return err
+		return &uncertainError{err}
 	}
-	if strings.TrimSpace(string(owner)) != b.Owner {
-		return fmt.Errorf("refusing cleanup of a container with a different owner")
-	}
-	return r.Remove(ctx)
+	return nil
 }
 
 // createArgs places extra controller-owned options before the entrypoint. Under sysbox

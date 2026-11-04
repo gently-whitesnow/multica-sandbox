@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"maps"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -421,5 +422,89 @@ func TestShutdownCollectsEveryAttempt(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("shutdown did not collect every attempt")
+	}
+}
+
+// lockedFake lets a test add queued work while serve claims.
+type lockedFake struct {
+	*fleetFake
+	mu sync.Mutex
+}
+
+func (a *lockedFake) ClaimBatch(ctx context.Context, daemon string, scopes map[string]string, n int) ([]multica.Task, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.fleetFake.ClaimBatch(ctx, daemon, scopes, n)
+}
+
+// syncLog is a log destination the test reads while serve writes.
+type syncLog struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (l *syncLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+func (l *syncLog) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.String()
+}
+
+// A failed cleanup stops claims but not the neighbours: they finish and report, then
+// serve returns the error for a restart.
+func TestFatalAttemptErrorLetsNeighboursFinish(t *testing.T) {
+	a := &lockedFake{fleetFake: &fleetFake{workspaces: []multica.Workspace{{ID: "ws-a"}, {ID: "ws-b"}}, queued: map[string]int{"ws-a": 1, "ws-b": 1}}}
+	var log syncLog
+	f := newFleetState(a, "test", t.TempDir(), slog.New(slog.NewTextHandler(&log, nil)), map[string]string{})
+	fatal := &controller.CleanupError{Err: errors.New("remove failed")}
+	release, neighbour := make(chan struct{}), make(chan error, 1)
+	execute := func(ctx context.Context, task multica.Task) error {
+		if task.RuntimeID == "ws-a" {
+			return fatal
+		}
+		select {
+		case <-release:
+			neighbour <- nil
+		case <-ctx.Done():
+			neighbour <- ctx.Err()
+		}
+		return nil
+	}
+	served := make(chan error, 1)
+	go func() { served <- f.serve(context.Background(), execute) }()
+	for deadline := time.Now().Add(5 * time.Second); !strings.Contains(log.String(), "claims stopped"); time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("fatal attempt error not handled: %s", log.String())
+		}
+	}
+	a.mu.Lock()
+	a.queued["ws-a"], a.queued["ws-b"] = 5, 5
+	claims := a.claims
+	a.mu.Unlock()
+	time.Sleep(1500 * time.Millisecond)
+	select {
+	case err := <-served:
+		t.Fatalf("serve returned before the neighbour finished: %v", err)
+	case err := <-neighbour:
+		t.Fatalf("neighbour ended early: %v", err)
+	default:
+	}
+	a.mu.Lock()
+	if a.claims != claims {
+		t.Fatalf("claimed %d times while stopping", a.claims-claims)
+	}
+	a.mu.Unlock()
+	close(release)
+	select {
+	case err := <-served:
+		if !errors.Is(err, fatal) || <-neighbour != nil || len(f.active) != 0 {
+			t.Fatalf("serve returned %v with %d active", err, len(f.active))
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("serve did not return after the neighbour finished")
 	}
 }

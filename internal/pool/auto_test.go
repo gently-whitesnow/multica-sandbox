@@ -248,3 +248,18 @@ func TestAutoAdmissionRefusesUnreclaimableShortage(t *testing.T) {
 		}
 	}
 }
+
+func TestDiskWatermarksKeepFloorsOnSmallDisks(t *testing.T) {
+	small := Disk{Total: 10 << 30, Available: 2<<30 - 1}
+	if !DiskLow(small) || DiskRecovered(small) {
+		t.Fatal("2 GiB pause floor ignored")
+	}
+	small.Available = 3<<30 - 1
+	if DiskLow(small) || DiskRecovered(small) {
+		t.Fatal("between watermarks")
+	}
+	small.Available = 3 << 30
+	if !DiskRecovered(small) {
+		t.Fatal("3 GiB resume floor ignored")
+	}
+}

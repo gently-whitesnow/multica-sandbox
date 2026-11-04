@@ -34,8 +34,9 @@ const Path = "/metrics"
 // The host deploy gate polls it after a controller restart.
 const ReadyPath = "/readyz"
 
-// Revision is the controller source commit, set at build time with -ldflags -X.
-var Revision = "unknown"
+// Version is the controller release from VERSION and Revision its source commit, both set
+// at build time with -ldflags -X.
+var Version, Revision = "unknown", "unknown"
 
 // CardinalityLimit caps series per instrument; excess combinations go to the
 // otel_metric_overflow series.
@@ -61,6 +62,7 @@ type Metrics struct {
 	attempt, prepare, relay, client metric.Float64Histogram
 	active                          metric.Int64UpDownCounter
 	events, retries                 metric.Int64Counter
+	removed, pruned                 metric.Int64Counter
 	pool                            atomic.Pointer[PoolReading]
 	paused                          atomic.Pointer[string]
 	draining, workspaces            atomic.Int64
@@ -99,6 +101,10 @@ func New() (*Metrics, error) {
 	errs = append(errs, err)
 	m.retries, err = meter.Int64Counter("http.client.request.retries", metric.WithUnit("{retry}"), metric.WithDescription("Resent controller requests to Multica."))
 	errs = append(errs, err)
+	m.removed, err = meter.Int64Counter("sandbox.sessions.removed", metric.WithUnit("{volume}"), metric.WithDescription("Removed session volumes, by trigger."))
+	errs = append(errs, err)
+	m.pruned, err = meter.Int64Counter("sandbox.sessions.pruned", metric.WithUnit("By"), metric.WithDescription("Rebuildable bytes pruned from idle session volumes, by trigger."))
+	errs = append(errs, err)
 	poolGauge := func(name, unit, description string, value func(PoolReading) float64) {
 		_, err := meter.Float64ObservableGauge(name, metric.WithUnit(unit), metric.WithDescription(description),
 			metric.WithFloat64Callback(func(_ context.Context, o metric.Float64Observer) error {
@@ -112,7 +118,7 @@ func New() (*Metrics, error) {
 	poolGauge("sandbox.pool.memory.pressure", "1", "Attempt pool PSI some avg10.", func(r PoolReading) float64 { return r.Pressure })
 	poolGauge("sandbox.pool.memory.usage", "By", "Attempt pool working set.", func(r PoolReading) float64 { return float64(r.Usage) })
 	poolGauge("sandbox.pool.memory.limit", "By", "Attempt pool memory.high.", func(r PoolReading) float64 { return float64(r.Limit) })
-	_, err = meter.Int64ObservableGauge("sandbox.claims.paused", metric.WithDescription("1 while claims wait for the attempt pool, by the last refusal reason."),
+	_, err = meter.Int64ObservableGauge("sandbox.claims.paused", metric.WithDescription("1 while claims wait for the attempt pool, by the last refusal reason, or for a controller restart."),
 		metric.WithInt64Callback(func(_ context.Context, o metric.Int64Observer) error {
 			if reason := m.paused.Load(); reason != nil {
 				o.Observe(1, metric.WithAttributes(attribute.String("reason", *reason)))
@@ -134,9 +140,9 @@ func New() (*Metrics, error) {
 			return nil
 		}))
 	errs = append(errs, err)
-	_, err = meter.Int64ObservableGauge("sandbox.build.info", metric.WithDescription("Always 1; the controller source revision."),
+	_, err = meter.Int64ObservableGauge("sandbox.build.info", metric.WithDescription("Always 1; the controller release version and source revision."),
 		metric.WithInt64Callback(func(_ context.Context, o metric.Int64Observer) error {
-			o.Observe(1, metric.WithAttributes(attribute.String("revision", Revision)))
+			o.Observe(1, metric.WithAttributes(attribute.String("version", Version), attribute.String("revision", Revision)))
 			return nil
 		}))
 	errs = append(errs, err)
@@ -238,6 +244,22 @@ func (m *Metrics) Retry(target, method, path string) {
 	m.retries.Add(context.Background(), 1, metric.WithAttributes(attribute.String("method", normalMethod(method)), attribute.String("path", path), attribute.String("target_service_name", target)))
 }
 
+// SessionTriggers are the session collection triggers; anything else counts as other.
+var SessionTriggers = []string{"lifetime", "age", "budget", "pressure"}
+
+// Sessions records one session volume collection.
+func (m *Metrics) Sessions(trigger string, removed int, pruned int64) {
+	if m == nil {
+		return
+	}
+	if !slices.Contains(SessionTriggers, trigger) {
+		trigger = "other"
+	}
+	attrs := metric.WithAttributes(attribute.String("trigger", trigger))
+	m.removed.Add(context.Background(), int64(removed), attrs)
+	m.pruned.Add(context.Background(), pruned, attrs)
+}
+
 func (m *Metrics) Pool(r PoolReading) {
 	if m == nil {
 		return
@@ -245,8 +267,8 @@ func (m *Metrics) Pool(r PoolReading) {
 	m.pool.Store(&r)
 }
 
-// Paused records whether claims wait for the attempt pool; reason is the bounded
-// refusal reason (pool.Refusal*) and is ignored when not paused.
+// Paused records whether claims wait for the attempt pool or a restart; reason is the
+// bounded refusal reason (pool.Refusal*) or restart and is ignored when not paused.
 func (m *Metrics) Paused(paused bool, reason string) {
 	if m == nil {
 		return

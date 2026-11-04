@@ -3,7 +3,9 @@ name: Images
 # at multica.UpstreamRevision or an explicit compatible CLI commit (ADR 0014). Manual
 # only: run it for the commit a deployment needs and pin the digests from the summary.
 # Each image also leaves a release-<image>-<os>-<arch> artifact; deploy.yml (ADR 0031)
-# rolls out the controller digest recorded for its commit.
+# rolls out the controller digest recorded for its commit. Images are tagged with the
+# commit and with VERSION (vMAJOR.MINOR.PATCH); a version marks one commit, kept as the
+# Git tag v<VERSION>.
 on:
   workflow_dispatch:
     inputs:
@@ -35,6 +37,15 @@ jobs:
             upstream: true
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - id: version
+        run: |
+          version=$(cat VERSION)
+          tagged=$(git ls-remote --tags origin "refs/tags/v$version" | cut -f1)
+          if [ -n "$tagged" ] && [ "$tagged" != "$GITHUB_SHA" ]; then
+            echo "v$version already marks $tagged: bump VERSION for a new release" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
       - id: upstream
         if: matrix.upstream
         env:
@@ -67,8 +78,11 @@ jobs:
           platforms: ${{ inputs.platform }}
           push: true
           provenance: false
-          tags: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ github.sha }}
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ github.sha }}
+            ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:v${{ steps.version.outputs.version }}
           labels: |
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
       - id: release
@@ -76,14 +90,31 @@ jobs:
           IMAGE: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
           DIGEST: ${{ steps.build.outputs.digest }}
           PLATFORM: ${{ inputs.platform }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           jq -n --arg sha "$GITHUB_SHA" --arg ref "$GITHUB_REF" --arg image "$IMAGE" \
-            --arg digest "$DIGEST" --arg platform "$PLATFORM" \
-            '{sha: $sha, ref: $ref, image: $image, digest: $digest, platform: $platform}' > release.json
+            --arg digest "$DIGEST" --arg platform "$PLATFORM" --arg version "$VERSION" \
+            '{version: $version, sha: $sha, ref: $ref, image: $image, digest: $digest, platform: $platform}' > release.json
           echo "name=release-${{ matrix.image }}-${PLATFORM//\//-}" >> "$GITHUB_OUTPUT"
-          echo "$IMAGE@$DIGEST" >> "$GITHUB_STEP_SUMMARY"
+          echo "$IMAGE:v$VERSION@$DIGEST" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: ${{ steps.release.outputs.name }}
           path: release.json
           if-no-files-found: error
+  tag:
+    needs: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version=$(cat VERSION)
+          if [ -z "$(git ls-remote --tags origin "refs/tags/v$version")" ]; then
+            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/v$version" -f sha="$GITHUB_SHA" >/dev/null
+          fi
+          echo "Release v$version: $GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"

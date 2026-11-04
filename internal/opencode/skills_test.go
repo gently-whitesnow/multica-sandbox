@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -13,13 +15,13 @@ import (
 )
 
 func TestSkillTreeMirrorsUpstreamLayout(t *testing.T) {
-	files, err := skillTree([]multica.Skill{
+	files, _, skipped, err := skillTree([]multica.Skill{
 		{Name: "PR review", Description: "Reviews: pull requests", Content: "Check the diff.", Files: []multica.SkillFile{{Path: "references/a.md", Content: "a"}, {Path: "./SKILL.md", Content: "duplicate"}}},
 		{Name: "pr-review", Content: "---\nname: other\nlicense: MIT\n---\nBody"},
 		{Name: "  ", Content: "---\ndescription: d\n---\nx"},
 	})
-	if err != nil {
-		t.Fatal(err)
+	if err != nil || len(skipped) != 0 {
+		t.Fatal(err, skipped)
 	}
 	want := map[string]string{
 		"pr-review/SKILL.md":         "---\nname: pr-review\ndescription: \"Reviews: pull requests\"\n---\n\nCheck the diff.",
@@ -37,26 +39,73 @@ func TestSkillTreeMirrorsUpstreamLayout(t *testing.T) {
 	}
 }
 
-func TestSkillTreeRejectsEscapesAndExcess(t *testing.T) {
-	big := strings.Repeat("x", maxSkillFile+1)
-	for name, skills := range map[string][]multica.Skill{
-		"parent":    {{Name: "a", Files: []multica.SkillFile{{Path: "../b/x", Content: "x"}}}},
-		"nested":    {{Name: "a", Files: []multica.SkillFile{{Path: "r/../../x", Content: "x"}}}},
-		"absolute":  {{Name: "a", Files: []multica.SkillFile{{Path: "/etc/x", Content: "x"}}}},
-		"backslash": {{Name: "a", Files: []multica.SkillFile{{Path: `r\x`, Content: "x"}}}},
-		"empty":     {{Name: "a", Files: []multica.SkillFile{{Path: "", Content: "x"}}}},
-		"dot":       {{Name: "a", Files: []multica.SkillFile{{Path: "r/..", Content: "x"}}}},
-		"twice":     {{Name: "a", Files: []multica.SkillFile{{Path: "r/x", Content: "1"}, {Path: "r/./x", Content: "2"}}}},
-		"file dir":  {{Name: "a", Files: []multica.SkillFile{{Path: "r", Content: "1"}, {Path: "r/x", Content: "2"}}}},
-		"dir file":  {{Name: "a", Files: []multica.SkillFile{{Path: "r/x/y", Content: "1"}, {Path: "r", Content: "2"}}}},
-		"dir skill": {{Name: "a", Files: []multica.SkillFile{{Path: "SKILL.md/x", Content: "1"}}}},
-		"large":     {{Name: "a", Content: big}},
-		"count":     make([]multica.Skill, maxSkills+1),
-		"total":     {{Name: "a", Content: big[:maxSkillFile]}, {Name: "b", Content: big[:maxSkillFile]}, {Name: "c", Content: big[:maxSkillFile]}, {Name: "d", Content: big[:maxSkillFile]}, {Name: "e", Content: big[:maxSkillFile]}, {Name: "f", Content: big[:maxSkillFile]}, {Name: "g", Content: big[:maxSkillFile]}, {Name: "h", Content: big[:maxSkillFile]}},
-	} {
-		if _, err := skillTree(skills); !errors.Is(err, ErrDenied) {
+func TestSkillTreeRejectsEscapes(t *testing.T) {
+	for name, path := range map[string]string{"parent": "../b/x", "nested": "r/../../x", "absolute": "/etc/x", "backslash": `r\x`, "empty": "", "dot": "r/.."} {
+		// An escaping file denies the claim even in a skill that would be skipped anyway.
+		skills := []multica.Skill{{Name: "ok"}, {Name: "a", Files: make([]multica.SkillFile, maxSkillFiles+1)}}
+		skills[1].Files[0] = multica.SkillFile{Path: path, Content: "x"}
+		for i := 1; i <= maxSkillFiles; i++ {
+			skills[1].Files[i] = multica.SkillFile{Path: fmt.Sprintf("f%d", i)}
+		}
+		if _, _, _, err := skillTree(skills); !errors.Is(err, ErrDenied) {
 			t.Errorf("%s accepted: %v", name, err)
 		}
+	}
+}
+
+func TestSkillTreeSkipsWhatDoesNotFit(t *testing.T) {
+	big := strings.Repeat("x", maxSkillFile)
+	many := make([]multica.SkillFile, maxSkillFiles+1)
+	for i := range many {
+		many[i] = multica.SkillFile{Path: fmt.Sprintf("f%d", i)}
+	}
+	skills := []multica.Skill{
+		{Name: "twice", Files: []multica.SkillFile{{Path: "r/x", Content: "1"}, {Path: "r/./x", Content: "2"}}},
+		{Name: "file dir", Files: []multica.SkillFile{{Path: "r", Content: "1"}, {Path: "r/x", Content: "2"}}},
+		{Name: "dir file", Files: []multica.SkillFile{{Path: "r/x/y", Content: "1"}, {Path: "r", Content: "2"}}},
+		{Name: "dir skill", Files: []multica.SkillFile{{Path: "SKILL.md/x", Content: "1"}}},
+		{Name: "large", Content: big + "x"},
+		{Name: "files", Files: many},
+		{Name: "keep"},
+	}
+	for i := range 9 {
+		skills = append(skills, multica.Skill{Name: fmt.Sprintf("big%d", i), Content: big[:maxSkillFile-4096]})
+	}
+	skills = append(skills, multica.Skill{Name: "Keep"}, multica.Skill{Name: "small", Content: "fits after the total"})
+	for range maxSkills {
+		skills = append(skills, multica.Skill{Name: "x"})
+	}
+	files, kept, skipped, err := skillTree(skills)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, s := range skipped {
+		names = append(names, s.Name+": "+s.Reason)
+	}
+	got := strings.Join(names, "\n")
+	for _, want := range []string{"twice: a file is listed twice", "file-dir: a file path is also a directory", "dir-file: a file path is also a directory", "dir-skill: a file path is also a directory",
+		"large: a file exceeds 1 MiB", "files: more than 256 files", "big8: over the 8 MiB total"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("skipped lacks %q: %s", want, got)
+		}
+	}
+	// Claim order decides: eight big skills fit the total, later small ones still do, the
+	// limit cuts the tail, and slugs follow the installed set.
+	if len(kept) != maxSkills || kept[0].Name != "keep" || kept[9].Name != "Keep" || kept[10].Name != "small" || len(kept)+len(skipped) != len(skills) ||
+		files["keep-multica/SKILL.md"] == nil || files["big7/SKILL.md"] == nil || files["big8/SKILL.md"] != nil || files["twice/SKILL.md"] != nil || !strings.Contains(got, "x: over the 64-skill limit") {
+		t.Fatalf("kept %d, skipped %d: %s", len(kept), len(skipped), got)
+	}
+	again, _, _, _ := skillTree(skills)
+	if !reflect.DeepEqual(files, again) {
+		t.Fatal("skill selection is not deterministic")
+	}
+	total := 0
+	for _, data := range files {
+		total += len(data)
+	}
+	if total > maxSkillsTotal {
+		t.Fatalf("installed %d bytes", total)
 	}
 }
 

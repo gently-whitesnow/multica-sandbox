@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -53,7 +55,8 @@ type Adapter struct {
 	// Command replaces the `opencode acp` argv; it must speak ACP on stdio.
 	Command  []string
 	Reporter Reporter
-	// Log records reports Multica never received; nil discards them.
+	// Log records reports Multica never received and configuration attempts left out;
+	// nil discards them.
 	Log *slog.Logger
 	// Relay and RelayURL enable upstream-equivalent Multica CLI access (ADR 0014).
 	Relay    Grants
@@ -73,6 +76,8 @@ type Adapter struct {
 	Checkout *repo.Checkout
 	// IdleWatchdog fails a run without native events for this long (default 10m, upstream's).
 	IdleWatchdog time.Duration
+	// ToolWatchdog bounds it while a tool or background shell runs (default 2h, upstream's).
+	ToolWatchdog time.Duration
 	// CompactionMaxTokens caps the native auto-compaction trigger; zero keeps native policy.
 	CompactionMaxTokens int
 }
@@ -121,6 +126,8 @@ type running struct {
 	workDir, resume, retired string
 	// skills are the claim's skill files under SkillsDir, upstream tasks only (ADR 0017).
 	skills map[string][]byte
+	stderr stderrTail
+	spent  spentUsage
 }
 
 // attemptLease bounds an authority lease and how long renewal rides out transient
@@ -141,12 +148,22 @@ const SessionDB = "/workspace/work/.multica-sandbox/opencode.db"
 var sessionID = regexp.MustCompile(`^ses_[A-Za-z0-9]{1,64}$`)
 
 func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, error) {
-	connections, err := Select(task)
+	connections, skipped, err := Selection(task)
 	if err != nil {
 		return nil, &execution.RejectedError{Err: err}
 	}
 	if connections, err = resolveRemoteHeaders(connections, task.Agent.CustomEnv); err != nil {
 		return nil, &execution.RejectedError{Err: err}
+	}
+	notices := Notices{MCP: skipped, Env: reservedEnvNames(task.Agent.CustomEnv), GitRelay: a.GitRelay != nil}
+	if a.MCPRelay == nil {
+		// Without the relay no server connects; an explicit IAM selection still denies (ADR 0030).
+		for _, name := range slices.Sorted(maps.Keys(connections)) {
+			if !connections[name].identity {
+				notices.MCP = append(notices.MCP, Skipped{name, "this sandbox has no MCP relay"})
+				delete(connections, name)
+			}
+		}
 	}
 	if len(connections) != 0 && a.MCPRelay == nil {
 		return nil, &execution.RejectedError{Err: fmt.Errorf("MCP connections require mcp_relay: %w", ErrDenied)}
@@ -163,9 +180,11 @@ func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, 
 	}
 	var skills map[string][]byte
 	if a.Relay != nil {
-		if skills, err = skillTree(task.Agent.Skills); err != nil {
+		agent := *task.Agent
+		if skills, agent.Skills, notices.Skills, err = skillTree(agent.Skills); err != nil {
 			return nil, &execution.RejectedError{Err: err}
 		}
+		task.Agent = &agent
 	}
 	anonymous, public, err := a.mcpModes(connections)
 	if err != nil {
@@ -237,6 +256,8 @@ func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, 
 	if err != nil {
 		return nil, r.reject(err)
 	}
+	r.prompt, brief = notices.Apply(r.prompt, brief)
+	notices.Log(a.Log, task.ID)
 	project, _ := projectFile(task)
 	if err = r.initialize(runCtx, brief, project); err != nil {
 		return nil, r.reject(err)
@@ -402,7 +423,7 @@ func (r *running) loop(ctx context.Context) {
 	}
 	agent := make(chan error, 1)
 	go func() {
-		agent <- r.workload.Stream(ctx, command, r.environment(), func(stdin io.Writer, stdout io.Reader) error {
+		agent <- r.streamAgent(ctx, command, func(stdin io.Writer, stdout io.Reader) error {
 			return r.converse(ctx, stdin, stdout)
 		})
 	}()
@@ -427,8 +448,8 @@ loop:
 			agentDone = true
 			break loop
 		case <-ticker.C:
-			if watchdog := r.adapter.idleWatchdog(); r.events.idle(watchdog) {
-				err = &execution.IdleError{After: watchdog}
+			if after, idle := r.events.idle(r.adapter.idleWatchdog(), r.adapter.toolWatchdog()); idle {
+				err = r.stalled(ctx, after)
 				break loop
 			}
 			if err = r.refresh(ctx); err != nil {
@@ -443,6 +464,7 @@ loop:
 	if !agentDone {
 		<-agent
 	}
+	r.logStderr(err)
 	r.done <- err
 }
 
@@ -451,6 +473,26 @@ func (a *Adapter) idleWatchdog() time.Duration {
 		return a.IdleWatchdog
 	}
 	return idleWatchdog
+}
+
+func (a *Adapter) toolWatchdog() time.Duration {
+	if a.ToolWatchdog > 0 {
+		return a.ToolWatchdog
+	}
+	return toolWatchdog
+}
+
+// stalled names a silent run: an agent frozen by its attempt thrashing on memory is a
+// memory failure, not a hang (ADR 0032).
+func (r *running) stalled(ctx context.Context, after time.Duration) error {
+	if w, ok := r.workload.(interface {
+		MemoryStall(context.Context, time.Duration) *execution.MemoryStallError
+	}); ok {
+		if stall := w.MemoryStall(ctx, after); stall != nil {
+			return stall
+		}
+	}
+	return &execution.IdleError{After: after}
 }
 
 // Result reports the session as retained only with a retained workdir.

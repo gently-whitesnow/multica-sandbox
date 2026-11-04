@@ -72,11 +72,17 @@ func TestFailureReasonsMatchUpstreamDaemon(t *testing.T) {
 		{&execution.IdleError{After: time.Minute}, "agent produced no new messages for 1m0s; force-stopped by idle watchdog", "idle_watchdog"},
 		{&execution.AgentFailure{Message: "opencode stream ended without a terminal signal (step still open at EOF)"}, "opencode stream ended without a terminal signal (step still open at EOF)", ""},
 		{&execution.RejectedError{Err: errors.New("private detail")}, "Sandbox rejected the task before OpenCode started", "environment_prepare_failed"},
+		{execution.Transient(errors.New("private detail")), hostFailed, "runtime_recovery"},
+		// The adapter rejects with the backend's cause, which keeps the mark.
+		{fmt.Errorf("start: %w", &execution.RejectedError{Err: execution.Transient(errors.New("private detail")).Err}), hostFailed, "runtime_recovery"},
 		{fmt.Errorf("wrapped: %w", &execution.AgentFailure{Status: 429}), "Agent inference request failed (HTTP 429)", ""},
 		{errors.New("private detail"), "OpenCode execution or identity delivery failed", ""},
 		{errors.Join(&execution.OOMError{Killed: 3, Peak: 4 << 30, Limit: 4 << 30}), "Out of memory: the kernel killed 3 process(es) in the attempt after it reached the attempt memory limit (4.0 GiB), peak usage 4.0 GiB. " + oomAdvice, "agent_error.process_failure"},
-		{&execution.OOMError{Killed: 1, Peak: 7 << 30, Limit: 10 << 30, Pool: true}, "Out of memory: the kernel killed 1 process(es) in the attempt after it reached the shared attempt memory pool (10.0 GiB), peak usage 7.0 GiB. " + oomAdvice, "agent_error.process_failure"},
+		{&execution.OOMError{Killed: 1, Peak: 7 << 30, Limit: 10 << 30, Pool: true}, "Out of memory: the kernel killed 1 process(es) in the attempt after it reached the shared attempt memory pool (10.0 GiB), peak usage 7.0 GiB. " + poolAdvice, "runtime_recovery"},
 		{&execution.OOMError{Peak: -1, Limit: -1}, "Out of memory: the kernel killed processes in the attempt after it reached the attempt memory limit. " + oomAdvice, "agent_error.process_failure"},
+		{&execution.MemoryStallError{After: 15 * time.Minute, Stall: 91.4, Peak: 4 << 30, Limit: 4 << 30, Pool: true}, "Out of memory: the attempt thrashed at the shared attempt memory pool (4.0 GiB), peak usage 4.0 GiB, and was stalled on memory 91% of the last minute; the agent produced no new messages for 15m0s and was force-stopped. " + poolAdvice, "runtime_recovery"},
+		{&execution.MemoryStallError{Stall: 96, Peak: 4 << 30, Limit: 4 << 30, Pool: true}, "Out of memory: the attempt thrashed at the shared attempt memory pool (4.0 GiB), peak usage 4.0 GiB, and was stalled on memory 96% of the last minute; the agent failed meanwhile. " + poolAdvice, "runtime_recovery"},
+		{&execution.MemoryStallError{After: time.Minute, Stall: 50, Peak: -1, Limit: -1}, "Out of memory: the attempt thrashed at its memory limit and was stalled on memory 50% of the last minute; the agent produced no new messages for 1m0s and was force-stopped. " + oomAdvice, "agent_error.process_failure"},
 	} {
 		if message, reason := failure(tc.cause); message != tc.message || reason != tc.reason {
 			t.Errorf("%v -> %q %q", tc.cause, message, reason)
@@ -84,14 +90,27 @@ func TestFailureReasonsMatchUpstreamDaemon(t *testing.T) {
 	}
 }
 
-const oomAdvice = "Not retried automatically: reduce the task's memory use or raise the limit."
+const (
+	oomAdvice  = "Not retried automatically: reduce the task's memory use or raise the limit."
+	poolAdvice = "Other attempts share this pool, so Multica retries the task once; if it fails again, reduce the task's memory use or ask the operator to enlarge the pool."
+	hostFailed = "Sandbox host failed to prepare the attempt; Multica retries the task"
+)
 
-// Multica retries only these reasons automatically (server TaskService retryableReasons);
-// an attempt that ran out of memory would run out again.
-func TestOutOfMemoryIsNotRetried(t *testing.T) {
-	_, reason := failure(&execution.OOMError{Killed: 1})
+// Multica retries only these reasons automatically (server TaskService retryableReasons).
+// An attempt that reached its own memory ceiling or was rejected for its configuration
+// would fail again; the shared pool and host preparation depend on the moment.
+func TestRetriedFailures(t *testing.T) {
 	retryable := []string{"runtime_offline", "runtime_recovery", "timeout", "codex_semantic_inactivity", "agent_error.provider_network", "skill_bundle_unavailable"}
-	if reason == "" || slices.Contains(retryable, reason) {
-		t.Fatalf("out of memory reported as %q", reason)
+	for cause, retried := range map[error]bool{
+		&execution.OOMError{Killed: 1}:                     false,
+		&execution.MemoryStallError{Stall: 90}:             false,
+		&execution.RejectedError{Err: errors.New("image")}: false,
+		&execution.OOMError{Killed: 1, Pool: true}:         true,
+		&execution.MemoryStallError{Stall: 90, Pool: true}: true,
+		execution.Transient(errors.New("network")):         true,
+	} {
+		if _, reason := failure(cause); reason == "" || slices.Contains(retryable, reason) != retried {
+			t.Errorf("%T %v reported as %q", cause, cause, reason)
+		}
 	}
 }

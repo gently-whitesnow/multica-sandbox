@@ -42,7 +42,8 @@ filesystem backing Docker and attempt workdirs. It adds to existing PSI admissio
 
 Pending tasks remain in Multica. Admission does not kill active attempts, prune
 unrelated Docker resources, or introduce a second queue. Clean workdirs can use the
-existing no-sessions path; deployments that retain sessions keep the existing GC.
+existing no-sessions path; retained sessions are reclaimed under disk pressure
+(ADR 0034).
 
 ## Alternatives
 

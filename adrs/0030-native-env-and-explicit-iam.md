@@ -14,7 +14,10 @@ workflow for both Keycloak and OpenBao without modifying Multica.
 
 Agent Environment is the source of ordinary process environment. Remove
 `opencode.env_allow`; pass valid names and values without a per-name operator
-list. Controller/image-owned names remain reserved. Values consumed as IAM
+list. Controller/image-owned names remain reserved: the attempt drops them, the
+controller logs their names and the brief's Sandbox Notices list them, never
+values. `GIT_AUTHOR_*` and `GIT_COMMITTER_*` stay reserved: the projected Git
+configuration owns commit identity (ADR 0015). Values consumed as IAM
 credentials or MCP header secrets stay controller-only. Preserve redaction.
 
 Use `IAM_CLIENT_ID` and `IAM_CLIENT_SECRET` with `agent_env: true`. For Keycloak

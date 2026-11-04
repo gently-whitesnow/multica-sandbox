@@ -29,6 +29,11 @@ from verified behavior.
   and explicit MCP header selection without per-agent recipient bindings.
 - `adrs/0031-controller-self-deploy.md`: drain signals, `/readyz`, release artifacts
   and the manual `deploy.yml` controller rollout to vps-worker.
+- `adrs/0032-opencode-background-shells-and-watchdogs.md`: background shells after
+  `end_turn`, the tool budget and memory stalls.
+- `adrs/0033-release-versions.md`: `VERSION`, image `v<VERSION>` tags and Git tags.
+- `adrs/0034-session-disk-reclamation.md`: artifact pruning, disk-pressure collection
+  and the optional byte budget of retained session volumes.
 - `examples/end-to-end/`: opt-in real Multica/OpenCode/inference lab.
 - `examples/identity-mcp/`: disposable identity and MCP contract fixture.
 - `internal/inference/`: workspace gateway bindings, relay policy and advisory model catalogs.
@@ -77,6 +82,8 @@ from verified behavior.
 - Record architectural changes in numbered ADRs. Keep navigation here.
 - On Harness upgrades, review new checks and require every applicable check.
 - Add language checks and meaningful runtime tests as the implementation grows.
+- Bump `VERSION` in every pull request that changes a published image or its
+  configuration (ADR 0033).
 
 ## Verification
 

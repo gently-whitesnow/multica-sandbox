@@ -185,3 +185,13 @@ func TestValidParentFollowsCgroupDriver(t *testing.T) {
 		}
 	}
 }
+
+func TestFullAvg60(t *testing.T) {
+	stall, err := FullAvg60("some avg10=93.10 avg60=88.02 avg300=40.00 total=1\nfull avg10=90.00 avg60=81.75 avg300=38.00 total=1\n")
+	if err != nil || stall != 81.75 {
+		t.Fatalf("full avg60: %v %v", stall, err)
+	}
+	if _, err := FullAvg60("some avg10=1.00 avg60=1.00 avg300=1.00 total=1\n"); err == nil {
+		t.Fatal("missing full line accepted")
+	}
+}

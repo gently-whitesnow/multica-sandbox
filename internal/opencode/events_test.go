@@ -3,6 +3,7 @@ package opencode
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"reflect"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gently-whitesnow/multica-sandbox/internal/execution"
 	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
 )
 
@@ -188,11 +190,11 @@ func TestChunksJoinUntilTheNextKind(t *testing.T) {
 func TestIdleWatchdogTracksStreamActivity(t *testing.T) {
 	var stream eventStream
 	stream.touch()
-	if stream.idle(time.Minute) {
+	if _, idle := stream.idle(time.Minute, time.Hour); idle {
 		t.Fatal("fresh stream reported idle")
 	}
 	stream.active.Store(time.Now().Add(-2 * time.Minute).UnixNano())
-	if !stream.idle(time.Minute) {
+	if _, idle := stream.idle(time.Minute, time.Hour); !idle {
 		t.Fatal("silent stream not reported idle")
 	}
 }
@@ -200,5 +202,34 @@ func TestIdleWatchdogTracksStreamActivity(t *testing.T) {
 func TestIdleWatchdogIsConfigurable(t *testing.T) {
 	if (&Adapter{}).idleWatchdog() != 10*time.Minute || (&Adapter{IdleWatchdog: time.Hour}).idleWatchdog() != time.Hour {
 		t.Fatal("idle watchdog ignores the configuration or the upstream default")
+	}
+	if (&Adapter{}).toolWatchdog() != 2*time.Hour || (&Adapter{ToolWatchdog: time.Minute}).toolWatchdog() != time.Minute {
+		t.Fatal("tool watchdog ignores the configuration or the upstream default")
+	}
+}
+
+type stalledWorkload struct {
+	stubWorkload
+	stall *execution.MemoryStallError
+}
+
+func (w *stalledWorkload) MemoryStall(_ context.Context, after time.Duration) *execution.MemoryStallError {
+	if w.stall != nil {
+		w.stall.After = after
+	}
+	return w.stall
+}
+
+func TestSilentThrashingAttemptIsAMemoryStall(t *testing.T) {
+	var stall *execution.MemoryStallError
+	r := &running{workload: &stalledWorkload{stall: &execution.MemoryStallError{Stall: 90}}}
+	if err := r.stalled(context.Background(), time.Minute); !errors.As(err, &stall) || stall.After != time.Minute {
+		t.Fatalf("thrashing attempt: %v", err)
+	}
+	var idle *execution.IdleError
+	for _, w := range []execution.ProjectedRun{&stalledWorkload{}, &stubWorkload{}} {
+		if err := (&running{workload: w}).stalled(context.Background(), time.Minute); !errors.As(err, &idle) {
+			t.Fatalf("silent attempt without a stall: %v", err)
+		}
 	}
 }

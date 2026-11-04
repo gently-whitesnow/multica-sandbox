@@ -122,7 +122,8 @@ func (b *Projected) ValidateNetwork(ctx context.Context) error {
 }
 
 // Start creates an attempt; a Workdir with a conversation asks for its retained session volume.
-// Failures before the attempt network exists leave no resources and reject only the task.
+// Failures before the attempt network exists leave no resources and reject only the task;
+// later ones are transient rejections once cleanup succeeded, else backend errors.
 func (b *Projected) Start(ctx context.Context, attempt string, w execution.Workdir) (execution.ProjectedRun, error) {
 	bundles, path, err := b.admit(ctx)
 	if err != nil {
@@ -141,7 +142,7 @@ func (b *Projected) Start(ctx context.Context, attempt string, w execution.Workd
 	}
 	if b.Helper != "" {
 		if err := b.attachWorkdir(ctx, projection, w); err != nil {
-			return nil, errors.Join(err, cleanup())
+			return nil, cleaned(err, cleanup())
 		}
 		bundles = append(bundles, "--mount=type=volume,source="+projection.volume+",target="+repo.WorkDir+",volume-nocopy")
 	}
@@ -169,17 +170,13 @@ func (b *Projected) Start(ctx context.Context, attempt string, w execution.Workd
 	want := expected{network: isolated, limits: b.limits(), bundles: b.mounts(), path: path, volume: projection.volume, hosts: b.ForgeHosts, runtime: b.Runtime}
 	projection.id, err = b.launch(ctx, r, want, bundles)
 	if err != nil {
-		cleanErr := cleanup()
-		if errors.Is(err, errEngine) && cleanErr == nil {
-			return nil, &execution.RejectedError{Err: err}
-		}
-		return nil, errors.Join(err, cleanErr)
+		return nil, cleaned(err, cleanup())
 	}
 	// Like the upstream task directory, TMPDIR allows executables (go test, build caches);
 	// the agent works in repo.WorkDir, a tmpfs directory unless the workdir volume is mounted.
 	// A retained volume keeps HOME and its caches; TMPDIR starts empty on every attempt.
 	if _, err := command(ctx, "exec", "--user", AttemptUser, r.name, "/bin/sh", "-c", `rm -rf "$1" && mkdir -p -m 700 "$@"`, "sh", tmp, home+"/.cache", repo.WorkDir); err != nil {
-		return nil, errors.Join(err, cleanup())
+		return nil, cleaned(err, cleanup())
 	}
 	if b.Helper != "" {
 		// The forwarder runs as the attempt user and reaches only the attempt network.
@@ -188,7 +185,7 @@ func (b *Projected) Start(ctx context.Context, attempt string, w execution.Workd
 			forward = append(forward, "127.0.0.1:"+repo.ForgePort, b.ForgeForward)
 		}
 		if _, err := command(ctx, forward...); err != nil {
-			return nil, errors.Join(err, cleanup())
+			return nil, cleaned(err, cleanup())
 		}
 	}
 	return projection, nil
@@ -228,7 +225,7 @@ func (b *Projected) admit(ctx context.Context) ([]string, string, error) {
 	return bundles, path, nil
 }
 
-// errEngine marks a nested engine that did not become ready: the task is rejected.
+// errEngine marks a nested engine that did not become ready.
 var errEngine = errors.New("nested Docker engine did not become ready")
 
 // launch creates the attempt with the controller-owned entrypoint, compares it with the
@@ -238,7 +235,7 @@ func (b *Projected) launch(ctx context.Context, r *run, want expected, extra []s
 	args = append(args[:len(args)-len(b.Command)-2], b.entrypoint()...)
 	out, err := command(ctx, args...)
 	if err != nil {
-		return "", errors.Join(err, b.cleanupUncertainCreate(r))
+		return "", errors.Join(err, b.cleanupUncertainCreate(r, err))
 	}
 	id := strings.TrimSpace(string(out))
 	data, err := command(ctx, "inspect", r.name)
@@ -337,7 +334,7 @@ func (b *Projected) Output(ctx context.Context, args []string) ([]byte, error) {
 	}
 	r := &run{name: probe.name("image-inspection")}
 	if _, err := command(ctx, probe.createArgs(r.name, probe.limits(), bundles...)...); err != nil {
-		return nil, errors.Join(err, probe.cleanupUncertainCreate(r))
+		return nil, errors.Join(err, probe.cleanupUncertainCreate(r, err))
 	}
 	data, err := command(ctx, "inspect", r.name)
 	if err == nil {
@@ -495,7 +492,7 @@ func (b *Projected) isolate(ctx context.Context, name string) (string, error) {
 			err = fmt.Errorf("invalid peer inspection")
 		}
 		if err != nil {
-			return "", errors.Join(err, removeNetwork(ctx, name, connected))
+			return "", cleaned(err, removeNetwork(ctx, name, connected))
 		}
 		args := []string{"network", "connect"}
 		for _, alias := range containers[0].NetworkSettings.Networks[b.Network].Aliases {
@@ -503,7 +500,7 @@ func (b *Projected) isolate(ctx context.Context, name string) (string, error) {
 		}
 		args = append(args, name, peer)
 		if _, err := command(ctx, args...); err != nil {
-			return "", errors.Join(err, removeNetwork(ctx, name, connected))
+			return "", cleaned(err, removeNetwork(ctx, name, connected))
 		}
 		connected = append(connected, peer)
 	}
@@ -512,14 +509,15 @@ func (b *Projected) isolate(ctx context.Context, name string) (string, error) {
 
 // createNetwork creates an attempt network. The host gets no address on it, so host
 // listeners and resolvers stay unreachable, and IPv6 stays off whatever the daemon
-// defaults. When the daemon refuses it, the task is
-// rejected instead of stopping the controller, after a best-effort removal in case a
-// partial network exists (Reconcile removes what remains); exhausted address pools are
-// named for the operator. Timeouts stay uncertain and fatal.
+// defaults. When the daemon refuses it, the task is rejected as transient instead of
+// stopping the controller, after a best-effort removal in case a partial network exists
+// (Reconcile removes what remains); exhausted address pools are named for the operator.
+// An unanswered create may still complete: it is rejected only once removal confirms
+// the network is gone, else it stays uncertain and fatal.
 func createNetwork(ctx context.Context, owner, name string) error {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	createCtx, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "docker", "network", "create", "--internal", "--ipv6=false",
+	cmd := exec.CommandContext(createCtx, "docker", "network", "create", "--internal", "--ipv6=false",
 		"-o", "com.docker.network.bridge.inhibit_ipv4=true", "--label", ownerLabel+"="+owner, name)
 	var stderr cappedOutput
 	cmd.Stderr = &stderr
@@ -528,15 +526,18 @@ func createNetwork(ctx context.Context, owner, name string) error {
 	switch {
 	case err == nil:
 		return nil
-	case ctx.Err() != nil || !errors.As(err, &exit):
+	case createCtx.Err() != nil || !errors.As(err, &exit):
+		if ctx.Err() == nil && removeNetwork(ctx, name, nil) == nil {
+			return execution.Transient(errors.New("Docker did not answer creating the attempt network"))
+		}
 		return fmt.Errorf("docker network failed: %w", err)
 	}
-	_ = removeNetwork(ctx, name, nil)
+	_ = removeNetwork(createCtx, name, nil)
 	switch {
 	case strings.Contains(stderr.String(), "address pools have been fully subnetted"):
-		return &execution.RejectedError{Err: errors.New("Docker address pools are exhausted: raise default-address-pools or lower agent max_concurrent_tasks")}
+		return execution.Transient(errors.New("Docker address pools are exhausted: raise default-address-pools or lower agent max_concurrent_tasks"))
 	}
-	return &execution.RejectedError{Err: errors.New("Docker refused the attempt network")}
+	return execution.Transient(errors.New("Docker refused the attempt network"))
 }
 
 // reconcileVolumes removes owned per-attempt workdir volumes, which all belong to
@@ -586,8 +587,16 @@ func reconcileNetworks(ctx context.Context, owner string) error {
 // exitGrace bounds the agent's exit after its stdin closes.
 const exitGrace = 10 * time.Second
 
+var _ execution.StderrStreamer = (*projectedRun)(nil)
+
 // Stream keeps native stdout out of diagnostics and bounds it in the adapter.
 func (r *projectedRun) Stream(ctx context.Context, args []string, env map[string]string, converse func(io.Writer, io.Reader) error) error {
+	return r.StreamStderr(ctx, args, env, nil, converse)
+}
+
+// StreamStderr is Stream with the agent's stderr, also the exec client's, written to
+// stderr, which must not fail; nil discards it.
+func (r *projectedRun) StreamStderr(ctx context.Context, args []string, env map[string]string, stderr io.Writer, converse func(io.Writer, io.Reader) error) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -612,6 +621,7 @@ func (r *projectedRun) Stream(ctx context.Context, args []string, env map[string
 	if err != nil {
 		return fmt.Errorf("agent output pipe failed")
 	}
+	cmd.Stderr = stderr
 	if err = cmd.Start(); err != nil {
 		return fmt.Errorf("agent execution failed")
 	}
@@ -639,6 +649,10 @@ func (r *projectedRun) Stream(ctx context.Context, args []string, env map[string
 		if oom := r.outOfMemory(m, memErr); oom != nil {
 			return oom
 		}
+		// A thrashing attempt also fails without a kill: OpenCode loses its own server.
+		if stall := r.MemoryStall(context.Background(), 0); stall != nil {
+			return stall
+		}
 	}
 	if readErr != nil {
 		return readErr
@@ -665,6 +679,36 @@ func (r *projectedRun) memory() (pool.Memory, error) {
 		out = append(out, peak...)
 	}
 	return pool.ParseMemory(out)
+}
+
+// MemoryStall reports a memory stall when the attempt cgroup spent at least
+// execution.StallThreshold percent of the last minute with every task waiting for memory;
+// nil when it did not or the cgroup is unreadable. after is the agent's silence.
+func (r *projectedRun) MemoryStall(ctx context.Context, after time.Duration) *execution.MemoryStallError {
+	var pressure string
+	if r.pool != nil {
+		pressure, _ = r.pool.AttemptPressure(r.id)
+	} else {
+		readCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		out, err := command(readCtx, "exec", "--user", AttemptUser, r.name, "cat", "/sys/fs/cgroup/memory.pressure")
+		cancel()
+		if err == nil {
+			pressure = string(out)
+		}
+	}
+	stall, err := pool.FullAvg60(pressure)
+	if err != nil || stall < execution.StallThreshold {
+		return nil
+	}
+	e := &execution.MemoryStallError{After: after, Stall: stall, Peak: -1, Limit: -1}
+	if m, err := r.memory(); err == nil {
+		e.Peak, e.Limit = m.Peak, m.Max
+		// Without its own ceiling the attempt can only thrash at the pool's.
+		if r.pool != nil && m.Max == pool.Unlimited {
+			e.Pool, e.Limit = true, r.poolMax
+		}
+	}
+	return e
 }
 
 // PeakMemory is the attempt cgroup's memory.peak at the agent's last exit, 0 if unread

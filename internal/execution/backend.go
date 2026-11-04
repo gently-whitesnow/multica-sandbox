@@ -2,6 +2,7 @@ package execution
 
 import (
 	"context"
+	"errors"
 	"io"
 )
 
@@ -67,8 +68,29 @@ type ProjectedRun interface {
 	Workdir() (string, bool)
 }
 
+// StderrStreamer is a ProjectedRun that also hands the adapter the agent's stderr;
+// the adapter bounds and redacts it and logs it only for failed attempts.
+type StderrStreamer interface {
+	StreamStderr(context.Context, []string, map[string]string, io.Writer, func(io.Writer, io.Reader) error) error
+}
+
 // RejectedError is safe to report as a task failure: no execution resources remain.
 type RejectedError struct{ Err error }
 
 func (e *RejectedError) Error() string { return e.Err.Error() }
 func (e *RejectedError) Unwrap() error { return e.Err }
+
+// Transient reports a host-side cause that may be gone on the next attempt. The mark
+// is part of the cause, so an adapter that rejects with the backend's cause keeps it.
+func (e *RejectedError) Transient() bool {
+	var transient *transientError
+	return errors.As(e.Err, &transient)
+}
+
+// Transient rejects a task for a host-side cause, such as a refused attempt network or
+// a failed start whose resources were removed, that may be gone on the next attempt.
+func Transient(err error) *RejectedError { return &RejectedError{Err: &transientError{err}} }
+
+type transientError struct{ error }
+
+func (e *transientError) Unwrap() error { return e.error }
