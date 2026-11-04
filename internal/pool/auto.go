@@ -36,6 +36,17 @@ func ReadDisk(path string) (Disk, error) {
 	return Disk{uint64(s.Blocks) * uint64(s.Bsize), uint64(s.Bavail) * uint64(s.Bsize), uint64(s.Files), uint64(s.Ffree)}, nil
 }
 
+// DiskLow reports the claim pause watermark: free space below max(2 GiB, 10%) or
+// free inodes below 5%. Session collection also starts there (ADR 0034).
+func DiskLow(d Disk) bool {
+	return d.Available < max(uint64(2<<30), d.Total/10) || d.Files > 0 && d.FilesFree < d.Files/20
+}
+
+// DiskRecovered reports the resume watermark: max(3 GiB, 15%) free space and 10% free inodes.
+func DiskRecovered(d Disk) bool {
+	return d.Available >= max(uint64(3<<30), d.Total*15/100) && (d.Files == 0 || d.FilesFree >= d.Files/10)
+}
+
 // AutoAdmission adds conservative cold-start pacing, observed memory headroom and
 // hysteretic disk admission to the pool's existing PSI gate. It never kills work.
 // It is used by the single controller claim loop, and is not concurrency-safe.
@@ -93,13 +104,10 @@ func (a *AutoAdmission) Admit(active int, now time.Time) (bool, string, string) 
 	if err != nil || d.Total == 0 {
 		return false, RefusalUnreadable, "host Docker filesystem unreadable"
 	}
-	low, high := max(uint64(2<<30), d.Total/10), max(uint64(3<<30), d.Total*15/100)
-	lowInodes := d.Files > 0 && d.FilesFree < d.Files/20
-	recoveredInodes := d.Files == 0 || d.FilesFree >= d.Files/10
-	if d.Available < low || lowInodes {
+	if DiskLow(d) {
 		a.diskPaused = true
 	}
-	if a.diskPaused && d.Available >= high && recoveredInodes {
+	if a.diskPaused && DiskRecovered(d) {
 		a.diskPaused = false
 	}
 	if a.diskPaused {

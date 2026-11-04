@@ -139,12 +139,16 @@ type OpenCodeConfig struct {
 
 // SessionsConfig bounds retained workdirs: TTL after last use and a session count.
 // Every Interval (default 2h) a sweep also drops those of issues done or cancelled
-// for Grace (default 24h), the upstream GC defaults.
+// for Grace (default 24h), the upstream GC defaults, prunes rebuildable outputs of
+// volumes idle for ArtifactAge (default 12h, upstream's) and, with Budget (a size such
+// as 40g, default none), removes the least recently used idle volumes beyond it.
 type SessionsConfig struct {
-	TTL      string `json:"ttl"`
-	Max      int    `json:"max"`
-	Interval string `json:"interval,omitempty"`
-	Grace    string `json:"grace,omitempty"`
+	TTL         string `json:"ttl"`
+	Max         int    `json:"max"`
+	Interval    string `json:"interval,omitempty"`
+	Grace       string `json:"grace,omitempty"`
+	ArtifactAge string `json:"artifact_age,omitempty"`
+	Budget      string `json:"budget,omitempty"`
 }
 
 // RelayConfig enables an embedded relay: Multica API, inference, MCP (ADR 0014, 0012, 0023).

@@ -74,7 +74,7 @@ rotation and external attempt leases. Optional [inference](internal/inference/RE
 uses a controller relay that swaps an opaque attempt credential for a workspace key. Native messages, reported usage, terminal
 text/session IDs and safe repository references are mapped to existing Multica APIs.
 See the [capability matrix and walkthrough](internal/opencode/README.md); repository checkout, mediated push/PR and retained issue/chat sessions are opt-in;
-artifact publication remains unsupported. For host-sized execution, deployment derives the bounded attempt pool from host capacity, reserving memory for trusted services and engines. `resources.cpu_mode: shared` removes per-attempt CPU quotas; `pool.auto_admission: true` with read-only Docker filesystem `disk_path` adds cold-start pacing, observed headroom and disk/inode watermarks to PSI admission. See [ADR 0028](adrs/0028-auto-host-resources.md) for defaults and limitations.
+artifact publication remains unsupported. For host-sized execution, deployment derives the bounded attempt pool from host capacity, reserving memory for trusted services and engines. `resources.cpu_mode: shared` removes per-attempt CPU quotas; `pool.auto_admission: true` with read-only Docker filesystem `disk_path` adds cold-start pacing, observed headroom and disk/inode watermarks to PSI admission; below the pause watermark idle retained sessions are pruned, then removed (`sessions.artifact_age`, optional `sessions.budget`, ADR 0034). See [ADR 0028](adrs/0028-auto-host-resources.md) for defaults and limitations.
 
 Docker restarts a crashed controller. On startup it removes its old executions
 before asking Multica to recover tasks. Persistent state binds the shared lock to

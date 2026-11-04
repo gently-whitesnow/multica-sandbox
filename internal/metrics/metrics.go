@@ -62,6 +62,7 @@ type Metrics struct {
 	attempt, prepare, relay, client metric.Float64Histogram
 	active                          metric.Int64UpDownCounter
 	events, retries                 metric.Int64Counter
+	removed, pruned                 metric.Int64Counter
 	pool                            atomic.Pointer[PoolReading]
 	paused                          atomic.Pointer[string]
 	draining, workspaces            atomic.Int64
@@ -99,6 +100,10 @@ func New() (*Metrics, error) {
 	m.events, err = meter.Int64Counter("sandbox.attempt.events", metric.WithUnit("{event}"), metric.WithDescription("Attempt lifecycle events outside the duration histogram."))
 	errs = append(errs, err)
 	m.retries, err = meter.Int64Counter("http.client.request.retries", metric.WithUnit("{retry}"), metric.WithDescription("Resent controller requests to Multica."))
+	errs = append(errs, err)
+	m.removed, err = meter.Int64Counter("sandbox.sessions.removed", metric.WithUnit("{volume}"), metric.WithDescription("Removed session volumes, by trigger."))
+	errs = append(errs, err)
+	m.pruned, err = meter.Int64Counter("sandbox.sessions.pruned", metric.WithUnit("By"), metric.WithDescription("Rebuildable bytes pruned from idle session volumes, by trigger."))
 	errs = append(errs, err)
 	poolGauge := func(name, unit, description string, value func(PoolReading) float64) {
 		_, err := meter.Float64ObservableGauge(name, metric.WithUnit(unit), metric.WithDescription(description),
@@ -237,6 +242,22 @@ func (m *Metrics) Retry(target, method, path string) {
 		return
 	}
 	m.retries.Add(context.Background(), 1, metric.WithAttributes(attribute.String("method", normalMethod(method)), attribute.String("path", path), attribute.String("target_service_name", target)))
+}
+
+// SessionTriggers are the session collection triggers; anything else counts as other.
+var SessionTriggers = []string{"lifetime", "age", "budget", "pressure"}
+
+// Sessions records one session volume collection.
+func (m *Metrics) Sessions(trigger string, removed int, pruned int64) {
+	if m == nil {
+		return
+	}
+	if !slices.Contains(SessionTriggers, trigger) {
+		trigger = "other"
+	}
+	attrs := metric.WithAttributes(attribute.String("trigger", trigger))
+	m.removed.Add(context.Background(), int64(removed), attrs)
+	m.pruned.Add(context.Background(), pruned, attrs)
 }
 
 func (m *Metrics) Pool(r PoolReading) {

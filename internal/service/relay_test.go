@@ -45,6 +45,8 @@ func TestSessionsRequireHelperAndBounds(t *testing.T) {
 		"huge max":  {Helper: helper, Sessions: &SessionsConfig{TTL: "72h", Max: 4096}},
 		"interval":  {Helper: helper, Sessions: &SessionsConfig{TTL: "72h", Max: 8, Interval: "0s"}},
 		"grace":     {Helper: helper, Sessions: &SessionsConfig{TTL: "72h", Max: 8, Grace: "soon"}},
+		"age":       {Helper: helper, Sessions: &SessionsConfig{TTL: "72h", Max: 8, ArtifactAge: "-1h"}},
+		"budget":    {Helper: helper, Sessions: &SessionsConfig{TTL: "72h", Max: 8, Budget: "40%"}},
 	} {
 		if _, _, err := openCodeAdapter(t.Context(), Config{OpenCode: &c}, t.TempDir(), nil, &docker.Backend{}); err == nil || !strings.Contains(err.Error(), "sessions require") {
 			t.Errorf("%s accepted: %v", name, err)

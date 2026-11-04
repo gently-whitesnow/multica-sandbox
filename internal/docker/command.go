@@ -34,7 +34,10 @@ func removal(ctx context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.WithoutCancel(ctx), RemoveTimeout)
 }
 
-func commandWithin(ctx context.Context, timeout time.Duration, args ...string) ([]byte, error) {
+// commandWithin runs the docker CLI; tests replace it.
+var commandWithin = runDocker
+
+func runDocker(ctx context.Context, timeout time.Duration, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "docker", args...)

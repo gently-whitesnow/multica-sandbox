@@ -52,8 +52,7 @@ starts fresh with the upstream continuity notice. A refused resume runs fresh
 once (ADR 0023) and reports `retired_session_id`.
 `session_rollout_missing` is reported only when no session is retained. Done or
 cancelled issues (upstream GC), an idle TTL and a session cap bound retention,
-swept periodically. Disk quotas are deployment-owned: the Docker `local` driver
-cannot limit volumes.
+swept periodically; ADR 0034 reclaims their disk.
 
 **Checkout endpoint.** The controller serves the upstream `/repo/checkout`
 request and response contract on the attempt network. A static forwarder,

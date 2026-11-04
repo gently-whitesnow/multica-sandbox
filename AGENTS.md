@@ -32,6 +32,8 @@ from verified behavior.
 - `adrs/0032-opencode-background-shells-and-watchdogs.md`: background shells after
   `end_turn`, the tool budget and memory stalls.
 - `adrs/0033-release-versions.md`: `VERSION`, image `v<VERSION>` tags and Git tags.
+- `adrs/0034-session-disk-reclamation.md`: artifact pruning, disk-pressure collection
+  and the optional byte budget of retained session volumes.
 - `examples/end-to-end/`: opt-in real Multica/OpenCode/inference lab.
 - `examples/identity-mcp/`: disposable identity and MCP contract fixture.
 - `internal/inference/`: workspace gateway bindings, relay policy and advisory model catalogs.

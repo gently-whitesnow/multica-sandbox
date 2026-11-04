@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/gently-whitesnow/multica-sandbox/internal/execution"
 	"io"
@@ -134,10 +135,21 @@ func newOpenCodeAdapter(ctx context.Context, c Config, stateDir string, api *mul
 		ttl, err := time.ParseDuration(s.TTL)
 		interval, intervalErr := optionalDuration(s.Interval, 2*time.Hour)
 		grace, graceErr := optionalDuration(s.Grace, 24*time.Hour)
-		if c.OpenCode.Helper == "" || err != nil || intervalErr != nil || graceErr != nil || ttl <= 0 || s.Max < 1 || s.Max > 1024 {
-			return nil, nil, fmt.Errorf("sessions require the helper, a positive ttl, interval and grace and max in [1,1024]")
+		age, ageErr := optionalDuration(s.ArtifactAge, 12*time.Hour)
+		var budget int64
+		var budgetErr error
+		if s.Budget != "" {
+			budget, budgetErr = docker.ParseSize(s.Budget)
+		}
+		if c.OpenCode.Helper == "" || errors.Join(err, intervalErr, graceErr, ageErr, budgetErr) != nil || ttl <= 0 || s.Max < 1 || s.Max > 1024 {
+			return nil, nil, fmt.Errorf("sessions require the helper, a positive ttl, interval, grace and artifact_age, max in [1,1024] and a budget size")
 		}
 		workloads.Sessions = &docker.Sessions{Dir: filepath.Join(stateDir, "sessions"), TTL: ttl, Max: s.Max, Interval: interval, Grace: grace,
+			Helper: c.OpenCode.Helper, ArtifactAge: age, Budget: budget,
+			Reclaimed: func(r docker.Reclaim) {
+				log.Info("session volumes reclaimed", "trigger", r.Trigger, "removed", r.Removed, "pruned", r.Pruned, "pruned_bytes", r.Artifacts, "freed_bytes", r.Freed)
+				c.metrics.Sessions(r.Trigger, r.Removed, r.Artifacts)
+			},
 			Closed: func(ctx context.Context, workspace string, issues []string) map[string]time.Time {
 				// A failed check keeps the volumes (fail safe), as upstream GC skips them.
 				closed, err := api.ClosedIssues(ctx, workspace, issues)
@@ -146,6 +158,9 @@ func newOpenCodeAdapter(ctx context.Context, c Config, stateDir string, api *mul
 				}
 				return closed
 			}}
+		if p := c.OpenCode.Pool; p != nil && p.DiskPath != "" {
+			workloads.Sessions.Disk = func() (pool.Disk, error) { return pool.ReadDisk(p.DiskPath) }
+		}
 		if err := os.MkdirAll(workloads.Sessions.Dir, 0700); err != nil {
 			return nil, nil, err
 		}
