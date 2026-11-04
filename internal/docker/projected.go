@@ -649,6 +649,10 @@ func (r *projectedRun) StreamStderr(ctx context.Context, args []string, env map[
 		if oom := r.outOfMemory(m, memErr); oom != nil {
 			return oom
 		}
+		// A thrashing attempt also fails without a kill: OpenCode loses its own server.
+		if stall := r.MemoryStall(context.Background(), 0); stall != nil {
+			return stall
+		}
 	}
 	if readErr != nil {
 		return readErr

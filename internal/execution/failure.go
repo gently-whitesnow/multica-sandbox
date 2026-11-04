@@ -69,7 +69,7 @@ func advice(pool bool) string {
 	return "Not retried automatically: reduce the task's memory use or raise the limit."
 }
 
-// MemoryStallError is a silent run whose attempt spent the last minute stalled on memory
+// MemoryStallError is a silent or failed run whose attempt spent the last minute stalled on memory
 // (PSI full avg60 at least StallThreshold percent): it thrashed at its limit instead of
 // being OOM-killed, and the agent froze with it. Limit is as in OOMError.
 type MemoryStallError struct {
@@ -97,8 +97,12 @@ func (e *MemoryStallError) Error() string {
 	if peak != "" {
 		peak += ","
 	}
+	stopped := "the agent failed meanwhile"
+	if e.After > 0 {
+		stopped = fmt.Sprintf("the agent produced no new messages for %s and was force-stopped", e.After)
+	}
 	return fmt.Sprintf("Out of memory: the attempt thrashed at %s%s and was stalled on memory %.0f%% of the last minute; "+
-		"the agent produced no new messages for %s and was force-stopped. %s", limit, peak, e.Stall, e.After, advice(e.Pool))
+		"%s. %s", limit, peak, e.Stall, stopped, advice(e.Pool))
 }
 
 func size(n int64) string {

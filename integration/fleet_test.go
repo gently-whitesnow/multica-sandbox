@@ -97,7 +97,7 @@ func multiWorkspace(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	eventually(t, "100 workspaces registered", func() bool { return logs.contains(readyEvent + `,"workspaces":100}`) })
+	eventually(t, "100 workspaces registered", func() bool { return logs.contains(readyEvent + `,"workspaces":100,`) })
 	startRequests, startClaims := requests.Load(), claims.Load()
 	started := time.Now()
 	time.Sleep(16 * time.Second)

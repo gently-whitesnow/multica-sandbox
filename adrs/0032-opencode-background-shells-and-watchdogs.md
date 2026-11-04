@@ -50,7 +50,7 @@ turn are ignored, so the session read is the only source:
 
 Shells of child sessions and background subagents are not followed.
 
-**Memory stalls.** When a watchdog fires, the controller reads the attempt cgroup's
+**Memory stalls.** When a watchdog fires or the agent fails without an OOM kill (a thrashing OpenCode loses its own server and answers `ServerUnavailable`), the controller reads the attempt cgroup's
 `memory.pressure`, through the pool on the host or inside the attempt. `full avg60`
 of at least 50 % makes the failure a `MemoryStallError`: the limit thrashed at (the
 attempt ceiling or the pool), the peak and the stall. Like an OOM kill, it is
