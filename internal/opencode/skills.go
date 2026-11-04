@@ -2,6 +2,7 @@ package opencode
 
 import (
 	"fmt"
+	"maps"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -63,18 +64,21 @@ func resolveSkillSlugs(skills []multica.Skill) []string {
 	slugs := make([]string, len(skills))
 	taken := make(map[string]struct{}, len(skills))
 	for i, skill := range skills {
-		base := sanitizeSkillName(skill.Name)
-		slug := base
-		for attempt := 1; ; attempt++ {
-			if _, clash := taken[slug]; !clash {
-				break
-			}
-			slug = skillSlugCandidate(base, attempt)
-		}
-		taken[slug] = struct{}{}
-		slugs[i] = slug
+		slugs[i] = skillSlug(skill.Name, taken)
+		taken[slugs[i]] = struct{}{}
 	}
 	return slugs
+}
+
+func skillSlug(name string, taken map[string]struct{}) string {
+	base := sanitizeSkillName(name)
+	slug := base
+	for attempt := 1; ; attempt++ {
+		if _, clash := taken[slug]; !clash {
+			return slug
+		}
+		slug = skillSlugCandidate(base, attempt)
+	}
 }
 
 // modelVisibleSkills lists invocable skills by slug, honouring disable-model-invocation.
@@ -112,57 +116,83 @@ func skillDisablesModelInvocation(content string) bool {
 }
 
 // skillTree returns the files to lay down under SkillsDir, keyed by relative path, like
-// upstream writeSkillFiles; it rejects claims beyond the bounds or escaping their skill.
-func skillTree(skills []multica.Skill) (map[string][]byte, error) {
-	if len(skills) > maxSkills {
-		return nil, fmt.Errorf("claim carries more than %d skills: %w", maxSkills, ErrDenied)
+// upstream writeSkillFiles, and the skills installed. Skills beyond the bounds or with
+// invalid files are skipped in claim order; a path escaping its skill denies the claim.
+func skillTree(skills []multica.Skill) (map[string][]byte, []multica.Skill, []Skipped, error) {
+	for _, skill := range skills {
+		for _, f := range skill.Files {
+			clean := path.Clean(f.Path)
+			if f.Path == "" || strings.ContainsAny(f.Path, "\\\x00") || path.IsAbs(clean) || clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
+				return nil, nil, nil, fmt.Errorf("skill file path escapes its skill: %w", ErrDenied)
+			}
+		}
 	}
+	files, taken, total := map[string][]byte{}, map[string]struct{}{}, 0
+	var kept []multica.Skill
+	var skipped []Skipped
+	for _, skill := range skills {
+		slug := skillSlug(skill.Name, taken)
+		tree, size, reason := map[string][]byte{}, 0, ""
+		switch {
+		case len(kept) == maxSkills:
+			reason = fmt.Sprintf("over the %d-skill limit", maxSkills)
+		case len(skill.Files) > maxSkillFiles:
+			reason = fmt.Sprintf("more than %d files", maxSkillFiles)
+		default:
+			tree, size, reason = skillFiles(slug, skill)
+			if reason == "" && total+size > maxSkillsTotal {
+				reason = "over the 8 MiB total for skills"
+			}
+		}
+		if reason != "" {
+			name := sanitizeSkillName(skill.Name)
+			skipped = append(skipped, Skipped{name[:min(len(name), 64)], reason})
+			continue
+		}
+		taken[slug] = struct{}{}
+		total += size
+		maps.Copy(files, tree)
+		kept = append(kept, skill)
+	}
+	return files, kept, skipped, nil
+}
+
+// skillFiles lays down one skill under its slug, or says why it does not fit.
+func skillFiles(slug string, skill multica.Skill) (map[string][]byte, int, string) {
 	files, dirs, total := map[string][]byte{}, map[string]bool{}, 0
-	add := func(name string, data string) error {
+	add := func(name string, data string) string {
 		if len(data) > maxSkillFile || len(name) > maxSkillPathLen {
-			return fmt.Errorf("skill file exceeds limits: %w", ErrDenied)
+			return "a file exceeds 1 MiB or its path 512 bytes"
 		}
-		if total += len(data); total > maxSkillsTotal {
-			return fmt.Errorf("skills exceed %d bytes: %w", maxSkillsTotal, ErrDenied)
-		}
+		total += len(data)
 		// In either order: a/b then a, or a then a/b.
 		for dir := path.Dir(name); dir != "."; dir = path.Dir(dir) {
 			if _, file := files[dir]; file {
-				return fmt.Errorf("skill file path is also a directory: %w", ErrDenied)
+				return "a file path is also a directory"
 			}
 			dirs[dir] = true
 		}
 		if dirs[name] {
-			return fmt.Errorf("skill file path is also a directory: %w", ErrDenied)
+			return "a file path is also a directory"
 		}
 		if _, exists := files[name]; exists {
-			return fmt.Errorf("skill lists a file twice: %w", ErrDenied)
+			return "a file is listed twice"
 		}
 		files[name] = []byte(data)
-		return nil
+		return ""
 	}
-	for i, slug := range resolveSkillSlugs(skills) {
-		skill := skills[i]
-		if len(skill.Files) > maxSkillFiles {
-			return nil, fmt.Errorf("skill carries more than %d files: %w", maxSkillFiles, ErrDenied)
+	if reason := add(slug+"/SKILL.md", ensureSkillFrontmatter(skill.Content, slug, skill.Description)); reason != "" {
+		return nil, 0, reason
+	}
+	for _, f := range skill.Files {
+		if strings.EqualFold(filepath.Clean(f.Path), "SKILL.md") {
+			continue
 		}
-		if err := add(slug+"/SKILL.md", ensureSkillFrontmatter(skill.Content, slug, skill.Description)); err != nil {
-			return nil, err
-		}
-		for _, f := range skill.Files {
-			if strings.EqualFold(filepath.Clean(f.Path), "SKILL.md") {
-				continue
-			}
-			clean := path.Clean(f.Path)
-			if f.Path == "" || strings.ContainsAny(f.Path, "\\\x00") || path.IsAbs(clean) || clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
-				return nil, fmt.Errorf("skill file path escapes its skill: %w", ErrDenied)
-			}
-			if err := add(slug+"/"+clean, f.Content); err != nil {
-				return nil, err
-			}
+		if reason := add(slug+"/"+path.Clean(f.Path), f.Content); reason != "" {
+			return nil, 0, reason
 		}
 	}
-	return files, nil
+	return files, total, ""
 }
 
 // ensureSkillFrontmatter returns SKILL.md content leading with frontmatter whose name is

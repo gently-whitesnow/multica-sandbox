@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -53,7 +55,8 @@ type Adapter struct {
 	// Command replaces the `opencode acp` argv; it must speak ACP on stdio.
 	Command  []string
 	Reporter Reporter
-	// Log records reports Multica never received; nil discards them.
+	// Log records reports Multica never received and configuration attempts left out;
+	// nil discards them.
 	Log *slog.Logger
 	// Relay and RelayURL enable upstream-equivalent Multica CLI access (ADR 0014).
 	Relay    Grants
@@ -143,12 +146,22 @@ const SessionDB = "/workspace/work/.multica-sandbox/opencode.db"
 var sessionID = regexp.MustCompile(`^ses_[A-Za-z0-9]{1,64}$`)
 
 func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, error) {
-	connections, err := Select(task)
+	connections, skipped, err := Selection(task)
 	if err != nil {
 		return nil, &execution.RejectedError{Err: err}
 	}
 	if connections, err = resolveRemoteHeaders(connections, task.Agent.CustomEnv); err != nil {
 		return nil, &execution.RejectedError{Err: err}
+	}
+	notices := Notices{MCP: skipped, Env: reservedEnvNames(task.Agent.CustomEnv), GitRelay: a.GitRelay != nil}
+	if a.MCPRelay == nil {
+		// Without the relay no server connects; an explicit IAM selection still denies (ADR 0030).
+		for _, name := range slices.Sorted(maps.Keys(connections)) {
+			if !connections[name].identity {
+				notices.MCP = append(notices.MCP, Skipped{name, "this sandbox has no MCP relay"})
+				delete(connections, name)
+			}
+		}
 	}
 	if len(connections) != 0 && a.MCPRelay == nil {
 		return nil, &execution.RejectedError{Err: fmt.Errorf("MCP connections require mcp_relay: %w", ErrDenied)}
@@ -165,9 +178,11 @@ func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, 
 	}
 	var skills map[string][]byte
 	if a.Relay != nil {
-		if skills, err = skillTree(task.Agent.Skills); err != nil {
+		agent := *task.Agent
+		if skills, agent.Skills, notices.Skills, err = skillTree(agent.Skills); err != nil {
 			return nil, &execution.RejectedError{Err: err}
 		}
+		task.Agent = &agent
 	}
 	anonymous, public, err := a.mcpModes(connections)
 	if err != nil {
@@ -239,6 +254,8 @@ func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, 
 	if err != nil {
 		return nil, r.reject(err)
 	}
+	r.prompt, brief = notices.Apply(r.prompt, brief)
+	notices.Log(a.Log, task.ID)
 	project, _ := projectFile(task)
 	if err = r.initialize(runCtx, brief, project); err != nil {
 		return nil, r.reject(err)

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"maps"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -85,6 +86,23 @@ func validProcessEnvName(name string) bool {
 		}
 	}
 	return true
+}
+
+// reservedEnvNames lists agent ENV names dropped as controller/image-owned, sorted; the
+// controller-consumed connection credentials and invalid names are not listed.
+func reservedEnvNames(env multica.SecretEnv) []string {
+	var names []string
+	for name := range env.Values() {
+		switch name {
+		case inference.EnvBaseURL, inference.EnvAPIKey, identity.EnvClientID, identity.EnvClientSecret:
+			continue
+		}
+		if envName.MatchString(name) && !validProcessEnvName(name) {
+			names = append(names, name)
+		}
+	}
+	slices.Sort(names)
+	return names
 }
 
 var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)

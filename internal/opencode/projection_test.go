@@ -15,15 +15,19 @@ func TestProjectionDeniesClaimCredentials(t *testing.T) {
 		`{"mcpServers":{"x":{"command":"/bin/sh","args":["-c","evil"]}}}`,
 		`{"mcpServers":{"x":{"url":"https://tools/mcp","oauth":{"clientSecret":"private"}}}}`,
 		`{"mcpServers":{"x":{"url":"https://tools/mcp","env":{"SECRET":"private"}}}}`,
-		`{"mcpServers":{"x":{"url":"https://tools/mcp"}}} {}`,
 	} {
 		task := safeTask()
 		task.Agent.MCPConfig = json.RawMessage(config)
-		if _, err := Select(task); err == nil {
-			t.Fatal("unsafe connection accepted")
+		if selected, err := Select(task); err != nil || len(selected) != 0 {
+			t.Fatal("unsupported connection selected", err)
 		}
 	}
 	task := safeTask()
+	task.Agent.MCPConfig = json.RawMessage(`{"mcpServers":{"x":{"url":"https://tools/mcp"}}} {}`)
+	if _, err := Select(task); err == nil {
+		t.Fatal("trailing configuration accepted")
+	}
+	task = safeTask()
 	task.Agent.ID = "20000000-0000-4000-8000-000000000002"
 	if _, err := Select(task); err == nil {
 		t.Fatal("spoofed agent accepted")
@@ -71,7 +75,6 @@ func TestLocalPermissions(t *testing.T) {
 
 func TestSelectAdmitsOnlyRelayableEndpoints(t *testing.T) {
 	for _, server := range []string{
-		`{"url":"https://tools.example.invalid/mcp","type":"sse"}`,
 		`{"url":"https://user@tools.example.invalid/mcp"}`,
 		`{"url":"https://tools.example.invalid/a%2Fb"}`,
 		`{"url":"ftp://tools.example.invalid/mcp"}`,

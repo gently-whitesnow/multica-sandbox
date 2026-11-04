@@ -53,7 +53,12 @@ ends the opaque grant. Each attempt uses only its own selected connections and
 credentials; another attempt's headers, query or selected aliases are not reused.
 
 OAuth/browser login, stdio, broker connections and per-server timeouts are
-explicitly unsupported in this release. OAuth belongs in a future backend flow
+explicitly unsupported in this release. Such a server, a non-streamable transport
+and servers beyond the first 16 by name are skipped rather than failing the task:
+the controller logs name and reason, and the brief's Sandbox Notices tell the
+agent in one line each (refinement 2026-11-04). Malformed entries, credential
+templates in URLs, invalid headers and IAM selection still reject; skipping never
+connects a server outside the relay. OAuth belongs in a future backend flow
 with persistent token refresh, rather than interactive login in disposable agents.
 Multica's native human-only library/assignment gates remain in force. This change
 does not introduce a sandbox permission engine or bypass those native gates.

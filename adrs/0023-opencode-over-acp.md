@@ -88,7 +88,10 @@ open streams. Caller query parameters (including OpenCode's `codemode=false`)
 are dropped so the endpoint stays exact. Access tokens no longer enter the attempt; the auth-store
 projection and its file go. The projected permissions allow each connection's tools.
 Upstreams the controller calls must not share a name with an attempt peer: a
-pooled connection through a removed attempt network hangs.
+pooled connection through a removed attempt network hangs. A deployment without
+`mcp_relay` connects no MCP: servers without IAM are skipped with a Sandbox Notice,
+since nothing reaches them outside the relay; an IAM selection still rejects
+(ADR 0030).
 
 **1.x.** Listed 1.x images run on the same transport and relay. The `run`
 transport is removed once ACP conformance passes, keeping only operator commands.
