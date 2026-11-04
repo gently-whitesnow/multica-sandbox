@@ -10,6 +10,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -39,6 +40,8 @@ type fakeAgent struct {
 	failCode int
 	// prompted receives the prompt text once it arrives.
 	prompted chan string
+	// pause delays the prompt answer after the updates.
+	pause time.Duration
 
 	mu      sync.Mutex
 	methods []string
@@ -119,6 +122,7 @@ func (f *fakeAgent) serve(out io.WriteCloser, in io.Reader) {
 					}
 					update(session, plain)
 				}
+				time.Sleep(f.pause)
 				switch {
 				case f.hangup:
 					out.Close()
@@ -140,6 +144,13 @@ func (f *fakeAgent) called(method string) (json.RawMessage, bool) {
 	defer f.mu.Unlock()
 	params, ok := f.params[method]
 	return params, ok
+}
+
+func (f *fakeAgent) calledAt(method string) (time.Time, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	t, ok := f.at[method]
+	return t, ok
 }
 
 // turnWith runs one adapter turn against the fake agent over in-memory pipes.
@@ -405,15 +416,20 @@ func TestToolOutputPreviewIsUTF8Safe(t *testing.T) {
 	}
 }
 
-func TestRunningToolPausesIdleWatchdog(t *testing.T) {
+func TestRunningToolBoundsSilenceByToolBudget(t *testing.T) {
 	var stream eventStream
 	stream.active.Store(time.Now().Add(-2 * time.Minute).UnixNano())
-	stream.running.Add(1)
-	if stream.idle(time.Minute) {
-		t.Fatal("watchdog fired while a tool runs")
+	for _, running := range []*atomic.Int64{&stream.running, &stream.background} {
+		running.Add(1)
+		if after, idle := stream.idle(time.Minute, time.Hour); idle || after != time.Hour {
+			t.Fatal("idle window applied while a tool or background shell runs")
+		}
+		if after, idle := stream.idle(time.Minute, 90*time.Second); !idle || after != 90*time.Second {
+			t.Fatal("tool budget did not bound a silent tool")
+		}
+		running.Add(-1)
 	}
-	stream.running.Add(-1)
-	if !stream.idle(time.Minute) {
-		t.Fatal("watchdog paused without a running tool")
+	if after, idle := stream.idle(time.Minute, time.Hour); !idle || after != time.Minute {
+		t.Fatal("idle window did not apply without a running tool")
 	}
 }

@@ -280,17 +280,33 @@ func parseValue(value string) (int64, error) {
 	return n, nil
 }
 
-func someAvg10(pressure string) (float64, error) {
+func someAvg10(pressure string) (float64, error) { return pressureAvg(pressure, "some", "avg10") }
+
+// FullAvg60 reads PSI "full" avg60 from memory.pressure: the percent of the last minute
+// in which every task of the cgroup waited for memory.
+func FullAvg60(pressure string) (float64, error) { return pressureAvg(pressure, "full", "avg60") }
+
+func pressureAvg(pressure, kind, window string) (float64, error) {
 	for _, line := range strings.Split(pressure, "\n") {
-		if rest, ok := strings.CutPrefix(line, "some "); ok {
+		if rest, ok := strings.CutPrefix(line, kind+" "); ok {
 			for _, field := range strings.Fields(rest) {
-				if value, ok := strings.CutPrefix(field, "avg10="); ok {
+				if value, ok := strings.CutPrefix(field, window+"="); ok {
 					return strconv.ParseFloat(value, 64)
 				}
 			}
 		}
 	}
 	return 0, fmt.Errorf("invalid memory.pressure")
+}
+
+// AttemptPressure reads memory.pressure of a container in the pool.
+func (p *Pool) AttemptPressure(id string) (string, error) {
+	dir, err := p.Attempt(id)
+	if err != nil {
+		return "", err
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "memory.pressure"))
+	return string(data), err
 }
 
 func keyed(stat string) map[string]int64 {

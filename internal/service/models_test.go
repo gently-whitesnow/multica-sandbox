@@ -77,6 +77,8 @@ func TestFailureReasonsMatchUpstreamDaemon(t *testing.T) {
 		{errors.Join(&execution.OOMError{Killed: 3, Peak: 4 << 30, Limit: 4 << 30}), "Out of memory: the kernel killed 3 process(es) in the attempt after it reached the attempt memory limit (4.0 GiB), peak usage 4.0 GiB. " + oomAdvice, "agent_error.process_failure"},
 		{&execution.OOMError{Killed: 1, Peak: 7 << 30, Limit: 10 << 30, Pool: true}, "Out of memory: the kernel killed 1 process(es) in the attempt after it reached the shared attempt memory pool (10.0 GiB), peak usage 7.0 GiB. " + oomAdvice, "agent_error.process_failure"},
 		{&execution.OOMError{Peak: -1, Limit: -1}, "Out of memory: the kernel killed processes in the attempt after it reached the attempt memory limit. " + oomAdvice, "agent_error.process_failure"},
+		{&execution.MemoryStallError{After: 15 * time.Minute, Stall: 91.4, Peak: 4 << 30, Limit: 4 << 30, Pool: true}, "Out of memory: the attempt thrashed at the shared attempt memory pool (4.0 GiB), peak usage 4.0 GiB, and was stalled on memory 91% of the last minute; the agent produced no new messages for 15m0s and was force-stopped. " + oomAdvice, "agent_error.process_failure"},
+		{&execution.MemoryStallError{After: time.Minute, Stall: 50, Peak: -1, Limit: -1}, "Out of memory: the attempt thrashed at its memory limit and was stalled on memory 50% of the last minute; the agent produced no new messages for 1m0s and was force-stopped. " + oomAdvice, "agent_error.process_failure"},
 	} {
 		if message, reason := failure(tc.cause); message != tc.message || reason != tc.reason {
 			t.Errorf("%v -> %q %q", tc.cause, message, reason)

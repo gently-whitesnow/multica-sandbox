@@ -73,6 +73,8 @@ type Adapter struct {
 	Checkout *repo.Checkout
 	// IdleWatchdog fails a run without native events for this long (default 10m, upstream's).
 	IdleWatchdog time.Duration
+	// ToolWatchdog bounds it while a tool or background shell runs (default 2h, upstream's).
+	ToolWatchdog time.Duration
 	// CompactionMaxTokens caps the native auto-compaction trigger; zero keeps native policy.
 	CompactionMaxTokens int
 }
@@ -427,8 +429,8 @@ loop:
 			agentDone = true
 			break loop
 		case <-ticker.C:
-			if watchdog := r.adapter.idleWatchdog(); r.events.idle(watchdog) {
-				err = &execution.IdleError{After: watchdog}
+			if after, idle := r.events.idle(r.adapter.idleWatchdog(), r.adapter.toolWatchdog()); idle {
+				err = r.stalled(ctx, after)
 				break loop
 			}
 			if err = r.refresh(ctx); err != nil {
@@ -451,6 +453,26 @@ func (a *Adapter) idleWatchdog() time.Duration {
 		return a.IdleWatchdog
 	}
 	return idleWatchdog
+}
+
+func (a *Adapter) toolWatchdog() time.Duration {
+	if a.ToolWatchdog > 0 {
+		return a.ToolWatchdog
+	}
+	return toolWatchdog
+}
+
+// stalled names a silent run: an agent frozen by its attempt thrashing on memory is a
+// memory failure, not a hang (ADR 0032).
+func (r *running) stalled(ctx context.Context, after time.Duration) error {
+	if w, ok := r.workload.(interface {
+		MemoryStall(context.Context, time.Duration) *execution.MemoryStallError
+	}); ok {
+		if stall := w.MemoryStall(ctx, after); stall != nil {
+			return stall
+		}
+	}
+	return &execution.IdleError{After: after}
 }
 
 // Result reports the session as retained only with a retained workdir.

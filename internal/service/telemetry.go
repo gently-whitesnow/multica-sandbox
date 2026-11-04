@@ -103,12 +103,15 @@ func outcome(cause error) (status, reason string, code int) {
 	var idle *execution.IdleError
 	var rejected *execution.RejectedError
 	var oom *execution.OOMError
+	var stall *execution.MemoryStallError
 	var agent *execution.AgentFailure
 	switch {
 	case cause == nil:
 		return "success", "", 0
 	case errors.As(cause, &timeout):
 		return "timeout", "", 0
+	case errors.As(cause, &stall):
+		return "failed", "memory_stall", 0
 	case errors.As(cause, &idle):
 		return "failed", "idle", 0
 	case errors.As(cause, &rejected):

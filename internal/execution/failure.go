@@ -61,6 +61,39 @@ func (e *OOMError) Error() string {
 		"Not retried automatically: reduce the task's memory use or raise the limit.", killed, limit, peak)
 }
 
+// MemoryStallError is a silent run whose attempt spent the last minute stalled on memory
+// (PSI full avg60 at least StallThreshold percent): it thrashed at its limit instead of
+// being OOM-killed, and the agent froze with it. Limit is as in OOMError.
+type MemoryStallError struct {
+	After       time.Duration
+	Stall       float64
+	Peak, Limit int64
+	Pool        bool
+}
+
+// StallThreshold is the PSI full avg60 percent that makes a silent attempt a memory stall.
+const StallThreshold = 50
+
+func (e *MemoryStallError) Error() string {
+	limit := "its memory limit"
+	if e.Pool {
+		limit = "the shared attempt memory pool"
+	}
+	if e.Limit > 0 {
+		limit += fmt.Sprintf(" (%s)", size(e.Limit))
+	}
+	peak := ""
+	if e.Peak > 0 {
+		peak = fmt.Sprintf(", peak usage %s", size(e.Peak))
+	}
+	if peak != "" {
+		peak += ","
+	}
+	return fmt.Sprintf("Out of memory: the attempt thrashed at %s%s and was stalled on memory %.0f%% of the last minute; "+
+		"the agent produced no new messages for %s and was force-stopped. "+
+		"Not retried automatically: reduce the task's memory use or raise the limit.", limit, peak, e.Stall, e.After)
+}
+
 func size(n int64) string {
 	if n >= 1<<30 {
 		return fmt.Sprintf("%.1f GiB", float64(n)/(1<<30))

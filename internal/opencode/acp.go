@@ -43,7 +43,7 @@ var quiet = slog.New(slog.DiscardHandler)
 // offers no filesystem or terminal and rejects permission requests; the projected
 // configuration remains the permission authority.
 func (r *running) converse(ctx context.Context, stdin io.Writer, stdout io.Reader) error {
-	client := &acpClient{events: r.events, calls: map[string]*toolCall{}}
+	client := &acpClient{events: r.events, calls: map[string]*toolCall{}, shells: map[string]bool{}}
 	conn := acp.NewClientSideConnection(client, stdin, stdout)
 	conn.SetLogger(quiet)
 	stop := r.events.flushEvery(reportInterval)
@@ -151,6 +151,12 @@ func (r *running) ask(ctx context.Context, conn *acp.ClientSideConnection, clien
 		return r.failure(ctx, conn, a.err)
 	}
 	usage := r.turnUsage(ctx, id, since, a.response.Usage)
+	// A turn that left shells running has produced a tool call; it ends with them.
+	if a.response.StopReason == acp.StopReasonEndTurn && r.v2 && client.waiting() > 0 {
+		resumed, err := r.follow(ctx, client, id, since, time.Now())
+		r.events.reportUsage(addUsage(usage, resumed))
+		return err
+	}
 	r.events.reportUsage(usage)
 	switch a.response.StopReason {
 	case acp.StopReasonEndTurn:
@@ -289,8 +295,12 @@ type acpClient struct {
 	mu        sync.Mutex
 	session   acp.SessionId
 	replaying bool
+	// following drops updates once the turn ended: follow reads the session instead.
+	following bool
 	text      bool
 	calls     map[string]*toolCall
+	// shells are the followed session's background shells still running.
+	shells map[string]bool
 }
 
 func (c *acpClient) replay(on bool) { c.mu.Lock(); c.replaying = on; c.mu.Unlock() }
@@ -328,7 +338,7 @@ func (c *acpClient) SessionUpdate(_ context.Context, n acp.SessionNotification) 
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.replaying || c.session == "" {
+	if c.replaying || c.following || c.session == "" {
 		return nil
 	}
 	_, child := u.Meta["opencode/child-session"]
@@ -347,13 +357,14 @@ func (c *acpClient) SessionUpdate(_ context.Context, n acp.SessionNotification) 
 		}
 		c.events.chunk(kind, block.Text)
 	case "tool_call", "tool_call_update":
-		c.tool(u)
+		c.tool(u, child)
 	}
 	return nil
 }
 
-// tool emits tool_use when the tool starts with its input and tool_result when it ends.
-func (c *acpClient) tool(u update) {
+// tool emits tool_use when the tool starts with its input and tool_result when it ends,
+// and tracks the followed session's shells that end in the background.
+func (c *acpClient) tool(u update, child bool) {
 	call := c.calls[u.Call]
 	if call == nil {
 		if u.Kind != "tool_call" || u.Call == "" {
@@ -379,6 +390,9 @@ func (c *acpClient) tool(u update) {
 			c.events.running.Add(-1)
 		}
 		delete(c.calls, u.Call)
+		if !child && u.Status == "completed" {
+			c.shell(backgroundShell(u.RawOutput), true)
+		}
 		output, truncated := preview(toolOutput(u))
 		c.events.add(multica.Message{Type: "tool_result", Tool: call.name, CallID: u.Call, Output: output, OutputTruncated: &truncated, CreatedAt: now})
 	}

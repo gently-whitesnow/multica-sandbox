@@ -74,9 +74,13 @@ func failure(cause error) (string, string) {
 	var rejected *execution.RejectedError
 	var agent *execution.AgentFailure
 	var oom *execution.OOMError
+	var stall *execution.MemoryStallError
 	switch {
 	case errors.As(cause, &timeout):
 		return "opencode " + timeout.Error(), "timeout"
+	case errors.As(cause, &stall):
+		// Like an OOM kill: the same task would thrash again.
+		return stall.Error(), "agent_error.process_failure"
 	case errors.As(cause, &idle):
 		return idle.Error(), "idle_watchdog"
 	case errors.As(cause, &rejected):

@@ -7,6 +7,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -54,7 +56,7 @@ func TestExportedContract(t *testing.T) {
 		"sandbox_claims_paused":                    {{"reason"}},
 		"sandbox_claims_draining":                  {{}},
 		"sandbox_workspaces_ready":                 {{}},
-		"sandbox_build_info":                       {{"revision"}},
+		"sandbox_build_info":                       {{"revision", "version"}},
 	}
 	for name, labelSets := range want {
 		family, ok := families[name]
@@ -102,7 +104,7 @@ func TestExportedContract(t *testing.T) {
 		`http_client_request_duration_seconds_count{error_type="request-timeout",method="other",path="/api/daemon/heartbeat",target_service_name="multica"} 1`,
 		`sandbox_pool_memory_pressure_ratio 0.42`,
 		`sandbox_claims_paused{reason="pressure"} 1`,
-		`sandbox_build_info{revision="unknown"} 1`,
+		`sandbox_build_info{revision="unknown",version="unknown"} 1`,
 	} {
 		if !strings.Contains(text, line) {
 			t.Errorf("exposition lacks %s", line)
@@ -216,4 +218,13 @@ func scrape(t *testing.T, m *Metrics) map[string]*dto.MetricFamily {
 		t.Fatal(err)
 	}
 	return families
+}
+
+// VERSION names each controller release: images carry it as a tag and sandbox_build_info
+// as a label.
+func TestVersionIsSemantic(t *testing.T) {
+	data, err := os.ReadFile("../../VERSION")
+	if err != nil || !regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\n$`).Match(data) {
+		t.Fatalf("VERSION must be one MAJOR.MINOR.PATCH line: %q %v", data, err)
+	}
 }

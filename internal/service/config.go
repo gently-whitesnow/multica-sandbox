@@ -128,6 +128,7 @@ type OpenCodeConfig struct {
 	// Sessions, with the helper, retains issue workdirs and resumes sessions (ADR 0015).
 	Sessions     *SessionsConfig `json:"sessions,omitempty"`
 	IdleWatchdog string          `json:"idle_watchdog,omitempty"`
+	ToolWatchdog string          `json:"tool_watchdog,omitempty"`
 	// CompactionMaxTokens is an optional native compaction trigger cap for verified OpenCode 2.x.
 	CompactionMaxTokens int                  `json:"compaction_max_tokens,omitempty"`
 	Resources           *docker.ResourceSpec `json:"resources,omitempty"`

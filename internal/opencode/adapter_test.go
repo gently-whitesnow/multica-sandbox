@@ -113,6 +113,8 @@ type stubWorkload struct {
 	// capture answers bounded Capture and streamed exports; captured records their argv.
 	capture  []byte
 	captured []string
+	// api answers `opencode api` by request path.
+	api func(path string) string
 	// refuse fails Start like a backend that created nothing.
 	refuse error
 }
@@ -342,6 +344,9 @@ func (s *stubWorkload) Stream(ctx context.Context, args []string, env map[string
 	if len(args) > 1 && args[0] == "opencode" && args[1] == "export" {
 		s.captured = args
 		return converse(io.Discard, strings.NewReader(string(s.capture)))
+	}
+	if len(args) > 1 && args[0] == "opencode" && args[1] == "api" {
+		return converse(io.Discard, strings.NewReader(s.api(args[len(args)-1])))
 	}
 	if s.agent == nil {
 		s.agent = &fakeAgent{version: "2.2.2"}

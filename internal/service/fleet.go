@@ -134,7 +134,7 @@ func (f *fleet) serve(ctx context.Context, execute func(context.Context, multica
 		return err
 	}
 	f.metrics.Workspaces(len(f.ready))
-	f.log.Info("controller ready", "workspaces", len(f.ready))
+	f.log.Info("controller ready", "workspaces", len(f.ready), "version", metrics.Version, "revision", metrics.Revision)
 	if api, ok := f.api.(wakeupAPI); ok {
 		listenCtx, stop := context.WithCancel(ctx)
 		defer stop()

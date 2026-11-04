@@ -122,6 +122,10 @@ func newOpenCodeAdapter(ctx context.Context, c Config, stateDir string, api *mul
 	if err != nil {
 		return nil, nil, fmt.Errorf("idle_watchdog must be a positive duration")
 	}
+	toolWatchdog, err := optionalDuration(c.OpenCode.ToolWatchdog, 2*time.Hour)
+	if err != nil {
+		return nil, nil, fmt.Errorf("tool_watchdog must be a positive duration")
+	}
 	workloads, err := attemptWorkloads(c.OpenCode, backend)
 	if err != nil {
 		return nil, nil, err
@@ -205,7 +209,7 @@ func newOpenCodeAdapter(ctx context.Context, c Config, stateDir string, api *mul
 	if err = workloads.ValidateNetwork(ctx); err != nil {
 		return nil, nil, err
 	}
-	adapter := &opencode.Adapter{Server: strings.TrimRight(c.Server, "/"), Controller: c.Daemon, Issuer: issuer, Authority: authority, Status: api, Reporter: api, Workloads: workloads, Command: c.Command, IdleWatchdog: watchdog, MCPPublicProxy: publicProxy, CompactionMaxTokens: c.OpenCode.CompactionMaxTokens, Log: log}
+	adapter := &opencode.Adapter{Server: strings.TrimRight(c.Server, "/"), Controller: c.Daemon, Issuer: issuer, Authority: authority, Status: api, Reporter: api, Workloads: workloads, Command: c.Command, IdleWatchdog: watchdog, ToolWatchdog: toolWatchdog, MCPPublicProxy: publicProxy, CompactionMaxTokens: c.OpenCode.CompactionMaxTokens, Log: log}
 	if issuer != nil || publicProxy != nil {
 		adapter.MCPRelay = opencode.NewMCPRelay()
 		policy := relay.Policy{Allow: opencode.MCPRelayPath, Reserved: opencode.MCPReservedHeaders, HeaderTimeout: opencode.MCPHeaderTimeout}

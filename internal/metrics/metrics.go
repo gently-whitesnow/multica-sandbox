@@ -34,8 +34,9 @@ const Path = "/metrics"
 // The host deploy gate polls it after a controller restart.
 const ReadyPath = "/readyz"
 
-// Revision is the controller source commit, set at build time with -ldflags -X.
-var Revision = "unknown"
+// Version is the controller release from VERSION and Revision its source commit, both set
+// at build time with -ldflags -X.
+var Version, Revision = "unknown", "unknown"
 
 // CardinalityLimit caps series per instrument; excess combinations go to the
 // otel_metric_overflow series.
@@ -134,9 +135,9 @@ func New() (*Metrics, error) {
 			return nil
 		}))
 	errs = append(errs, err)
-	_, err = meter.Int64ObservableGauge("sandbox.build.info", metric.WithDescription("Always 1; the controller source revision."),
+	_, err = meter.Int64ObservableGauge("sandbox.build.info", metric.WithDescription("Always 1; the controller release version and source revision."),
 		metric.WithInt64Callback(func(_ context.Context, o metric.Int64Observer) error {
-			o.Observe(1, metric.WithAttributes(attribute.String("revision", Revision)))
+			o.Observe(1, metric.WithAttributes(attribute.String("version", Version), attribute.String("revision", Revision)))
 			return nil
 		}))
 	errs = append(errs, err)

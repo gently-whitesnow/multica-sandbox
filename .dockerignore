@@ -10,3 +10,4 @@
 !examples/identity-mcp/*.go
 !examples/end-to-end/
 !examples/end-to-end/**
+!VERSION

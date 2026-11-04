@@ -56,6 +56,9 @@ Attempts may share one host cgroup slice, the pool, instead of fixed limits.
   outside Multica's automatic retries and resume-safe. The message names the killed
   process count, the peak and the limit reached (attempt ceiling or pool) and that the
   task is not retried.
+- **Memory stall.** An attempt throttled at `memory.high` is not killed and can freeze
+  its agent; a watchdog expiry with PSI `full avg60` of at least 50 % in the attempt is
+  reported like an OOM kill (ADR 0032).
 
 ## Consequences
 

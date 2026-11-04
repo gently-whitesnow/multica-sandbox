@@ -74,6 +74,7 @@ jobs:
             exit 1
           }
           echo "digest=$(jq -r .digest release.json)" >> "$GITHUB_OUTPUT"
+          echo "version=$(jq -r '.version // "unknown"' release.json)" >> "$GITHUB_OUTPUT"
       - name: Deploy through the sandbox capability
         env:
           SSH_KEY: ${{ secrets.SANDBOX_DEPLOY_SSH_KEY }}
@@ -96,6 +97,7 @@ jobs:
         if: always()
         env:
           SHA: ${{ steps.publication.outputs.sha }}
+          VERSION: ${{ steps.release.outputs.version }}
         run: |
           [ -f deploy.log ] || { echo "Deploy did not reach the host for ${SHA:-unknown}" >> "$GITHUB_STEP_SUMMARY"; exit 0; }
           result=$(sed -n 's/^RESULT //p' deploy.log | tail -n 1)
@@ -103,10 +105,11 @@ jobs:
             echo "No result from the host; inspect the log and run the status request" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          printf '%s' "$result" | jq -r --arg sha "$SHA" '
-            "### Controller deploy: \(.result)",
+          printf '%s' "$result" | jq -r --arg sha "$SHA" --arg version "${VERSION:-unknown}" '
+            "### Controller deploy v\($version): \(.result)",
             "",
             "| | |", "|---|---|",
+            "| version | `v\($version)` |",
             "| commit | `\($sha)` |",
             "| previous | `\(.previous)` |",
             "| requested | `\(.requested)` |",

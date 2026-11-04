@@ -667,6 +667,36 @@ func (r *projectedRun) memory() (pool.Memory, error) {
 	return pool.ParseMemory(out)
 }
 
+// MemoryStall reports a memory stall when the attempt cgroup spent at least
+// execution.StallThreshold percent of the last minute with every task waiting for memory;
+// nil when it did not or the cgroup is unreadable. after is the agent's silence.
+func (r *projectedRun) MemoryStall(ctx context.Context, after time.Duration) *execution.MemoryStallError {
+	var pressure string
+	if r.pool != nil {
+		pressure, _ = r.pool.AttemptPressure(r.id)
+	} else {
+		readCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		out, err := command(readCtx, "exec", "--user", AttemptUser, r.name, "cat", "/sys/fs/cgroup/memory.pressure")
+		cancel()
+		if err == nil {
+			pressure = string(out)
+		}
+	}
+	stall, err := pool.FullAvg60(pressure)
+	if err != nil || stall < execution.StallThreshold {
+		return nil
+	}
+	e := &execution.MemoryStallError{After: after, Stall: stall, Peak: -1, Limit: -1}
+	if m, err := r.memory(); err == nil {
+		e.Peak, e.Limit = m.Peak, m.Max
+		// Without its own ceiling the attempt can only thrash at the pool's.
+		if r.pool != nil && m.Max == pool.Unlimited {
+			e.Pool, e.Limit = true, r.poolMax
+		}
+	}
+	return e
+}
+
 // PeakMemory is the attempt cgroup's memory.peak at the agent's last exit, 0 if unread
 // (before Linux 5.19).
 func (r *projectedRun) PeakMemory() int64 { return r.peak }

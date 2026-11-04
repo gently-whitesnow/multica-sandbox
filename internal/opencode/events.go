@@ -22,6 +22,9 @@ const (
 	reportInterval    = 500 * time.Millisecond
 	reportTimeout     = 5 * time.Second
 	idleWatchdog      = 10 * time.Minute
+	// toolWatchdog bounds silence while a tool or background shell runs, upstream's
+	// MULTICA_AGENT_TOOL_WATCHDOG default.
+	toolWatchdog = 2 * time.Hour
 	// pendingLimit bounds transcript rows kept across failed reports; older rows go first.
 	pendingLimit = 512
 )
@@ -43,8 +46,9 @@ type eventStream struct {
 	workDir string
 	active  atomic.Int64
 	tools   atomic.Int64
-	// running counts tools in progress; the idle watchdog pauses while any runs.
-	running atomic.Int64
+	// running counts tools in progress and background the shells a turn left running;
+	// while any runs, silence is bounded by the tool budget instead of the idle window.
+	running, background atomic.Int64
 
 	mu      sync.Mutex
 	output  strings.Builder
@@ -107,9 +111,14 @@ func preview(output string) (string, bool) {
 
 func (s *eventStream) touch() { s.active.Store(time.Now().UnixNano()) }
 
-// idle reports silence longer than the upstream OpenCode idle watchdog while no tool runs.
-func (s *eventStream) idle(window time.Duration) bool {
-	return s.running.Load() == 0 && time.Since(time.Unix(0, s.active.Load())) > window
+// idle reports silence past the idle window, or past the tool budget while a tool or
+// background shell runs, with the window that applied.
+func (s *eventStream) idle(window, tool time.Duration) (time.Duration, bool) {
+	silent := time.Since(time.Unix(0, s.active.Load()))
+	if s.running.Load() > 0 || s.background.Load() > 0 {
+		return tool, silent > tool
+	}
+	return window, silent > window
 }
 
 // add sequences transcript rows starting at 1. Each row
