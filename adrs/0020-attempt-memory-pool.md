@@ -45,17 +45,18 @@ Attempts may share one host cgroup slice, the pool, instead of fixed limits.
   log records each pause and resume once.
 - **Removal.** Killed processes throttled at `memory.high` and swapped out exit slowly;
   a stand run took over 30 s per attempt. Removal gets three minutes of its own,
-  independent of the caller's cleanup deadline: a failed cleanup restarts the controller,
-  and Multica retries every task in flight as `runtime_recovery`.
+  independent of the caller's cleanup deadline: a failed cleanup restarts the controller
+  once the other attempts finish (ADR 0006).
 - **Out of memory.** When the agent command fails or its stream ends early (a killed
   OpenCode leaves a step open, which Multica would retry as a provider stream cut),
   the controller reads the attempt's
   `memory.events`, `memory.max` and, from Linux 5.19, `memory.peak` (through the pool on the host,
   otherwise inside the attempt, otherwise Docker's `OOMKilled`). An `oom_kill` makes the
-  failure an `OOMError`, reported with the canonical `agent_error.process_failure`:
-  outside Multica's automatic retries and resume-safe. The message names the killed
-  process count, the peak and the limit reached (attempt ceiling or pool) and that the
-  task is not retried.
+  failure an `OOMError`. At the attempt ceiling it is reported with the canonical
+  `agent_error.process_failure`: outside Multica's automatic retries and resume-safe.
+  At the pool's limit, which the neighbours share, it is `runtime_recovery`: Multica
+  retries the task once, resuming its session. The message names the killed process
+  count, the peak, the limit reached and whether the task is retried.
 - **Memory stall.** An attempt throttled at `memory.high` is not killed and can freeze
   its agent; a watchdog expiry with PSI `full avg60` of at least 50 % in the attempt is
   reported like an OOM kill (ADR 0032).
@@ -67,8 +68,8 @@ and new work waits while the pool is under pressure. On a 6 GiB VM with a 2/3 Gi
 pool and 4 GiB swap, four parallel .NET Testcontainers attempts (PostgreSQL and MongoDB
 in nested engines) held the pool at `memory.high` with up to 3.7 GiB in swap and PSI
 "some" up to 22 %, without an OOM kill; a run took 45–67 s instead of 40 s. A task can still die when the
-pool reaches `MemoryMax` or its own ceiling; it then fails once with an explicit
-message. Admission bounds only new claims: attempts already running can push the pool
+pool reaches `MemoryMax` or its own ceiling; it then fails with an explicit
+message, retried once only for the pool. Admission bounds only new claims: attempts already running can push the pool
 into `MemoryMax`, so `MemoryHigh` must leave headroom, and the agents'
 `max_concurrent_tasks` remain the upper bound. Tasks waiting under sustained pressure can expire in the
 Multica queue. Sizing the slice, swap and its disk are host decisions

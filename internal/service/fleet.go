@@ -67,6 +67,9 @@ type fleet struct {
 	// draining no task is claimed, running attempts finish and report as usual.
 	drain    <-chan bool
 	draining bool
+	// stopping holds controller-fatal attempt errors: no task is claimed, the other
+	// attempts finish and report, then serve returns them for a restart.
+	stopping error
 }
 
 // wakeupAPI is the upstream daemon WebSocket (multica.Client.Wakeups).
@@ -152,11 +155,14 @@ func (f *fleet) serve(ctx context.Context, execute func(context.Context, multica
 	for {
 		select {
 		case <-ctx.Done():
-			return nil
+			return f.stopping
 		case completed := <-f.done:
 			f.finish(completed)
 			if err := f.completed(completed); err != nil {
-				return err
+				f.stop(err)
+			}
+			if f.stopping != nil && len(f.active) == 0 {
+				return f.stopping
 			}
 		case draining := <-f.drain:
 			f.setDraining(draining)
@@ -189,7 +195,7 @@ func (f *fleet) serve(ctx context.Context, execute func(context.Context, multica
 // peers, until draining, pool admission or Multica stops it. Concurrency is each agent's
 // max_concurrent_tasks, which Multica enforces at claim; Multica keeps the queue.
 func (f *fleet) claim(ctx context.Context, execute func(context.Context, multica.Task) error) error {
-	if f.draining {
+	if f.draining || f.stopping != nil {
 		return nil
 	}
 	if f.autoAdmission != nil {
@@ -248,6 +254,16 @@ func (f *fleet) setDraining(draining bool) {
 	} else {
 		f.log.Info("claims resumed after drain", "active", len(f.active))
 	}
+}
+
+// stop holds claims after a controller-fatal attempt error, so it does not cancel the
+// attempts still running; the restart reconciles what the failed one left (ADR 0006).
+func (f *fleet) stop(err error) {
+	if f.stopping == nil {
+		f.metrics.Paused(true, "restart")
+	}
+	f.stopping = errors.Join(f.stopping, err)
+	f.log.Error("claims stopped: the controller restarts once running attempts finish", "active", len(f.active), "error", err.Error())
 }
 
 // admitted asks the pool before each claim; tasks wait in the Multica queue meanwhile.
@@ -309,8 +325,8 @@ func (f *fleet) tolerate(stage string, err error, attrs ...any) error {
 	return nil
 }
 
-// completed stops the controller only for an attempt that may leave host state behind:
-// a failed cleanup, a backend error (start failures join raw cleanup errors) or a task
+// completed returns an error only for an attempt that may leave host state behind: a
+// failed cleanup, a backend error (start failures join raw cleanup errors) or a task
 // left running in Multica. Restart reconciles resources and recovers orphans (ADR 0006).
 // Rejected tasks never arrive here: they are reported as failures.
 func (f *fleet) completed(done completion) error {

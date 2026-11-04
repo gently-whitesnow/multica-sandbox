@@ -113,7 +113,7 @@ func New() (*Metrics, error) {
 	poolGauge("sandbox.pool.memory.pressure", "1", "Attempt pool PSI some avg10.", func(r PoolReading) float64 { return r.Pressure })
 	poolGauge("sandbox.pool.memory.usage", "By", "Attempt pool working set.", func(r PoolReading) float64 { return float64(r.Usage) })
 	poolGauge("sandbox.pool.memory.limit", "By", "Attempt pool memory.high.", func(r PoolReading) float64 { return float64(r.Limit) })
-	_, err = meter.Int64ObservableGauge("sandbox.claims.paused", metric.WithDescription("1 while claims wait for the attempt pool, by the last refusal reason."),
+	_, err = meter.Int64ObservableGauge("sandbox.claims.paused", metric.WithDescription("1 while claims wait for the attempt pool, by the last refusal reason, or for a controller restart."),
 		metric.WithInt64Callback(func(_ context.Context, o metric.Int64Observer) error {
 			if reason := m.paused.Load(); reason != nil {
 				o.Observe(1, metric.WithAttributes(attribute.String("reason", *reason)))
@@ -246,8 +246,8 @@ func (m *Metrics) Pool(r PoolReading) {
 	m.pool.Store(&r)
 }
 
-// Paused records whether claims wait for the attempt pool; reason is the bounded
-// refusal reason (pool.Refusal*) and is ignored when not paused.
+// Paused records whether claims wait for the attempt pool or a restart; reason is the
+// bounded refusal reason (pool.Refusal*) or restart and is ignored when not paused.
 func (m *Metrics) Paused(paused bool, reason string) {
 	if m == nil {
 		return

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gently-whitesnow/multica-sandbox/internal/execution"
 )
@@ -34,8 +35,10 @@ esac
 			}
 			b := &Backend{Owner: "90000000-0000-4000-8000-000000000001", Image: "example.invalid/test@sha256:" + strings.Repeat("a", 64), Command: []string{"/bin/true"}}
 			run, err := b.Start(context.Background(), "attempt")
-			if err == nil || run != nil {
-				t.Fatal("uncertain create must fail")
+			var rejected *execution.RejectedError
+			// Only a confirmed removal makes the failure a transient rejection.
+			if run != nil || errors.As(err, &rejected) != (owner == b.Owner) || (rejected != nil && !rejected.Transient()) {
+				t.Fatalf("uncertain create: %v", err)
 			}
 			events, err := os.ReadFile(filepath.Join(dir, "events"))
 			if err != nil {
@@ -104,7 +107,7 @@ exit 2
 		err := createNetwork(context.Background(), "owner", "multica-sandbox-a-net")
 		var rejected *execution.RejectedError
 		events, _ := os.ReadFile(filepath.Join(dir, "events"))
-		if !errors.As(err, &rejected) || !strings.Contains(err.Error(), want) || !strings.HasSuffix(string(events), "network rm multica-sandbox-a-net\n") {
+		if !errors.As(err, &rejected) || !rejected.Transient() || !strings.Contains(err.Error(), want) || !strings.HasSuffix(string(events), "network rm multica-sandbox-a-net\n") {
 			t.Fatalf("%v; events %q", err, events)
 		}
 	}
@@ -136,6 +139,70 @@ esac
 		events, _ := os.ReadFile(filepath.Join(dir, "events"))
 		if !errors.As(err, &rejected) || strings.Contains(string(events), "create") {
 			t.Fatalf("%s: %v; events %q", failing, err, events)
+		}
+	}
+}
+
+// An unanswered network create is rejected only once removal confirms it is gone.
+func TestUnansweredNetworkCreate(t *testing.T) {
+	defer func(timeout time.Duration) { commandTimeout = timeout }(commandTimeout)
+	commandTimeout = 200 * time.Millisecond
+	for removed, transient := range map[string]bool{"exit 0": true, "exit 1": false} {
+		fakeDocker(t, `case "$2" in
+create) exec sleep 1 ;;
+rm) `+removed+` ;;
+esac
+exit 2
+`)
+		err := createNetwork(context.Background(), "owner", "multica-sandbox-a-net")
+		var rejected *execution.RejectedError
+		if err == nil || (errors.As(err, &rejected) && rejected.Transient()) != transient {
+			t.Fatalf("removal %s: %v", removed, err)
+		}
+	}
+}
+
+// Failures after the attempt network exists reject only the task, as transient, when
+// cleanup removed everything; a failed removal stays a backend error.
+func TestFailureAfterResourcesIsTransient(t *testing.T) {
+	const owner = "90000000-0000-4000-8000-000000000001"
+	for _, tc := range []struct{ failing, cleanup string }{
+		{"network connect", ""},
+		{"create", ""},
+		{"create", "network rm"},
+		{"inspect multica-sandbox", ""},
+		{"inspect multica-sandbox", "rm -fv"},
+	} {
+		dir := t.TempDir()
+		t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+		t.Setenv("DOCKER_TEST_EVENTS", filepath.Join(dir, "events"))
+		t.Setenv("DOCKER_TEST_FAIL", tc.failing)
+		t.Setenv("DOCKER_TEST_CLEANUP", tc.cleanup)
+		t.Setenv("DOCKER_TEST_OWNER", owner)
+		script := `#!/bin/sh
+printf '%s\n' "$*" >> "$DOCKER_TEST_EVENTS"
+case "$*" in "$DOCKER_TEST_FAIL"*) echo "no space left on device" >&2; exit 1 ;; esac
+if [ -n "$DOCKER_TEST_CLEANUP" ]; then case "$*" in "$DOCKER_TEST_CLEANUP"*) exit 1 ;; esac; fi
+case "$1 $2" in
+"network inspect") printf '%s' '[{"Internal":true,"Driver":"bridge","Containers":{"c":{"Name":"peer"}}}]' ;;
+"inspect peer") printf '%s' '[{"NetworkSettings":{"Networks":{"template":{"Aliases":["relay"]}}}}]' ;;
+"inspect --format") printf '%s' "$DOCKER_TEST_OWNER" ;;
+info*) printf '%s' '{"Architecture":"x86_64","OSType":"linux","CgroupVersion":"2","MemoryLimit":true,"SwapLimit":true,"PidsLimit":true,"CpuCfsPeriod":true,"CpuCfsQuota":true,"SecurityOptions":["name=seccomp,profile=builtin"]}' ;;
+image*) printf '%s' '{"Os":"linux","Architecture":"amd64"}' ;;
+esac
+exit 0
+`
+		if err := os.WriteFile(filepath.Join(dir, "docker"), []byte(script), 0700); err != nil {
+			t.Fatal(err)
+		}
+		b := &Projected{Backend: Backend{Owner: owner, Image: "example.invalid/test@sha256:" + strings.Repeat("a", 64), Command: []string{"/bin/true"}},
+			Network: "template", Peers: []string{"peer"}}
+		_, err := b.Start(context.Background(), "attempt", execution.Workdir{})
+		var rejected *execution.RejectedError
+		events, _ := os.ReadFile(filepath.Join(dir, "events"))
+		transient := errors.As(err, &rejected) && rejected.Transient()
+		if err == nil || transient != (tc.cleanup == "") || !strings.Contains(string(events), "network rm") {
+			t.Fatalf("%s, cleanup failing %q: %v; events %q", tc.failing, tc.cleanup, err, events)
 		}
 	}
 }

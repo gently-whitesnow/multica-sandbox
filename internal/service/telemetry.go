@@ -114,6 +114,8 @@ func outcome(cause error) (status, reason string, code int) {
 		return "failed", "memory_stall", 0
 	case errors.As(cause, &idle):
 		return "failed", "idle", 0
+	case errors.As(cause, &rejected) && rejected.Transient():
+		return "failed", "rejected_transient", 0
 	case errors.As(cause, &rejected):
 		return "failed", "rejected", 0
 	case errors.As(cause, &oom):

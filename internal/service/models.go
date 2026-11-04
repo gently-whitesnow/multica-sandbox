@@ -79,19 +79,29 @@ func failure(cause error) (string, string) {
 	case errors.As(cause, &timeout):
 		return "opencode " + timeout.Error(), "timeout"
 	case errors.As(cause, &stall):
-		// Like an OOM kill: the same task would thrash again.
-		return stall.Error(), "agent_error.process_failure"
+		// Like an OOM kill.
+		return stall.Error(), memoryReason(stall.Pool)
 	case errors.As(cause, &idle):
 		return idle.Error(), "idle_watchdog"
+	case errors.As(cause, &rejected) && rejected.Transient():
+		return "Sandbox host failed to prepare the attempt; Multica retries the task", "runtime_recovery"
 	case errors.As(cause, &rejected):
 		return "Sandbox rejected the task before OpenCode started", "environment_prepare_failed"
 	case errors.As(cause, &oom):
-		// A canonical agent-side reason outside Multica's automatic retries: the same
-		// task would exhaust memory again.
-		return oom.Error(), "agent_error.process_failure"
+		return oom.Error(), memoryReason(oom.Pool)
 	case errors.As(cause, &agent):
 		return agent.Error(), ""
 	default:
 		return "OpenCode execution or identity delivery failed", ""
 	}
+}
+
+// memoryReason keeps an attempt that reached its own ceiling outside Multica's automatic
+// retries, as it would exhaust memory again; the shared pool's limit depends on the
+// neighbours, so that attempt is retried.
+func memoryReason(pool bool) string {
+	if pool {
+		return "runtime_recovery"
+	}
+	return "agent_error.process_failure"
 }

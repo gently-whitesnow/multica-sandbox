@@ -80,7 +80,7 @@ Add `sysbox-runc` as an explicit, opt-in runtime of the Docker backend.
   the `/workspace` mode, starts `dockerd` on `/run/docker.sock` with the agent
   group and `/run` exec root, writes a readiness marker once `/_ping` answers and exits
   with `dockerd`. The controller waits with `sandbox-helper dind-wait`; a timeout
-  removes the attempt and fails the task as `environment_prepare_failed`.
+  removes the attempt and fails the task as `runtime_recovery` (ADR 0006).
 - **Agent environment.** `DOCKER_HOST` stays unset (`/var/run` resolves to `/run`).
   Ryuk is disabled only by configuration: the attempt's removal cleans up anyway.
 - **Image contract (sysbox).** The image provides `dockerd`, `containerd`, `runc`

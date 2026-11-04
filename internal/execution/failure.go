@@ -57,8 +57,16 @@ func (e *OOMError) Error() string {
 	if e.Killed > 0 {
 		killed = fmt.Sprintf("%d process(es)", e.Killed)
 	}
-	return fmt.Sprintf("Out of memory: the kernel killed %s in the attempt after it reached %s%s. "+
-		"Not retried automatically: reduce the task's memory use or raise the limit.", killed, limit, peak)
+	return fmt.Sprintf("Out of memory: the kernel killed %s in the attempt after it reached %s%s. %s", killed, limit, peak, advice(e.Pool))
+}
+
+// advice says whether Multica retries a memory failure: the pool's limit is shared with
+// other attempts, the attempt's own is not.
+func advice(pool bool) string {
+	if pool {
+		return "Other attempts share this pool, so Multica retries the task once; if it fails again, reduce the task's memory use or ask the operator to enlarge the pool."
+	}
+	return "Not retried automatically: reduce the task's memory use or raise the limit."
 }
 
 // MemoryStallError is a silent run whose attempt spent the last minute stalled on memory
@@ -90,8 +98,7 @@ func (e *MemoryStallError) Error() string {
 		peak += ","
 	}
 	return fmt.Sprintf("Out of memory: the attempt thrashed at %s%s and was stalled on memory %.0f%% of the last minute; "+
-		"the agent produced no new messages for %s and was force-stopped. "+
-		"Not retried automatically: reduce the task's memory use or raise the limit.", limit, peak, e.Stall, e.After)
+		"the agent produced no new messages for %s and was force-stopped. %s", limit, peak, e.Stall, e.After, advice(e.Pool))
 }
 
 func size(n int64) string {

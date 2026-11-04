@@ -78,6 +78,8 @@ func TestOutcomeClassifiesFailures(t *testing.T) {
 		{&execution.IdleError{After: time.Minute}, "failed", "idle", 0},
 		{&execution.OOMError{}, "failed", "oom", 0},
 		{&execution.MemoryStallError{}, "failed", "memory_stall", 0},
+		{&execution.RejectedError{Err: errors.New("image")}, "failed", "rejected", 0},
+		{execution.Transient(errors.New("network")), "failed", "rejected_transient", 0},
 		{&execution.AgentFailure{Status: 403}, "failed", "inference", 403},
 		{&execution.AgentFailure{Message: "opencode cancelled the turn"}, "failed", "agent", 0},
 		{errors.New("identity delivery"), "failed", "internal", 0},

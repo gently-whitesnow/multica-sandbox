@@ -24,7 +24,8 @@ and a terminal callback that Multica acknowledged or that is durably queued in t
 state volume. A queued callback gets one online attempt; replay then retries it with
 doubling backoff from 5 s, so the attempt does not wait through the retry schedule. Queued callbacks hold no credentials and are replayed
 before workspace recovery on start, so recovery does not rerun finished work. Like the upstream daemon, transient Multica errors are retried
-or deferred; protocol violations and cleanup uncertainty exit. A normal termination signal stops active execution before exit;
+or deferred; protocol violations exit, and cleanup uncertainty exits once the
+other attempts finish, claiming nothing meanwhile (ADR 0006). A normal termination signal stops active execution before exit;
 Multica reconciles the interrupted task on the next service start.
 
 Persist a shared lock and identity binding in a named volume. Configure a stable

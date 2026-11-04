@@ -46,7 +46,7 @@ their Prometheus names:
 | `http_client_request_duration_seconds` | histogram | shared contract, `target_service_name="multica"` | Multica API errors and latency |
 | `http_client_request_retries_total` | counter | shared contract | Multica requests resent by the controller |
 | `sandbox_pool_memory_pressure_ratio`, `sandbox_pool_memory_usage_bytes`, `sandbox_pool_memory_limit_bytes` | gauge | — | Attempt pool pressure at the last admission check |
-| `sandbox_claims_paused` | gauge | `reason` while paused | Claims waiting for the pool, and why |
+| `sandbox_claims_paused` | gauge | `reason` while paused | Claims waiting for the pool or a restart, and why |
 | `sandbox_claims_draining`, `sandbox_workspaces_ready` | gauge | — | Deploy drain and served workspaces (ADR 0031) |
 | `sandbox_build_info` | gauge, always 1 | `version`, `revision` | Which controller release and commit run; deploys on a timeline |
 
@@ -54,12 +54,14 @@ Label values:
 
 - `kind`: `issue`, `chat` or `other`.
 - `status`: `success`, `failed` or `timeout` (the controller deadline).
-- `reason`, failures only: `idle`, `memory_stall` (ADR 0032), `rejected`, `oom`,
+- `reason`, failures only: `idle`, `memory_stall` (ADR 0032), `rejected`,
+  `rejected_transient` (a host failure Multica retries, ADR 0006), `oom`,
   `inference`, `agent` or `internal`. An `inference` failure adds the provider's HTTP `status_code`.
 - `continuity`: `fresh`, `resumed`, or `lost` when a prior session could not be
   continued.
 - Paused `reason`, the last refusal before the calm cooldown: `pressure`,
-  `working_set`, `disk`, `headroom` or `unreadable`. The cold-start warmup paces
+  `working_set`, `disk`, `headroom` or `unreadable`; `restart` while the controller
+  waits for running attempts before exiting on a fatal attempt error (ADR 0006). The cold-start warmup paces
   starts and never pauses claims (ADR 0028).
 - `version`: the release from `VERSION` (ADR 0033) and `revision` the source commit,
   both set at image build, else `unknown`.

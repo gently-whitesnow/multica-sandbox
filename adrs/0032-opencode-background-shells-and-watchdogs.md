@@ -54,10 +54,11 @@ Shells of child sessions and background subagents are not followed.
 `memory.pressure`, through the pool on the host or inside the attempt. `full avg60`
 of at least 50 % makes the failure a `MemoryStallError`: the limit thrashed at (the
 attempt ceiling or the pool), the peak and the stall. Like an OOM kill, it is
-reported as `agent_error.process_failure`, outside Multica's automatic retries, and
-counted with `reason="memory_stall"`. A configured `attempt_memory_max` below the
-pool's `memory.high` turns most stalls into OOM kills of the largest process, which
-the agent sees as a failed command.
+reported as `agent_error.process_failure`, outside Multica's automatic retries, or
+at the pool as `runtime_recovery` (ADR 0020), and counted with
+`reason="memory_stall"`. A configured `attempt_memory_max` below the pool's
+`memory.high` turns most stalls into OOM kills of the largest process, which the
+agent sees as a failed command.
 
 ## Consequences
 
