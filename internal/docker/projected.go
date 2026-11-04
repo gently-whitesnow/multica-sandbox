@@ -44,6 +44,8 @@ type Projected struct {
 	ForgeForward string
 	// Sessions, with the helper, retains issue workdirs across attempts.
 	Sessions *Sessions
+	// Mirrors, with the helper, mounts the workspace's reference mirrors (ADR 0035).
+	Mirrors *Mirrors
 	// Resources bound attempts and image inspection; zero means the runtime's defaults.
 	Resources Resources
 	// DinD configures the nested engine under sysbox, which requires the helper.
@@ -146,6 +148,16 @@ func (b *Projected) Start(ctx context.Context, attempt string, w execution.Workd
 		}
 		bundles = append(bundles, "--mount=type=volume,source="+projection.volume+",target="+repo.WorkDir+",volume-nocopy")
 	}
+	mirror := ""
+	if b.Helper != "" && b.Mirrors != nil && w.Workspace != "" {
+		// Without its mirror volume the attempt only clones in full.
+		var err error
+		if mirror, err = b.Mirrors.volume(ctx, w.Workspace); err != nil {
+			b.Mirrors.report(err)
+		} else {
+			bundles = append(bundles, "--mount=type=volume,source="+mirror+",target="+repo.MirrorDir+",readonly,volume-nocopy")
+		}
+	}
 	for _, host := range loopbackHosts(b.ForgeHosts) {
 		bundles = append(bundles, "--add-host="+host)
 	}
@@ -167,7 +179,7 @@ func (b *Projected) Start(ctx context.Context, attempt string, w execution.Workd
 	if b.Runtime == Sysbox && b.DinD.RyukDisabled {
 		bundles = append(bundles, "--env=TESTCONTAINERS_RYUK_DISABLED=true")
 	}
-	want := expected{network: isolated, limits: b.limits(), bundles: b.mounts(), path: path, volume: projection.volume, hosts: b.ForgeHosts, runtime: b.Runtime}
+	want := expected{network: isolated, limits: b.limits(), bundles: b.mounts(), path: path, volume: projection.volume, mirror: mirror, hosts: b.ForgeHosts, runtime: b.Runtime}
 	projection.id, err = b.launch(ctx, r, want, bundles)
 	if err != nil {
 		return nil, cleaned(err, cleanup())
@@ -541,9 +553,9 @@ func createNetwork(ctx context.Context, owner, name string) error {
 }
 
 // reconcileVolumes removes owned per-attempt workdir volumes, which all belong to
-// finished attempts; session volumes stay for Sessions.Collect.
+// finished attempts; session and mirror volumes stay for their collection.
 func reconcileVolumes(ctx context.Context, owner string) error {
-	data, err := command(ctx, "volume", "ls", "--filter", "label="+ownerLabel+"="+owner, "--format", `{{.Name}} {{.Label "`+sessionLabel+`"}}`)
+	data, err := command(ctx, "volume", "ls", "--filter", "label="+ownerLabel+"="+owner, "--format", `{{.Name}} {{.Label "`+sessionLabel+`"}}{{.Label "`+mirrorLabel+`"}}`)
 	if err != nil {
 		return err
 	}

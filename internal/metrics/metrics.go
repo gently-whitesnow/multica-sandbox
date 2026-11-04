@@ -63,6 +63,7 @@ type Metrics struct {
 	active                          metric.Int64UpDownCounter
 	events, retries                 metric.Int64Counter
 	removed, pruned                 metric.Int64Counter
+	mirrors, mirrorBytes            metric.Int64Counter
 	pool                            atomic.Pointer[PoolReading]
 	paused                          atomic.Pointer[string]
 	draining, workspaces            atomic.Int64
@@ -104,6 +105,10 @@ func New() (*Metrics, error) {
 	m.removed, err = meter.Int64Counter("sandbox.sessions.removed", metric.WithUnit("{volume}"), metric.WithDescription("Removed session volumes, by trigger."))
 	errs = append(errs, err)
 	m.pruned, err = meter.Int64Counter("sandbox.sessions.pruned", metric.WithUnit("By"), metric.WithDescription("Rebuildable bytes pruned from idle session volumes, by trigger."))
+	errs = append(errs, err)
+	m.mirrors, err = meter.Int64Counter("sandbox.mirrors.removed", metric.WithUnit("{mirror}"), metric.WithDescription("Removed reference mirrors, by trigger."))
+	errs = append(errs, err)
+	m.mirrorBytes, err = meter.Int64Counter("sandbox.mirrors.freed", metric.WithUnit("By"), metric.WithDescription("Bytes of removed reference mirrors, by trigger."))
 	errs = append(errs, err)
 	poolGauge := func(name, unit, description string, value func(PoolReading) float64) {
 		_, err := meter.Float64ObservableGauge(name, metric.WithUnit(unit), metric.WithDescription(description),
@@ -247,8 +252,8 @@ func (m *Metrics) Retry(target, method, path string) {
 // SessionTriggers are the session collection triggers; anything else counts as other.
 var SessionTriggers = []string{"lifetime", "age", "budget", "pressure"}
 
-// Sessions records one session volume collection.
-func (m *Metrics) Sessions(trigger string, removed int, pruned int64) {
+// Sessions records one collection of session volumes and reference mirrors.
+func (m *Metrics) Sessions(trigger string, removed int, pruned int64, mirrors int, mirrorBytes int64) {
 	if m == nil {
 		return
 	}
@@ -258,6 +263,8 @@ func (m *Metrics) Sessions(trigger string, removed int, pruned int64) {
 	attrs := metric.WithAttributes(attribute.String("trigger", trigger))
 	m.removed.Add(context.Background(), int64(removed), attrs)
 	m.pruned.Add(context.Background(), pruned, attrs)
+	m.mirrors.Add(context.Background(), int64(mirrors), attrs)
+	m.mirrorBytes.Add(context.Background(), mirrorBytes, attrs)
 }
 
 func (m *Metrics) Pool(r PoolReading) {

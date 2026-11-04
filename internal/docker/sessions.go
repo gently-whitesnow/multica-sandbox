@@ -53,7 +53,10 @@ type Sessions struct {
 	// Disk, when set, is read every pressureEvery: below the claim pause watermark idle
 	// volumes are pruned, then removed, least recently used first, until it recovers.
 	Disk func() (pool.Disk, error)
-	// Reclaimed receives each collection that pruned or removed volumes.
+	// Mirrors, when set, are collected with the volumes: unused for their TTL at each
+	// collection, and under the budget and pressure in one least recently used order.
+	Mirrors *Mirrors
+	// Reclaimed receives each collection that pruned or removed volumes or mirrors.
 	Reclaimed func(Reclaim)
 	mu        sync.Mutex
 	busy      map[string]bool
@@ -62,10 +65,11 @@ type Sessions struct {
 // Reclaim summarizes one collection. Trigger is lifetime (TTL, closed issue, Max), age
 // (ArtifactAge), budget or pressure. Artifacts is what the helper deleted; Freed is the
 // gain in available disk bytes, known only with Disk and approximate under concurrent writes.
+// Mirrors and MirrorBytes count removed reference mirrors and their bytes.
 type Reclaim struct {
-	Trigger          string
-	Removed, Pruned  int
-	Artifacts, Freed int64
+	Trigger                       string
+	Removed, Pruned, Mirrors      int
+	Artifacts, Freed, MirrorBytes int64
 }
 
 // gcRecord is a volume's last helper result, current until the volume is used again.
@@ -210,9 +214,14 @@ func (s *Sessions) collect(ctx context.Context, owner string, byIssue bool) erro
 		delete(s.busy, name)
 	}
 	s.mu.Unlock()
+	// A mirror failure does not hold back the volumes' collection.
+	var mirrorErr error
+	if byIssue && s.Mirrors != nil {
+		mirrorErr = s.Mirrors.expire(ctx, &lifetime)
+	}
 	s.reclaimed(lifetime, before)
 	if !byIssue || err != nil {
-		return err
+		return errors.Join(err, mirrorErr)
 	}
 	if s.ArtifactAge > 0 {
 		before, age := s.available(), Reclaim{Trigger: "age"}
@@ -222,17 +231,18 @@ func (s *Sessions) collect(ctx context.Context, owner string, byIssue bool) erro
 		}
 		s.reclaimed(age, before)
 		if err != nil {
-			return err
+			return errors.Join(err, mirrorErr)
 		}
 	}
 	if s.Budget > 0 {
-		return s.budget(ctx, owner, labels)
+		return errors.Join(mirrorErr, s.budget(ctx, owner, labels))
 	}
-	return nil
+	return mirrorErr
 }
 
-// relieve, below the claim pause watermark, prunes and then removes idle volumes, least
-// recently used first, until the disk reaches the resume watermark. Busy volumes stay.
+// relieve, below the claim pause watermark, prunes and then removes idle volumes and
+// mirrors, least recently used first, until the disk reaches the resume watermark. Busy
+// volumes and mirrors in use stay.
 func (s *Sessions) relieve(ctx context.Context, owner string) error {
 	d, err := s.disk()
 	if err != nil || !pool.DiskLow(d) {
@@ -252,19 +262,21 @@ func (s *Sessions) relieve(ctx context.Context, owner string) error {
 	}
 	r := Reclaim{Trigger: "pressure"}
 	err = s.prune(ctx, owner, idle, time.Now(), recovered, &r)
-	for _, v := range idle {
+	mirrors, _, mirrorErr := s.mirrors(ctx)
+	err = errors.Join(err, mirrorErr)
+	for _, c := range order(idle, mirrors) {
 		if recovered() {
 			break
 		}
-		err = errors.Join(err, s.evict(ctx, v, &r))
+		err = errors.Join(err, s.reclaim(ctx, c, &r))
 	}
 	s.reclaimed(r, d.Available)
 	return err
 }
 
 // budget measures idle volumes used since their last measurement, then removes the least
-// recently used idle ones while the total exceeds Budget. Busy volumes count with their
-// last measured size.
+// recently used idle volumes and mirrors while the total exceeds Budget. Busy volumes and
+// mirrors in use count with their last measured size.
 func (s *Sessions) budget(ctx context.Context, owner string, labels map[string]string) error {
 	before := s.available()
 	idle, err := s.idle(labels)
@@ -286,19 +298,23 @@ func (s *Sessions) budget(ctx context.Context, owner string, labels map[string]s
 		}
 		err = errors.Join(err, gcErr)
 	}
-	var total int64
+	mirrors, total, mirrorErr := s.mirrors(ctx)
+	err = errors.Join(err, mirrorErr)
 	for _, size := range sizes {
 		total += size
 	}
 	r := Reclaim{Trigger: "budget"}
-	for _, v := range idle {
+	for _, c := range order(idle, mirrors) {
 		if total <= s.Budget || ctx.Err() != nil {
 			break
 		}
-		removed := r.Removed
-		err = errors.Join(err, s.evict(ctx, v, &r))
-		if r.Removed > removed {
-			total -= sizes[v.name]
+		removed, dropped := r.Removed, r.Mirrors
+		err = errors.Join(err, s.reclaim(ctx, c, &r))
+		switch {
+		case r.Removed > removed:
+			total -= sizes[c.volume.name]
+		case r.Mirrors > dropped:
+			total -= c.mirror.size
 		}
 	}
 	s.reclaimed(r, before)
@@ -324,6 +340,46 @@ func (s *Sessions) prune(ctx context.Context, owner string, idle []idleVolume, c
 		err = errors.Join(err, gcErr)
 	}
 	return err
+}
+
+// reclaimable is an idle session volume or mirror; both share one least recently used
+// order, since a mirror is rebuilt by one clone and a volume holds a resumable session.
+type reclaimable struct {
+	used   time.Time
+	volume *idleVolume
+	mirror *idleMirror
+}
+
+func order(volumes []idleVolume, mirrors []idleMirror) []reclaimable {
+	all := []reclaimable{}
+	for i := range volumes {
+		all = append(all, reclaimable{used: volumes[i].used, volume: &volumes[i]})
+	}
+	for i := range mirrors {
+		all = append(all, reclaimable{used: mirrors[i].used, mirror: &mirrors[i]})
+	}
+	sort.SliceStable(all, func(i, j int) bool { return all[i].used.Before(all[j].used) })
+	return all
+}
+
+// mirrors lists idle mirrors and the measured bytes of all mirrors, none without Mirrors.
+func (s *Sessions) mirrors(ctx context.Context) ([]idleMirror, int64, error) {
+	if s.Mirrors == nil {
+		return nil, 0, nil
+	}
+	volumes, err := s.Mirrors.volumes(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+	idle, total := s.Mirrors.idle(volumes)
+	return idle, total, nil
+}
+
+func (s *Sessions) reclaim(ctx context.Context, c reclaimable, r *Reclaim) error {
+	if c.mirror != nil {
+		return s.Mirrors.evict(ctx, *c.mirror, r)
+	}
+	return s.evict(ctx, *c.volume, r)
 }
 
 // evict removes one idle volume unless an attempt took it meanwhile.
@@ -465,7 +521,7 @@ func (s *Sessions) available() uint64 {
 }
 
 func (s *Sessions) reclaimed(r Reclaim, before uint64) {
-	if r.Removed+r.Pruned == 0 || s.Reclaimed == nil {
+	if r.Removed+r.Pruned+r.Mirrors == 0 || s.Reclaimed == nil {
 		return
 	}
 	if after := s.available(); before > 0 && after > before {
