@@ -75,6 +75,7 @@ func failure(cause error) (string, string) {
 	var agent *execution.AgentFailure
 	var oom *execution.OOMError
 	var stall *execution.MemoryStallError
+	var host *execution.HostFailure
 	switch {
 	case errors.As(cause, &timeout):
 		return "opencode " + timeout.Error(), "timeout"
@@ -89,6 +90,8 @@ func failure(cause error) (string, string) {
 		return "Sandbox rejected the task before OpenCode started", "environment_prepare_failed"
 	case errors.As(cause, &oom):
 		return oom.Error(), memoryReason(oom.Pool)
+	case errors.As(cause, &host):
+		return host.Error(), "runtime_recovery"
 	case errors.As(cause, &agent):
 		return agent.Error(), ""
 	default:

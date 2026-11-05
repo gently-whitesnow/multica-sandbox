@@ -17,7 +17,8 @@ workdirs after 12 h and whole workdirs later.
 - **Artifacts.** The sweep prunes volumes idle for `sessions.artifact_age` (default
   `12h`, upstream's): `node_modules`, `.next`, `.nuxt`, `.turbo` in checkouts, .NET
   `bin`/`obj` beside a `*.csproj`/`*.fsproj`/`*.vbproj`, the HOME caches `.cache`,
-  `.npm`, `.nuget/packages`, `go/pkg/mod` and the TMPDIR every attempt empties.
+  `.npm`, `.nuget/packages`, `go/pkg/mod` and the TMPDIR and XDG data every attempt
+  empties.
   `dist`, sources, `.git` and the session database stay.
 - **Helper.** A short `sandbox-helper prune` container deletes them like the volume
   init: runc, no network, read-only rootfs, no capabilities, uid 65532, 64 MiB and

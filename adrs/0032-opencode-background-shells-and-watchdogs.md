@@ -46,7 +46,12 @@ turn are ignored, so the session read is the only source:
   tool use and result. Their tokens add to the turn's usage, reported once. Shells
   they move to the background are tracked in turn;
 - the attempt ends when no shell runs and an `idle` message follows the last resumed
-  message. Six consecutive unreadable reads fail it.
+  message. Six consecutive unreadable reads fail it as the sandbox's failure, not the
+  agent's: an out-of-memory read keeps its memory failure, any other is reported as
+  `runtime_recovery`, so Multica retries and the retry resumes the session, and the
+  last read's error with its redacted stderr is logged as `opencode session
+  unreadable`. Refinement (0.2.1): two production runs lost an hour each when the
+  reads failed after XDG data had filled the 1 GiB `/workspace` tmpfs (ADR 0015).
 
 Shells of child sessions and background subagents are not followed.
 

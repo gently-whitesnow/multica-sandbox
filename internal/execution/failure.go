@@ -22,6 +22,12 @@ func (e *AgentFailure) Error() string {
 	return "Agent reported execution failure; output withheld"
 }
 
+// HostFailure is the sandbox's own failure while the agent ran, not the agent's: Multica
+// retries it as runtime_recovery, and the retry resumes the retained session.
+type HostFailure struct{ Message string }
+
+func (e *HostFailure) Error() string { return e.Message }
+
 // TimeoutError is the controller's own deadline, reported as Multica's retryable timeout.
 type TimeoutError struct{ After time.Duration }
 

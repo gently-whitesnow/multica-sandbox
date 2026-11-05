@@ -72,9 +72,10 @@ func TestWorkdirVolumeAndForwarder(t *testing.T) {
 	out, err := a.Capture(ctx, []string{"/bin/sh", "-c", `set -e
 test "$(pwd)" = /workspace/work
 test "$(stat -c %u:%g:%a /workspace/work)" = 65532:65532:700
-# HOME, its caches and TMPDIR are on the volume; configuration stays in the tmpfs.
+# HOME, its caches, TMPDIR and XDG data are on the volume; configuration stays in the tmpfs.
 test "$HOME" = ` + VolumeHome + ` && test "$XDG_CACHE_HOME" = "$HOME/.cache" && test "$TMPDIR" = ` + VolumeTmpDir + `
-test "$XDG_CONFIG_HOME" = /workspace/config && test "$XDG_DATA_HOME" = /workspace/data
+test "$XDG_DATA_HOME" = ` + VolumeDataDir + ` && test -d "$XDG_DATA_HOME" && test "$(stat -c %a "$XDG_DATA_HOME")" = 700
+test "$XDG_CONFIG_HOME" = /workspace/config && test "$(stat -c %d "$XDG_DATA_HOME")" = "$(stat -c %d /workspace/work)"
 test "$(stat -c %d "$HOME")" = "$(stat -c %d /workspace/work)" && test "$(stat -c %d "$HOME")" != "$(stat -c %d /workspace)"
 printf '#!/bin/sh\necho ok\n' > "$TMPDIR/run" && chmod +x "$TMPDIR/run" && test "$("$TMPDIR/run")" = ok
 echo kept > note

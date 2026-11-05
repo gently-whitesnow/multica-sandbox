@@ -102,12 +102,13 @@ const (
 func TestRetriedFailures(t *testing.T) {
 	retryable := []string{"runtime_offline", "runtime_recovery", "timeout", "codex_semantic_inactivity", "agent_error.provider_network", "skill_bundle_unavailable"}
 	for cause, retried := range map[error]bool{
-		&execution.OOMError{Killed: 1}:                     false,
-		&execution.MemoryStallError{Stall: 90}:             false,
-		&execution.RejectedError{Err: errors.New("image")}: false,
-		&execution.OOMError{Killed: 1, Pool: true}:         true,
-		&execution.MemoryStallError{Stall: 90, Pool: true}: true,
-		execution.Transient(errors.New("network")):         true,
+		&execution.OOMError{Killed: 1}:                      false,
+		&execution.MemoryStallError{Stall: 90}:              false,
+		&execution.RejectedError{Err: errors.New("image")}:  false,
+		&execution.OOMError{Killed: 1, Pool: true}:          true,
+		&execution.MemoryStallError{Stall: 90, Pool: true}:  true,
+		execution.Transient(errors.New("network")):          true,
+		&execution.HostFailure{Message: "lost the session"}: true,
 	} {
 		if _, reason := failure(cause); reason == "" || slices.Contains(retryable, reason) != retried {
 			t.Errorf("%T %v reported as %q", cause, cause, reason)
