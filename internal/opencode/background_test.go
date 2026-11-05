@@ -239,3 +239,36 @@ func TestBackgroundShellUnreadableSessionKeepsMemoryFailures(t *testing.T) {
 		t.Fatalf("read failure: %v", err)
 	}
 }
+
+// A resumed call whose input is still a string reads as no input instead of failing
+// every session read; the settled call reports its input.
+func TestBackgroundShellReadsStringToolInput(t *testing.T) {
+	later := time.Now().Add(time.Hour)
+	note := map[string]any{"id": "msg_note", "type": "synthetic", "time": at(later), "metadata": map[string]any{"source": "shell", "shellID": "sh_1"}}
+	step := func(status string, input any) map[string]any {
+		return map[string]any{"id": "msg_step", "type": "assistant", "time": at(later.Add(time.Second)), "content": []any{
+			map[string]any{"type": "tool", "id": "call-3", "name": "write", "state": map[string]any{"status": status, "input": input}},
+		}}
+	}
+	api := &sessionAPI{pages: func(read int) []map[string]any {
+		if read <= followFailures {
+			return []map[string]any{step("pending", `{"filePath":"a.t`), note}
+		}
+		return []map[string]any{{"id": "msg_idle", "type": "idle", "time": at(later.Add(2 * time.Second))}, step("completed", map[string]any{"filePath": "a.txt"}), note}
+	}}
+	reporter := &reportStub{}
+	r := &running{events: &eventStream{reporter: reporter}, workload: &stubWorkload{api: api.serve}}
+	agent := &fakeAgent{version: "2.2.5", updates: backgroundUpdates(), stop: "end_turn"}
+	if err := turnWith(t, context.Background(), agent, r); err != nil {
+		t.Fatal(err)
+	}
+	var input map[string]any
+	for _, m := range reporter.messages {
+		if m.Type == "tool_use" && m.CallID == "call-3" {
+			input = m.Input
+		}
+	}
+	if input["filePath"] != "a.txt" || api.reads <= followFailures {
+		t.Fatalf("settled input %v after %d reads", input, api.reads)
+	}
+}

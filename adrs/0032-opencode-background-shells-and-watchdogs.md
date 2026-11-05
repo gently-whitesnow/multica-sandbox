@@ -51,8 +51,9 @@ turn are ignored, so the session read is the only source:
   `runtime_recovery`, so Multica retries and the retry resumes the session, and the
   last read's error with its redacted stderr is logged as `opencode session
   unreadable`. Refinement (0.2.1): two production runs lost an hour each when the
-  reads failed while the agent kept writing its session; a full XDG data tmpfs does
-  not fail a read, so the cause is unobserved until this log records one.
+  reads failed while the agent kept writing its session. Refinement (0.2.2): the log
+  showed the cause, a tool input OpenCode reported as a string instead of an object.
+  Such an input, in a session message or an ACP update, reads as no input.
 
 Shells of child sessions and background subagents are not followed.
 
