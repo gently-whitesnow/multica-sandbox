@@ -3,6 +3,8 @@ package opencode
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/url"
 	"slices"
@@ -27,7 +29,8 @@ var (
 	followFailures = 6
 )
 
-var errFollow = &execution.AgentFailure{Message: "opencode session unreadable while background shells ran"}
+// errFollow is the sandbox's failure, not the agent's: the retry resumes the session.
+var errFollow = &execution.HostFailure{Message: "Sandbox could not read the OpenCode session while background shells ran; Multica retries the task"}
 
 // shellMetadata marks a shell call OpenCode moved to the background: status running.
 type shellMetadata struct {
@@ -136,7 +139,7 @@ func (r *running) follow(ctx context.Context, client *acpClient, id acp.SessionI
 				return usage, ctx.Err()
 			}
 			if failures++; failures >= followFailures {
-				return usage, errFollow
+				return usage, r.unreadable(err)
 			}
 			continue
 		}
@@ -179,6 +182,20 @@ func (r *running) follow(ctx context.Context, client *acpClient, id acp.SessionI
 	}
 }
 
+// unreadable ends a follow whose reads kept failing. An attempt out of memory fails as
+// such; otherwise the cause goes to the controller log and the attempt fails as errFollow.
+func (r *running) unreadable(err error) error {
+	var oom *execution.OOMError
+	var stall *execution.MemoryStallError
+	if errors.As(err, &oom) || errors.As(err, &stall) {
+		return err
+	}
+	if r.adapter != nil && r.adapter.Log != nil {
+		r.adapter.Log.Warn("opencode session unreadable", "task", r.task.ID, "attempt", r.task.AttemptKey(), "reads", followFailures, "error", redact(err.Error(), r.secrets()))
+	}
+	return errFollow
+}
+
 func (m nativeMessage) toolRunning() bool {
 	return slices.ContainsFunc(m.Content, func(p nativePart) bool {
 		return p.Type == "tool" && p.State != nil && p.State.Status != "completed" && p.State.Status != "error"
@@ -213,10 +230,14 @@ func (r *running) nativeMessages(ctx context.Context, id acp.SessionId, floor in
 			} `json:"cursor"`
 		}
 		path := "/api/session/" + string(id) + "/message?" + query.Encode()
-		err := r.workload.Stream(ctx, []string{"opencode", "api", "--standalone", "GET", path}, r.environment(), func(_ io.Writer, stdout io.Reader) error {
+		var stderr stderrTail
+		err := r.stream(ctx, []string{"opencode", "api", "--standalone", "GET", path}, &stderr, func(_ io.Writer, stdout io.Reader) error {
 			return json.NewDecoder(stdout).Decode(&page)
 		})
 		if err != nil {
+			if tail := stderr.String(); tail != "" {
+				err = fmt.Errorf("%w; stderr: %s", err, tail)
+			}
 			return nil, err
 		}
 		older := false

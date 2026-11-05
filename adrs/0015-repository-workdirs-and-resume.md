@@ -33,11 +33,11 @@ requires mediated external Git. The #48 spike (Docker Engine 29.2.1, OpenCode
 the workdir at `/workspace/work`. Its subdirectory `.multica-sandbox` holds the
 session database (`OPENCODE_DB`). Projected configuration, the prompt, XDG
 config, data and state directories and native auth stores stay in the per-attempt
-tmpfs. Refinement (2026-10-30): caches filled the tmpfs, which also counts as
-memory, so `HOME` (with `XDG_CACHE_HOME`) and a per-attempt `TMPDIR` live under
-`.multica-sandbox` on the volume, never shared between workdirs. OpenCode
-receives them by explicit paths, so retained state never contains attempt
-credentials. A one-shot init container prepares each volume: no network, a
+tmpfs. Refinement (2026-10-30, 0.2.1): caches and XDG data (the pnpm store,
+OpenCode snapshots) filled the tmpfs, which also counts as memory, so `HOME` (with
+`XDG_CACHE_HOME`) and a per-attempt `TMPDIR` and `XDG_DATA_HOME` live under
+`.multica-sandbox` on the volume, never shared between workdirs, so retained state
+never contains attempt credentials. A one-shot init container prepares each volume: no network, a
 read-only rootfs, only `CAP_CHOWN`, `chmod 0700`, then `chown 65532`. Labels
 bind a volume to its controller, workspace, agent and issue. Fresh runs get a
 per-attempt volume that is removed at cleanup.

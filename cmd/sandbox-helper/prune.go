@@ -16,7 +16,7 @@ import (
 // caches, the attempt TMPDIR, and build directories of checkouts. .NET bin and obj go
 // only beside a project file.
 var (
-	pruneCaches   = []string{".multica-sandbox/home/.cache", ".multica-sandbox/home/.npm", ".multica-sandbox/home/.nuget/packages", ".multica-sandbox/home/go/pkg/mod", ".multica-sandbox/tmp"}
+	pruneCaches   = []string{".multica-sandbox/home/.cache", ".multica-sandbox/home/.npm", ".multica-sandbox/home/.nuget/packages", ".multica-sandbox/home/go/pkg/mod", ".multica-sandbox/tmp", ".multica-sandbox/data"}
 	pruneBuilds   = map[string]bool{"node_modules": true, ".next": true, ".nuxt": true, ".turbo": true}
 	pruneProjects = []string{".csproj", ".fsproj", ".vbproj"}
 )

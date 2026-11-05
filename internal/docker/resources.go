@@ -36,12 +36,15 @@ var probeResources = Resources{NanoCPUs: 5e8, Memory: 128 << 20, Pids: 64, NoFil
 // inside the bounded /workspace.
 const TmpDir = "/workspace/tmp"
 
-// With the workdir volume, HOME (with its tool caches) and TMPDIR are on disk in it:
-// builds download gigabytes, and tmpfs pages count against attempt memory. XDG config,
-// data and state, projected files and native auth stores stay in the tmpfs (ADR 0015).
+// With the workdir volume, HOME (with its tool caches), TMPDIR and XDG data are on disk in
+// it: builds download gigabytes (the pnpm store and OpenCode snapshots are XDG data), and
+// tmpfs pages count against attempt memory. TMPDIR and XDG data start empty on every
+// attempt. XDG config and state, projected files and the task config stay in the tmpfs
+// (ADR 0015).
 const (
-	VolumeHome   = repo.WorkDir + "/.multica-sandbox/home"
-	VolumeTmpDir = repo.WorkDir + "/.multica-sandbox/tmp"
+	VolumeHome    = repo.WorkDir + "/.multica-sandbox/home"
+	VolumeTmpDir  = repo.WorkDir + "/.multica-sandbox/tmp"
+	VolumeDataDir = repo.WorkDir + "/.multica-sandbox/data"
 )
 
 // ResourceSpec is the configured form; empty fields keep the defaults.

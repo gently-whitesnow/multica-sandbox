@@ -119,8 +119,13 @@ func (r *running) secrets() []string {
 
 // streamAgent runs the agent, keeping its stderr tail where the workload offers it.
 func (r *running) streamAgent(ctx context.Context, command []string, converse func(io.Writer, io.Reader) error) error {
+	return r.stream(ctx, command, &r.stderr, converse)
+}
+
+// stream runs command, writing its stderr to tail where the workload offers it.
+func (r *running) stream(ctx context.Context, command []string, tail *stderrTail, converse func(io.Writer, io.Reader) error) error {
 	if w, ok := r.workload.(execution.StderrStreamer); ok {
-		return w.StreamStderr(ctx, command, r.environment(), &r.stderr, converse)
+		return w.StreamStderr(ctx, command, r.environment(), tail, converse)
 	}
 	return r.workload.Stream(ctx, command, r.environment(), converse)
 }

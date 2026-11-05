@@ -1,14 +1,17 @@
 package opencode
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/gently-whitesnow/multica-sandbox/internal/execution"
 	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
 )
 
@@ -204,5 +207,35 @@ func TestBackgroundShellFailureReportsTheAnsweredTurnOnce(t *testing.T) {
 	}
 	if len(reporter.usage) != 1 || reporter.usage[0].Input != 10 || reporter.usage[0].Output != 4 {
 		t.Fatalf("usage %+v", reporter.usage)
+	}
+}
+
+// An unreadable session is the sandbox's failure: Multica retries it, and the controller
+// log keeps the read's cause with its redacted stderr.
+func TestBackgroundShellUnreadableSessionIsRetriedAndLogged(t *testing.T) {
+	var logs bytes.Buffer
+	agent := &fakeAgent{version: "2.2.5", updates: backgroundUpdates(), stop: "end_turn"}
+	workload := &stubWorkload{stderr: "ENOSPC: no space left on device, open '/workspace/data/opencode/log/a.log' token=abcdef0123456789\n", api: func(string) string { return "not json" }}
+	r := &running{adapter: &Adapter{Log: slog.New(slog.NewTextHandler(&logs, nil))}, workload: workload}
+	err := turnWith(t, context.Background(), agent, r)
+	var host *execution.HostFailure
+	if !errors.Is(err, errFollow) || !errors.As(err, &host) {
+		t.Fatalf("unreadable session: %v", err)
+	}
+	if out := logs.String(); !strings.Contains(out, "opencode session unreadable") || !strings.Contains(out, "ENOSPC") || strings.Contains(out, "abcdef0123456789") {
+		t.Fatalf("log: %s", out)
+	}
+}
+
+// A read that failed for memory keeps the attempt's memory failure.
+func TestBackgroundShellUnreadableSessionKeepsMemoryFailures(t *testing.T) {
+	r := &running{adapter: &Adapter{}}
+	for _, cause := range []error{&execution.OOMError{Killed: 1, Pool: true}, &execution.MemoryStallError{Stall: 90}} {
+		if err := r.unreadable(cause); err != cause {
+			t.Fatalf("%T became %v", cause, err)
+		}
+	}
+	if err := r.unreadable(errors.New("exit status 1")); !errors.Is(err, errFollow) {
+		t.Fatalf("read failure: %v", err)
 	}
 }

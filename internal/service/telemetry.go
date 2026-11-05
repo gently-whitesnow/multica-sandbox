@@ -104,6 +104,7 @@ func outcome(cause error) (status, reason string, code int) {
 	var rejected *execution.RejectedError
 	var oom *execution.OOMError
 	var stall *execution.MemoryStallError
+	var host *execution.HostFailure
 	var agent *execution.AgentFailure
 	switch {
 	case cause == nil:
@@ -120,6 +121,8 @@ func outcome(cause error) (status, reason string, code int) {
 		return "failed", "rejected", 0
 	case errors.As(cause, &oom):
 		return "failed", "oom", 0
+	case errors.As(cause, &host):
+		return "failed", "host", 0
 	case errors.As(cause, &agent) && agent.Status >= 400 && agent.Status <= 599:
 		return "failed", "inference", agent.Status
 	case errors.As(cause, &agent):
