@@ -79,6 +79,19 @@ func (c *acpClient) waiting() int {
 	return len(c.shells)
 }
 
+// toolInput is a tool call's input object. OpenCode can report a call's input as a
+// string before it settles; that reads as no input instead of failing the whole read.
+type toolInput map[string]any
+
+func (i *toolInput) UnmarshalJSON(data []byte) error {
+	var input map[string]any
+	if json.Unmarshal(data, &input) != nil {
+		input = nil
+	}
+	*i = input
+	return nil
+}
+
 // nativeMessage is one row of the session message API.
 type nativeMessage struct {
 	ID   string `json:"id"`
@@ -105,7 +118,7 @@ type nativePart struct {
 	Text  string `json:"text"`
 	State *struct {
 		Status   string          `json:"status"`
-		Input    map[string]any  `json:"input"`
+		Input    toolInput       `json:"input"`
 		Content  json.RawMessage `json:"content"`
 		Error    json.RawMessage `json:"error"`
 		Metadata shellMetadata   `json:"metadata"`

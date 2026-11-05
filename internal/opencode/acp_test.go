@@ -496,3 +496,24 @@ func TestACPVersionOneUnansweredUsageComesFromExport(t *testing.T) {
 		t.Fatalf("usage %+v", reporter.usage)
 	}
 }
+
+// A pending call's input string must not drop the update: the call still reports its
+// settled input and stops counting as running.
+func TestACPToolInputStringIsNoInput(t *testing.T) {
+	reporter := &reportStub{}
+	agent := &fakeAgent{version: "2.2.5", stop: "end_turn", updates: []map[string]any{
+		{"sessionUpdate": "tool_call", "toolCallId": "call-1", "title": "write", "kind": "edit", "status": "pending", "rawInput": `{"filePath":"a.txt","cont`},
+		{"sessionUpdate": "tool_call_update", "toolCallId": "call-1", "status": "in_progress", "rawInput": map[string]any{"filePath": "a.txt"}},
+		{"sessionUpdate": "tool_call_update", "toolCallId": "call-1", "status": "completed", "rawInput": "unparsed", "rawOutput": map[string]any{"output": "written"}},
+	}}
+	r := &running{events: &eventStream{reporter: reporter}}
+	if err := turnWith(t, context.Background(), agent, r); err != nil {
+		t.Fatal(err)
+	}
+	if len(reporter.messages) != 2 || reporter.messages[0].Type != "tool_use" || reporter.messages[0].Input["filePath"] != "a.txt" || reporter.messages[1].Type != "tool_result" {
+		t.Fatalf("messages: %+v", reporter.messages)
+	}
+	if r.events.running.Load() != 0 {
+		t.Fatalf("running tools: %d", r.events.running.Load())
+	}
+}

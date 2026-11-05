@@ -373,7 +373,7 @@ type update struct {
 	Name      string          `json:"name"`
 	Title     string          `json:"title"`
 	Tool      string          `json:"kind"`
-	RawInput  map[string]any  `json:"rawInput"`
+	RawInput  toolInput       `json:"rawInput"`
 	RawOutput json.RawMessage `json:"rawOutput"`
 	Meta      map[string]any  `json:"_meta"`
 }
