@@ -38,8 +38,9 @@ type Lease struct {
 	// Context ends when the grant is revoked, cancelling in-flight requests.
 	Context context.Context
 	Release func()
-	// Busy marks a refusal of a valid grant whose concurrent request slots are full.
-	Busy bool
+	// Refused, with a false Authorize, refuses a live grant's request (ErrBusy, ErrPolicy
+	// or ErrUpstreamCredential); without it the credential is invalid.
+	Refused error
 }
 
 // Authorizer validates the caller and resolves the upstream from trusted state.
@@ -69,8 +70,8 @@ type Policy struct {
 	Proxy bool
 	// EncodedSlash admits %2F in segments (GitLab project paths) if the decoded path is clean.
 	EncodedSlash bool
-	// Record receives the upstream status at response headers, or the relay's own refusal.
-	Record func(r *http.Request, status int, err error, elapsed time.Duration)
+	// Record receives the upstream status or the relay's own refusal, and a known grant's attempt.
+	Record func(r *http.Request, attempt string, status int, err error, elapsed time.Duration)
 }
 
 type Relay struct {
@@ -88,11 +89,12 @@ type exchange struct {
 }
 
 var (
-	ErrPolicy     = errors.New("request not permitted")
-	ErrCredential = errors.New("invalid relay credential")
-	ErrBusy       = errors.New("too many concurrent requests")
-	ErrRedirect   = errors.New("upstream redirect refused")
-	ErrUpstream   = errors.New("upstream unavailable")
+	ErrPolicy             = errors.New("request not permitted")
+	ErrCredential         = errors.New("invalid relay credential")
+	ErrBusy               = errors.New("too many concurrent requests")
+	ErrRedirect           = errors.New("upstream redirect refused")
+	ErrUpstream           = errors.New("upstream unavailable")
+	ErrUpstreamCredential = errors.New("upstream credential unavailable")
 )
 
 // dropped never leave the relay: caller credentials, sessions and forwarding hints.
@@ -160,7 +162,7 @@ func New(auth Authorizer, p Policy) (*Relay, error) {
 			if resp.StatusCode >= 300 && resp.StatusCode < 400 && (!x.lease.Redirects || !passed(resp)) {
 				return ErrRedirect
 			}
-			r.record(x.in, resp.StatusCode, nil, x.start)
+			r.record(x.in, x.lease.Attempt, resp.StatusCode, nil, x.start)
 			resp.Header.Del("Set-Cookie")
 			for name := range resp.Header {
 				if reserved(name, p.Reserved) {
@@ -182,7 +184,7 @@ func New(auth Authorizer, p Policy) (*Relay, error) {
 			if x.lease.WithholdErrors {
 				err = ErrUpstream
 			}
-			r.record(x.in, 0, err, x.start)
+			r.record(x.in, x.lease.Attempt, 0, err, x.start)
 			deny(w, http.StatusBadGateway, "upstream unavailable")
 		},
 	}
@@ -193,22 +195,21 @@ func (r *Relay) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	start := time.Now()
 	absolute := req.URL.Scheme != "" || req.URL.Host != ""
 	if absolute != r.policy.Proxy || (absolute && (req.URL.Scheme != "http" || req.URL.User != nil)) || req.Method == http.MethodConnect || req.Header.Get("Upgrade") != "" || !cleanPath(req.URL, r.policy.EncodedSlash) || !r.policy.Allow(req.URL.Path) {
-		r.refuse(w, req, http.StatusForbidden, ErrPolicy, start)
+		r.refuse(w, req, "", http.StatusForbidden, ErrPolicy, start)
 		return
 	}
 	lease, ok := r.auth.Authorize(req)
-	if !ok && lease.Busy {
-		w.Header().Set("Retry-After", "1")
-		r.refuse(w, req, http.StatusTooManyRequests, ErrBusy, start)
-		return
-	}
 	if !ok {
-		r.refuse(w, req, http.StatusUnauthorized, ErrCredential, start)
+		status, err := refusal(lease.Refused)
+		if err == ErrBusy {
+			w.Header().Set("Retry-After", "1")
+		}
+		r.refuse(w, req, lease.Attempt, status, err, start)
 		return
 	}
 	defer lease.Release()
 	if lease.Origin == nil || (lease.Path != "" && !strings.HasPrefix(lease.Path, "/")) {
-		r.refuse(w, req, http.StatusForbidden, ErrPolicy, start)
+		r.refuse(w, req, lease.Attempt, http.StatusForbidden, ErrPolicy, start)
 		return
 	}
 	ctx, cancel := context.WithCancel(context.WithValue(req.Context(), exchangeKey{}, exchange{lease, req, start}))
@@ -218,14 +219,27 @@ func (r *Relay) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	r.proxy.ServeHTTP(w, req.WithContext(ctx))
 }
 
-func (r *Relay) refuse(w http.ResponseWriter, req *http.Request, status int, err error, start time.Time) {
-	r.record(req, 0, err, start)
+// refusal answers an authorizer's refusal; an unknown reason is an invalid credential.
+func refusal(err error) (int, error) {
+	switch err {
+	case ErrBusy:
+		return http.StatusTooManyRequests, err
+	case ErrPolicy:
+		return http.StatusForbidden, err
+	case ErrUpstreamCredential:
+		return http.StatusBadGateway, err
+	}
+	return http.StatusUnauthorized, ErrCredential
+}
+
+func (r *Relay) refuse(w http.ResponseWriter, req *http.Request, attempt string, status int, err error, start time.Time) {
+	r.record(req, attempt, 0, err, start)
 	deny(w, status, err.Error())
 }
 
-func (r *Relay) record(req *http.Request, status int, err error, start time.Time) {
+func (r *Relay) record(req *http.Request, attempt string, status int, err error, start time.Time) {
 	if r.policy.Record != nil {
-		r.policy.Record(req, status, err, time.Since(start))
+		r.policy.Record(req, attempt, status, err, time.Since(start))
 	}
 }
 

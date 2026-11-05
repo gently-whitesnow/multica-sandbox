@@ -92,7 +92,7 @@ func TestIAMRelayUsesRotatingTokenAndAdditionalHeadersThroughProxy(t *testing.T)
 	r.mu.Unlock()
 	response := mcpRequest(t, "POST", front.URL+"/docs", opaque)
 	response.Body.Close()
-	if response.StatusCode != 401 || len(seen) != 0 {
+	if response.StatusCode != http.StatusBadGateway || len(seen) != 0 {
 		t.Fatal("expired IAM fell back to anonymous/static authorization")
 	}
 }

@@ -2,6 +2,7 @@ package docker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -101,11 +102,13 @@ func TestSweepRunsAtStartAndEveryInterval(t *testing.T) {
 	}
 }
 
-// fakeEngine serves the docker calls of session collection over sized volumes on a fake disk.
+// fakeEngine serves the docker calls of session and mirror collection over sized volumes
+// and mirrors on a fake disk.
 type fakeEngine struct {
 	mu                 sync.Mutex
 	labels             map[string]string
 	base, artifacts    map[string]int64
+	mirrors            map[string]map[string]int64
 	available          uint64
 	helper, unexpected []string
 }
@@ -114,6 +117,24 @@ func (e *fakeEngine) run(_ context.Context, _ time.Duration, args ...string) ([]
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	switch {
+	case args[0] == "volume" && args[1] == "ls" && slices.Contains(args, "label="+mirrorLabel):
+		out := ""
+		for name := range e.mirrors {
+			out += name + "\n"
+		}
+		return []byte(out), nil
+	case args[0] == "run" && slices.Contains(args, "drop"):
+		at := slices.Index(args, "drop")
+		volume := strings.TrimSuffix(args[slices.Index(args, "--name")+1], "-gc")
+		e.helper = append(e.helper, "drop "+volume+" "+strings.Join(args[at+2:], " "))
+		freed := int64(0)
+		for _, key := range args[at+2:] {
+			freed += e.mirrors[volume][key]
+			delete(e.mirrors[volume], key)
+		}
+		e.available += uint64(freed)
+		data, _ := json.Marshal(map[string]any{"freed": freed, "mirrors": e.mirrors[volume]})
+		return data, nil
 	case args[0] == "volume" && args[1] == "ls":
 		out := ""
 		for name, label := range e.labels {

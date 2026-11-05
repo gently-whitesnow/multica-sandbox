@@ -33,7 +33,9 @@ func (config Config) serveRelay(ctx context.Context, name string, auth relay.Aut
 	if p.Limit == 0 {
 		p.Limit = relayBodyLimit
 	}
-	p.Record = config.relayRecord(strings.ToLower(name))
+	refusals := newRefusalLog(config.logger())
+	go refusals.run(ctx, relayLogWindow)
+	p.Record = config.relayRecord(strings.ToLower(name), refusals)
 	proxy, err := relay.New(auth, p)
 	if err != nil {
 		return err
@@ -58,18 +60,16 @@ func (config Config) serveRelay(ctx context.Context, name string, auth relay.Aut
 	return nil
 }
 
-// relayRecord records relay requests and logs refusals and upstream errors at debug
-// level: method and path only, never headers, query or bodies.
-func (c Config) relayRecord(name string) func(*http.Request, int, error, time.Duration) {
-	log := c.logger()
-	return func(r *http.Request, status int, err error, elapsed time.Duration) {
+// relayRecord records relay requests and samples refusals and upstream errors into the log.
+func (c Config) relayRecord(name string, refusals *refusalLog) func(*http.Request, string, int, error, time.Duration) {
+	return func(r *http.Request, attempt string, status int, err error, elapsed time.Duration) {
 		errorType := ""
 		if err != nil {
 			errorType = relayErrorType(r.Context(), err)
 		}
 		c.metrics.Relay(name, status, errorType, elapsed)
 		if errorType != "" || status >= 400 {
-			log.Debug("relay request refused", "relay", name, "method", r.Method, "path", r.URL.Path, "status", status, "error_type", errorType, "seconds", elapsed.Seconds())
+			refusals.record(name, r, attempt, status, errorType, elapsed)
 		}
 	}
 }
@@ -85,6 +85,8 @@ func relayErrorType(ctx context.Context, err error) string {
 		return "too-many-requests"
 	case errors.Is(err, relay.ErrRedirect):
 		return "redirect-refused"
+	case errors.Is(err, relay.ErrUpstreamCredential):
+		return "upstream-credential"
 	case errors.As(err, &body):
 		return "body-limit"
 	}

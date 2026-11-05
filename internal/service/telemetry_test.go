@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -106,19 +107,28 @@ func TestAttemptEvents(t *testing.T) {
 	}
 }
 
-// Relay refusals are recorded and, with debug, logged without query or headers.
-func TestRelayRecordLogsRefusalsAtDebug(t *testing.T) {
-	c, log, m := observed(t, true)
-	record := c.relayRecord("inference")
+// Relay refusals are recorded and logged at warning level without debug: task and
+// workspace, a redacted path, never the query or headers.
+func TestRelayRecordLogsRefusals(t *testing.T) {
+	c, log, m := observed(t, false)
+	refusals := newRefusalLog(c.logger())
+	record := c.relayRecord("inference", refusals)
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions?key=secret", nil)
 	req.Header.Set("Authorization", "Bearer opaque-secret")
-	record(req, 200, nil, time.Second)
-	record(req, 0, relay.ErrPolicy, time.Millisecond)
-	record(req, 429, nil, time.Second)
-	record(req, 0, relay.ErrBusy, time.Millisecond)
+	attempt := "10000000-0000-4000-8000-000000000001:runtime:20000000-0000-4000-8000-000000000002:2026-01-02T03:04:05Z"
+	record(req, attempt, 200, nil, time.Second)
+	record(req, "", 0, relay.ErrPolicy, time.Millisecond)
+	record(req, attempt, 429, nil, time.Second)
+	record(req, attempt, 0, relay.ErrBusy, time.Millisecond)
 	events := lines(t, log)
-	if len(events) != 3 || events[2]["error_type"] != "too-many-requests" || events[0]["level"] != "DEBUG" || events[0]["error_type"] != "policy-denied" || events[1]["status"] != 429.0 || events[1]["path"] != "/v1/chat/completions" {
+	if len(events) != 3 || events[0]["level"] != "WARN" || events[0]["msg"] != "relay request refused" || events[0]["error_type"] != "policy-denied" || events[0]["task"] != nil {
 		t.Fatalf("events: %v", events)
+	}
+	if e := events[1]; e["msg"] != "relay upstream error" || e["status"] != 429.0 || e["path"] != "/v1/chat/completions" || e["task"] != "20000000-0000-4000-8000-000000000002" || e["workspace"] != "10000000-0000-4000-8000-000000000001" || e["error_type"] != nil {
+		t.Fatalf("upstream event: %v", e)
+	}
+	if events[2]["error_type"] != "too-many-requests" || events[2]["status"] != nil {
+		t.Fatalf("busy event: %v", events[2])
 	}
 	if strings.Contains(log.String(), "secret") {
 		t.Fatal("query or credential logged")
@@ -133,10 +143,62 @@ func TestRelayRecordLogsRefusalsAtDebug(t *testing.T) {
 			t.Errorf("exposition lacks %s", line)
 		}
 	}
-	quiet, quietLog, _ := observed(t, false)
-	quiet.relayRecord("git")(req, 0, relay.ErrPolicy, time.Millisecond)
-	if quietLog.Len() != 0 {
-		t.Fatalf("debug event without debug: %s", quietLog)
+}
+
+// An agent repeating a refused call logs once per route and window; the rest is counted
+// into one summary when the window closes, and routes beyond the bound share one key.
+func TestRelayRefusalLogIsSampled(t *testing.T) {
+	c, log, _ := observed(t, false)
+	refusals := newRefusalLog(c.logger())
+	record := c.relayRecord("multica", refusals)
+	for i := range 50 {
+		req := httptest.NewRequest(http.MethodGet, "/api/issues/"+strconv.Itoa(i)+"/comments", nil)
+		record(req, "", 0, relay.ErrPolicy, time.Millisecond)
+	}
+	record(httptest.NewRequest(http.MethodGet, "/api/issues/1/comments", nil), "", 403, nil, time.Millisecond)
+	if events := lines(t, log); len(events) != 2 || events[0]["route"] != "/api/issues/{id}/comments" || events[0]["path"] != "/api/issues/0/comments" || events[1]["status"] != 403.0 {
+		t.Fatalf("window events: %v", events)
+	}
+	log.Reset()
+	refusals.flush()
+	refusals.flush()
+	events := lines(t, log)
+	if len(events) != 1 || events[0]["msg"] != "relay events suppressed" || events[0]["count"] != 49.0 || events[0]["error_type"] != "policy-denied" || events[0]["route"] != "/api/issues/{id}/comments" {
+		t.Fatalf("summary: %v", events)
+	}
+	log.Reset()
+	for i := range relayLogKeys + 10 {
+		record(httptest.NewRequest(http.MethodGet, "/api/r"+strconv.Itoa(i)+"x", nil), "", 404, nil, time.Millisecond)
+	}
+	if events := lines(t, log); len(events) != relayLogKeys+1 {
+		t.Fatalf("bounded keys: %d events", len(events))
+	}
+	log.Reset()
+	refusals.flush()
+	if events := lines(t, log); len(events) != 1 || events[0]["route"] != "*" || events[0]["count"] != 9.0 {
+		t.Fatalf("overflow summary: %v", events)
+	}
+}
+
+// Paths keep their shape for diagnosis; tokens and JWTs are redacted and identifiers
+// collapse in the route.
+func TestRedactPath(t *testing.T) {
+	jwt := "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ4In0.c2ln"
+	for _, c := range []struct{ in, path, route string }{
+		{"/api/issues/ABC-12/comments", "/api/issues/ABC-12/comments", "/api/issues/{id}/comments"},
+		{"/api/issues/10000000-0000-4000-8000-000000000001", "/api/issues/10000000-0000-4000-8000-000000000001", "/api/issues/{id}"},
+		{"/api/v4/projects/team/fixture/merge_requests/7", "/api/v4/projects/team/fixture/merge_requests/7", "/api/v4/projects/team/fixture/merge_requests/{id}"},
+		{"/repos/o/r/commits/0123abc", "/repos/o/r/commits/0123abc", "/repos/o/r/commits/{id}"},
+		{"/http/svc/hooks/" + jwt, "/http/svc/hooks/{redacted}", "/http/svc/hooks/{redacted}"},
+		{"/http/svc/k/glpat-abcdef", "/http/svc/k/{redacted}", "/http/svc/k/{redacted}"},
+		{"/x/msg_" + strings.Repeat("a", 64), "/x/{redacted}", "/x/{redacted}"},
+		{"/x/Ab3dEf7hIj9kLm1nOp2qRs4tUv6wXy8z", "/x/{redacted}", "/x/{redacted}"},
+		{"/team/a-very-long-repository-name-without-digits.git/info/refs", "/team/a-very-long-repository-name-without-digits.git/info/refs", "/team/a-very-long-repository-name-without-digits.git/info/refs"},
+		{"/docs", "/docs", "/docs"},
+	} {
+		if path, route := redactPath(c.in); path != c.path || route != c.route {
+			t.Errorf("%s: %s %s", c.in, path, route)
+		}
 	}
 }
 

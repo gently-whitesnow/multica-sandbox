@@ -139,8 +139,8 @@ func TestPublicMCPUsesOnlyExplicitIdentityAndAlwaysDeploymentProxy(t *testing.T)
 		t.Fatalf("unexpected issuance calls=%d err=%v", issuer.calls, err)
 	}
 	for name := range connections {
-		target, ok := r.mcpUpstream(name)
-		if !ok || target.proxy != proxy {
+		target, err := r.mcpUpstream(name)
+		if err != nil || target.proxy != proxy {
 			t.Fatal("IAM bypassed deployment proxy")
 		}
 	}

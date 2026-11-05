@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gently-whitesnow/multica-sandbox/internal/identity"
+	"github.com/gently-whitesnow/multica-sandbox/internal/relay"
 )
 
 // httpIdentity is optional; managed HTTP clients reuse the identity source and
@@ -62,27 +63,35 @@ func (r *running) httpEnvironment(env map[string]string) {
 	}
 }
 
-func (r *running) httpUpstream(method, requestPath string) (*url.URL, string, string, bool) {
+// httpUpstream resolves an approved service request; an unapproved one is relay.ErrPolicy
+// and a lapsed token relay.ErrUpstreamCredential.
+func (r *running) httpUpstream(method, requestPath string) (*url.URL, string, string, error) {
 	parts := strings.SplitN(strings.TrimPrefix(requestPath, "/http/"), "/", 2)
 	if len(parts) != 2 {
-		return nil, "", "", false
+		return nil, "", "", relay.ErrPolicy
 	}
 	service, ok := r.httpServices[parts[0]]
 	path := "/" + parts[1]
 	if !ok || !service.Allows(method, path) {
-		return nil, "", "", false
+		return nil, "", "", relay.ErrPolicy
 	}
 	r.mu.Lock()
 	token := r.httpTokens[service.Name]
 	r.mu.Unlock()
 	origin, err := url.Parse(service.Origin)
-	if err != nil || time.Until(token.ExpiresAt) <= time.Second {
-		return nil, "", "", false
+	if err != nil {
+		return nil, "", "", relay.ErrPolicy
+	}
+	if time.Until(token.ExpiresAt) <= time.Second {
+		return nil, "", "", relay.ErrUpstreamCredential
 	}
 	origin.Path = strings.TrimSuffix(origin.Path, "/")
 	if service.PathCredential != nil {
 		path, ok := service.CredentialPath(path, token.Bearer())
-		return origin, path, "", ok
+		if !ok {
+			return nil, "", "", relay.ErrPolicy
+		}
+		return origin, path, "", nil
 	}
-	return origin, path, token.Bearer(), true
+	return origin, path, token.Bearer(), nil
 }

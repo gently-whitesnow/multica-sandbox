@@ -34,6 +34,8 @@ from verified behavior.
 - `adrs/0033-release-versions.md`: `VERSION`, image `v<VERSION>` tags and Git tags.
 - `adrs/0034-session-disk-reclamation.md`: artifact pruning, disk-pressure collection
   and the optional byte budget of retained session volumes.
+- `adrs/0035-reference-mirrors.md`: per-workspace read-only reference mirrors for new
+  checkouts, their refresh through the Git relay and collection.
 - `examples/end-to-end/`: opt-in real Multica/OpenCode/inference lab.
 - `examples/identity-mcp/`: disposable identity and MCP contract fixture.
 - `internal/inference/`: workspace gateway bindings, relay policy and advisory model catalogs.

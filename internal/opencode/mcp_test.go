@@ -140,19 +140,24 @@ func TestMCPRelayDiscardsCallerQuery(t *testing.T) {
 	}
 }
 
+// A live grant's unselected connection is a policy refusal and its lapsed token an
+// upstream credential failure; only unknown credentials answer 401.
 func TestMCPRelayRefusesUnknownExpiredAndForeign(t *testing.T) {
 	_, r, opaque, upstream, front := mcpRelayFixture(t)
-	for name, c := range map[string]struct{ path, bearer string }{
-		"unselected alias": {"/other", opaque},
-		"nested path":      {"/docs/x", opaque},
-		"traversal":        {"/docs/../docs", opaque},
-		"forged":           {"/docs", MCPRelayPrefix + strings.Repeat("0", 64)},
-		"access token":     {"/docs", "jwt-one"},
+	for name, c := range map[string]struct {
+		path, bearer string
+		status       int
+	}{
+		"unselected alias": {"/other", opaque, http.StatusForbidden},
+		"nested path":      {"/docs/x", opaque, http.StatusForbidden},
+		"traversal":        {"/docs/../docs", opaque, http.StatusForbidden},
+		"forged":           {"/docs", MCPRelayPrefix + strings.Repeat("0", 64), http.StatusUnauthorized},
+		"access token":     {"/docs", "jwt-one", http.StatusUnauthorized},
 	} {
 		resp := mcpRequest(t, http.MethodPost, front.URL+c.path, c.bearer)
 		resp.Body.Close()
-		if resp.StatusCode < 400 {
-			t.Fatalf("%s forwarded", name)
+		if resp.StatusCode != c.status {
+			t.Errorf("%s: %d, want %d", name, resp.StatusCode, c.status)
 		}
 	}
 	r.mu.Lock()
@@ -160,8 +165,8 @@ func TestMCPRelayRefusesUnknownExpiredAndForeign(t *testing.T) {
 	r.mu.Unlock()
 	resp := mcpRequest(t, http.MethodPost, front.URL+"/docs", opaque)
 	resp.Body.Close()
-	if resp.StatusCode < 400 || len(upstream.seen) != 0 {
-		t.Fatalf("expired token forwarded: %v", upstream.seen)
+	if resp.StatusCode != http.StatusBadGateway || len(upstream.seen) != 0 {
+		t.Fatalf("expired token: %d, forwarded %v", resp.StatusCode, upstream.seen)
 	}
 }
 

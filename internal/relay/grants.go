@@ -133,7 +133,7 @@ func (g *Grants) Refusal(attempt string) int {
 
 // Authorize accepts the opaque credential as a bearer token or, as Anthropic clients
 // send it, in X-Api-Key; a request carrying both must repeat the same credential.
-// A valid grant with all in-flight slots taken is refused with a Busy lease.
+// A valid grant with all in-flight slots taken is refused with ErrBusy.
 func (g *Grants) Authorize(r *http.Request) (Lease, bool) {
 	opaque, bearer := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 	keys := r.Header.Values("X-Api-Key")
@@ -155,7 +155,7 @@ func (g *Grants) Authorize(r *http.Request) (Lease, bool) {
 	select {
 	case entry.slots <- struct{}{}:
 	default:
-		return Lease{Busy: true}, false
+		return Lease{Attempt: entry.attempt, Refused: ErrBusy}, false
 	}
 	return Lease{Attempt: entry.attempt, Origin: entry.origin, Credential: entry.credential, Header: entry.header, Context: entry.ctx, Release: func() { <-entry.slots }}, true
 }

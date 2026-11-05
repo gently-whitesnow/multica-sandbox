@@ -68,8 +68,10 @@ Label values:
 - `event`: `start-rejected`, `message-deferred`, `report-deferred`, `cancelled`,
   `gone`, `settled` or `other`.
 - `relay`: `multica`, `inference`, `git`, `forge` or `mcp`.
-- Relay `error_type`: `policy-denied`, `invalid-credential`, `too-many-requests`
-  (a grant's in-flight slots are full; 429 with `Retry-After`), `redirect-refused`,
+- Relay `error_type`: `policy-denied` (403, also a live grant's request outside its
+  hosts, APIs or connections), `invalid-credential` (401: unknown or revoked only),
+  `too-many-requests` (slots full; 429 with `Retry-After`), `upstream-credential`
+  (502: unreadable host password or lapsed IAM token), `redirect-refused`,
   `body-limit`, or a transport error (`request-timeout`, `request-canceled`,
   `connection-failed`, `dns-resolve`, `tls-handshake`, `other`).
 - Multica `path`: the request path with every segment outside a fixed word list
@@ -84,10 +86,17 @@ fields in snake_case. `attempt finished` replaces the `finished` line and carrie
 identity, `status`, `reason`, Multica's `failure_reason`, timings in seconds,
 continuity, model, tokens, peak memory, session and the safe failure text Multica
 also receives. Failures and degradations are `WARN`. `"debug": true` enables `DEBUG`
-events: relay refusals and upstream errors (relay, method, path, status or
-`error_type`), failed Multica requests (route template, status or `error_type`) and
+events: failed Multica requests (route template, status or `error_type`) and
 the existing identity and inference diagnostics. Debug events never include headers,
 query strings, bodies or credentials.
+
+Relay refusals (`relay request refused`) and upstream answers from 400 (`relay
+upstream error`) are `WARN` without debug: relay, method, path, `route`, status or
+`error_type`, and a known grant's `task` and `workspace`. Credential-like segments
+(token prefixes, JWTs, long mixed opaque strings) become `{redacted}`; `route` also
+turns identifiers into `{id}`. Per relay, outcome and route the first event of a minute
+is logged and the rest summarized as `relay events suppressed` with `count` (past 256
+routes, route `*`). Queries, headers, bodies and credentials are never logged.
 
 ## Consequences
 

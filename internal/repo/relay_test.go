@@ -2,6 +2,7 @@ package repo
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/cgi"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/gently-whitesnow/multica-sandbox/internal/relay"
 )
@@ -217,6 +219,53 @@ func TestGitRelayAllowsDuringAuthorize(t *testing.T) {
 		}
 	}()
 	wg.Wait()
+}
+
+// A live grant's refused request is a policy or host credential refusal, not an invalid
+// relay credential: only unknown and revoked credentials answer 401.
+func TestGitRelayClassifiesRefusals(t *testing.T) {
+	secret := filepath.Join(t.TempDir(), "token")
+	hosts, err := NewHosts(Config{Version: 1, AllowHTTP: true, Hosts: []Host{
+		{WorkspaceID: workspace, Host: "git.example.test", Upstream: "http://127.0.0.1:1", Username: "x-access-token", PasswordFile: secret},
+		{WorkspaceID: "10000000-0000-4000-8000-000000000002", Host: "other.example.test", Upstream: "http://127.0.0.1:1"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := NewRelay("http://relay.example.test", hosts)
+	var outcomes []error
+	handler, err := relay.New(g, relay.Policy{Allow: GitPath, Limit: 1 << 20, Proxy: true, Record: func(_ *http.Request, _ string, _ int, err error, _ time.Duration) {
+		outcomes = append(outcomes, err)
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	env, err := g.Issue("attempt", workspace, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credential := env["GIT_CONFIG_VALUE_0"][len("Authorization: "):]
+	fetch := "/fixture.git/info/refs?service=git-upload-pack"
+	for name, c := range map[string]struct {
+		method, target, credential string
+		status                     int
+		err                        error
+	}{
+		"push refs by POST":    {"POST", "http://git.example.test/fixture.git/info/refs?service=git-receive-pack", credential, http.StatusForbidden, relay.ErrPolicy},
+		"extra query":          {"GET", "http://git.example.test" + fetch + "&x=1", credential, http.StatusForbidden, relay.ErrPolicy},
+		"other workspace host": {"GET", "http://other.example.test" + fetch, credential, http.StatusForbidden, relay.ErrPolicy},
+		"host secret missing":  {"GET", "http://git.example.test" + fetch, credential, http.StatusBadGateway, relay.ErrUpstreamCredential},
+		"unknown credential":   {"GET", "http://git.example.test" + fetch, "Bearer " + GitPrefix + strings.Repeat("0", 64), http.StatusUnauthorized, relay.ErrCredential},
+	} {
+		outcomes = nil
+		r := httptest.NewRequest(c.method, c.target, nil)
+		r.Header.Set("Authorization", c.credential)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		if w.Code != c.status || len(outcomes) != 1 || !errors.Is(outcomes[0], c.err) {
+			t.Errorf("%s: %d %v, want %d %v", name, w.Code, outcomes, c.status, c.err)
+		}
+	}
 }
 
 func TestClaimURLFormsMatchUpstream(t *testing.T) {

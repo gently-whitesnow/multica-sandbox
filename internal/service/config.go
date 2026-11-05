@@ -126,9 +126,11 @@ type OpenCodeConfig struct {
 	// ForgeRelay serves gh for Git hosts with an api; the helper forwards loopback 443 to its url.
 	ForgeRelay *RelayConfig `json:"forge_relay,omitempty"`
 	// Sessions, with the helper, retains issue workdirs and resumes sessions (ADR 0015).
-	Sessions     *SessionsConfig `json:"sessions,omitempty"`
-	IdleWatchdog string          `json:"idle_watchdog,omitempty"`
-	ToolWatchdog string          `json:"tool_watchdog,omitempty"`
+	Sessions *SessionsConfig `json:"sessions,omitempty"`
+	// Mirrors, with git_relay and sessions, clones new checkouts against workspace reference mirrors (ADR 0035).
+	Mirrors      *MirrorsConfig `json:"mirrors,omitempty"`
+	IdleWatchdog string         `json:"idle_watchdog,omitempty"`
+	ToolWatchdog string         `json:"tool_watchdog,omitempty"`
 	// CompactionMaxTokens is an optional native compaction trigger cap for verified OpenCode 2.x.
 	CompactionMaxTokens int                  `json:"compaction_max_tokens,omitempty"`
 	Resources           *docker.ResourceSpec `json:"resources,omitempty"`
@@ -149,6 +151,16 @@ type SessionsConfig struct {
 	Grace       string `json:"grace,omitempty"`
 	ArtifactAge string `json:"artifact_age,omitempty"`
 	Budget      string `json:"budget,omitempty"`
+}
+
+// MirrorsConfig tunes reference mirrors: a checkout refreshes one older than Refresh
+// (default 15m) and waits up to Wait (2m) for a mirror it never used; one refresh takes at
+// most Timeout (10m). The session sweep removes mirrors unused for TTL (720h).
+type MirrorsConfig struct {
+	Refresh string `json:"refresh,omitempty"`
+	Wait    string `json:"wait,omitempty"`
+	Timeout string `json:"timeout,omitempty"`
+	TTL     string `json:"ttl,omitempty"`
 }
 
 // RelayConfig enables an embedded relay: Multica API, inference, MCP (ADR 0014, 0012, 0023).

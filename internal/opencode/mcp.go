@@ -75,20 +75,20 @@ func (m *MCPRelay) Authorize(req *http.Request) (relay.Lease, bool) {
 	}
 	httpService := strings.HasPrefix(req.URL.Path, "/http/")
 	if httpService {
-		origin, path, bearer, allowed := r.httpUpstream(req.Method, req.URL.Path)
-		if !allowed {
+		origin, path, bearer, err := r.httpUpstream(req.Method, req.URL.Path)
+		if err != nil {
 			lease.Release()
-			return relay.Lease{}, false
+			return relay.Lease{Attempt: lease.Attempt, Refused: err}, false
 		}
 		lease.Origin, lease.Path, lease.Credential = origin, path, bearer
 		name := strings.SplitN(strings.TrimPrefix(req.URL.Path, "/http/"), "/", 2)[0]
 		lease.Header = r.httpServices[name].Header()
 		lease.WithholdErrors = r.httpServices[name].PathCredential != nil
 	} else {
-		target, allowed := r.mcpUpstream(strings.TrimPrefix(req.URL.Path, "/"))
-		if !allowed {
+		target, err := r.mcpUpstream(strings.TrimPrefix(req.URL.Path, "/"))
+		if err != nil {
 			lease.Release()
-			return relay.Lease{}, false
+			return relay.Lease{Attempt: lease.Attempt, Refused: err}, false
 		}
 		lease.Origin, lease.Path, lease.Credential = target.origin, target.path, target.bearer
 		lease.Header, lease.ProxyURL, lease.WithholdErrors = target.header, target.proxy, target.withhold
@@ -107,14 +107,18 @@ type mcpTarget struct {
 
 // mcpUpstream binds the exact selected endpoint, credentials and deployment egress.
 // Only explicit IAM connections receive issuer tokens; deployment owns proxy routing.
-func (r *running) mcpUpstream(name string) (mcpTarget, bool) {
+// An unselected connection is relay.ErrPolicy, a lapsed token relay.ErrUpstreamCredential.
+func (r *running) mcpUpstream(name string) (mcpTarget, error) {
 	connection, ok := r.connections[name]
 	r.mu.Lock()
 	token := r.tokens[name]
 	r.mu.Unlock()
 	u, err := url.Parse(connection.URL)
-	if !ok || err != nil || !r.anonymous[name] && time.Until(token.ExpiresAt) <= time.Second {
-		return mcpTarget{}, false
+	if !ok || err != nil {
+		return mcpTarget{}, relay.ErrPolicy
+	}
+	if !r.anonymous[name] && time.Until(token.ExpiresAt) <= time.Second {
+		return mcpTarget{}, relay.ErrUpstreamCredential
 	}
 	target := mcpTarget{origin: &url.URL{Scheme: u.Scheme, Host: u.Host, RawQuery: u.RawQuery, ForceQuery: u.ForceQuery}, path: u.Path, bearer: token.Bearer()}
 	if target.path == "" {
@@ -122,7 +126,7 @@ func (r *running) mcpUpstream(name string) (mcpTarget, bool) {
 	}
 	if r.public[name] {
 		if r.adapter == nil || r.adapter.MCPPublicProxy == nil {
-			return mcpTarget{}, false
+			return mcpTarget{}, relay.ErrPolicy
 		}
 		target.proxy, target.withhold = r.adapter.MCPPublicProxy, true
 	}
@@ -136,7 +140,7 @@ func (r *running) mcpUpstream(name string) (mcpTarget, bool) {
 			target.bearer = ""
 		}
 	}
-	return target, true
+	return target, nil
 }
 
 // validMCPURL admits an exact HTTP(S) endpoint the relay can address unchanged.

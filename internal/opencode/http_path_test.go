@@ -54,7 +54,7 @@ func newPathHTTPFixture(t *testing.T) *pathHTTPFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	proxy, err := relay.New(f.m, relay.Policy{Allow: MCPRelayPath, Limit: 1 << 20, Record: func(r *http.Request, _ int, err error, _ time.Duration) {
+	proxy, err := relay.New(f.m, relay.Policy{Allow: MCPRelayPath, Limit: 1 << 20, Record: func(r *http.Request, _ string, _ int, err error, _ time.Duration) {
 		f.records <- r.URL.String() + fmt.Sprint(err)
 	}})
 	if err != nil {

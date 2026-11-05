@@ -46,6 +46,8 @@ const (
 	StatePath = "/workspace/.multica_co_authored_by"
 	// SettingsRefresh bounds how long a live attempt's hooks lag a setting change.
 	SettingsRefresh = 10 * time.Second
+	// CheckoutTimeout bounds one checkout, including its wait for a reference mirror.
+	CheckoutTimeout = 5 * time.Minute
 )
 
 // Settings reads the workspace Co-authored-by setting (upstream workspaceCoAuthoredByEnabled)
@@ -81,12 +83,14 @@ type Authorizer interface {
 }
 
 // Checkout serves the upstream daemon's POST /repo/checkout for registered attempts.
-// Hosts supplies commit identities and Settings the Co-authored-by setting.
+// Hosts supplies commit identities, Settings the Co-authored-by setting and Mirrors,
+// when set, reference mirrors for new clones.
 type Checkout struct {
 	Auth     Authorizer
 	Hosts    *Hosts
 	Settings Settings
 	Git      Granter
+	Mirrors  Mirror
 	mu       sync.Mutex
 	tasks    map[string]*active
 }
@@ -174,7 +178,7 @@ func (c *Checkout) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	lease, ok := c.Auth.Authorize(r)
-	if !ok && lease.Busy {
+	if !ok && lease.Refused == relay.ErrBusy {
 		w.Header().Set("Retry-After", "1")
 		http.Error(w, "too many concurrent requests", http.StatusTooManyRequests)
 		return
@@ -244,7 +248,7 @@ func (c *Checkout) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid ref", http.StatusBadRequest)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(r.Context(), CheckoutTimeout)
 	defer cancel()
 	defer context.AfterFunc(lease.Context, cancel)()
 	wait := ctx
@@ -267,8 +271,15 @@ func (c *Checkout) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Like upstream ensureRepoReady, every checkout rereads the setting first.
 	task.publish.Lock()
 	defer task.publish.Unlock()
+	mirror := ""
+	if c.Mirrors != nil {
+		if key, release, ok := c.Mirrors.Ensure(ctx, task.Workspace, req.URL); ok {
+			mirror = MirrorDir + "/" + key
+			defer release()
+		}
+	}
 	commitName, commitEmail := c.Hosts.Identity(task.Workspace, req.URL, task.AgentName)
-	args := []string{"/bin/sh", "-c", script, "checkout", req.URL, ref, Branch(task.AgentName, task.ID), flag[req.Fresh], req.WorkDir, name, WorkDir, commitName, commitEmail, flag[c.setting(ctx, task)], hookText}
+	args := []string{"/bin/sh", "-c", script, "checkout", req.URL, ref, Branch(task.AgentName, task.ID), flag[req.Fresh], req.WorkDir, name, WorkDir, commitName, commitEmail, flag[c.setting(ctx, task)], hookText, mirror}
 	out, _ := task.Target.Capture(ctx, append(args, rewrite...), env)
 	if ctx.Err() != nil {
 		return

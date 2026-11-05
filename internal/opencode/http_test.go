@@ -52,18 +52,21 @@ func TestHTTPServiceRelayRoutesAndRotation(t *testing.T) {
 
 func TestHTTPServiceRelayDeniesForeignPathsMethodsAndCredentials(t *testing.T) {
 	m, r, opaque, upstream, front := httpServiceFixture(t)
-	for _, check := range []struct{ method, path, token string }{
-		{"POST", "/http/control/api/v1/settings", opaque},
-		{"POST", "/http/control/api/v1/agents", opaque},
-		{"POST", "/http/other/api/v1/deployment-access/fixture/credentials", opaque},
-		{"POST", "/http/control/api/v1/deployment-access/../agents", opaque},
-		{"POST", "/http/control/api/v1/deployment-access/%2fagents", opaque},
-		{"POST", "/http/control/api/v1/deployment-access/fixture/credentials", "jwt-http-one"},
+	for _, check := range []struct {
+		method, path, token string
+		status              int
+	}{
+		{"POST", "/http/control/api/v1/settings", opaque, http.StatusForbidden},
+		{"POST", "/http/control/api/v1/agents", opaque, http.StatusForbidden},
+		{"POST", "/http/other/api/v1/deployment-access/fixture/credentials", opaque, http.StatusForbidden},
+		{"POST", "/http/control/api/v1/deployment-access/../agents", opaque, http.StatusForbidden},
+		{"POST", "/http/control/api/v1/deployment-access/%2fagents", opaque, http.StatusForbidden},
+		{"POST", "/http/control/api/v1/deployment-access/fixture/credentials", "jwt-http-one", http.StatusUnauthorized},
 	} {
 		response := mcpRequest(t, check.method, front+check.path, check.token)
 		response.Body.Close()
-		if response.StatusCode < 400 {
-			t.Fatal("unapproved HTTP request forwarded")
+		if response.StatusCode != check.status {
+			t.Errorf("%s %s: %d, want %d", check.method, check.path, response.StatusCode, check.status)
 		}
 	}
 	if len(upstream.seen) != 0 {
@@ -74,8 +77,8 @@ func TestHTTPServiceRelayDeniesForeignPathsMethodsAndCredentials(t *testing.T) {
 	r.mu.Unlock()
 	response := mcpRequest(t, "POST", front+"/http/control/api/v1/deployment-access/fixture/credentials", opaque)
 	response.Body.Close()
-	if response.StatusCode < 400 {
-		t.Fatal("expired HTTP JWT forwarded")
+	if response.StatusCode != http.StatusBadGateway {
+		t.Fatalf("expired HTTP JWT: %d", response.StatusCode)
 	}
 	m.revoke(r.task.AttemptKey())
 	response = mcpRequest(t, "POST", front+"/http/control/api/v1/deployment-access/fixture/credentials", opaque)

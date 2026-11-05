@@ -367,7 +367,7 @@ func TestStreamsAndRevocationCancelsInflight(t *testing.T) {
 func TestFullGrantAnswersTooManyRequests(t *testing.T) {
 	var mu sync.Mutex
 	var errs []error
-	record := func(_ *http.Request, _ int, err error, _ time.Duration) {
+	record := func(_ *http.Request, _ string, _ int, err error, _ time.Duration) {
 		mu.Lock()
 		defer mu.Unlock()
 		errs = append(errs, err)
@@ -384,7 +384,7 @@ func TestFullGrantAnswersTooManyRequests(t *testing.T) {
 		}
 		leases = append(leases, lease)
 	}
-	if lease, ok := f.grants.Authorize(req); ok || !lease.Busy {
+	if lease, ok := f.grants.Authorize(req); ok || lease.Refused != ErrBusy || lease.Attempt != "attempt-a" {
 		t.Fatal("full grant not reported busy")
 	}
 	resp, body := f.do(t, http.MethodGet, "/api/issues/x", a, nil, nil)
@@ -486,21 +486,23 @@ func TestAPIKeyHeaderCarriesOpaqueCredential(t *testing.T) {
 	}
 }
 
-// Record sees each request once: the upstream status, or the refusal the relay answered.
+// Record sees each request once: the upstream status, or the refusal the relay answered,
+// with the attempt of a known credential.
 func TestRecordsEachOutcomeOnce(t *testing.T) {
 	type outcome struct {
-		status int
-		err    error
+		attempt string
+		status  int
+		err     error
 	}
 	var mu sync.Mutex
 	var seen []outcome
-	record := func(_ *http.Request, status int, err error, elapsed time.Duration) {
+	record := func(_ *http.Request, attempt string, status int, err error, elapsed time.Duration) {
 		if elapsed < 0 {
 			t.Error("negative elapsed time")
 		}
 		mu.Lock()
 		defer mu.Unlock()
-		seen = append(seen, outcome{status, err})
+		seen = append(seen, outcome{attempt, status, err})
 	}
 	var target string
 	upstream := func(w http.ResponseWriter, r *http.Request) {
@@ -519,12 +521,12 @@ func TestRecordsEachOutcomeOnce(t *testing.T) {
 	f.do(t, http.MethodGet, "/health", a, nil, nil)
 	mu.Lock()
 	defer mu.Unlock()
-	want := []outcome{{http.StatusTooManyRequests, nil}, {0, ErrRedirect}, {0, ErrCredential}, {0, ErrPolicy}}
+	want := []outcome{{"attempt-a", http.StatusTooManyRequests, nil}, {"attempt-a", 0, ErrRedirect}, {"", 0, ErrCredential}, {"", 0, ErrPolicy}}
 	if len(seen) != len(want) {
 		t.Fatalf("recorded %v, want %v", seen, want)
 	}
 	for i, o := range want {
-		if seen[i].status != o.status || !errors.Is(seen[i].err, o.err) {
+		if seen[i].attempt != o.attempt || seen[i].status != o.status || !errors.Is(seen[i].err, o.err) {
 			t.Fatalf("outcome %d: %v, want %v", i, seen[i], o)
 		}
 	}

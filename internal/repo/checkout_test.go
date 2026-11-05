@@ -49,7 +49,12 @@ func origin(t *testing.T) string {
 // checkout runs the script with the default identity; the co-author hook is on unless disabled.
 func checkout(t *testing.T, root, url, ref, branch string, fresh bool, workdir string, coauthor ...bool) (response, string, string) {
 	t.Helper()
-	cmd := exec.Command("/bin/sh", "-c", script, "checkout", url, ref, branch, flag[fresh], workdir, Name(url), root, "Fixture Agent", DefaultEmail, flag[len(coauthor) == 0 || coauthor[0]], hookText)
+	return checkoutWith(t, "", root, url, ref, branch, fresh, workdir, len(coauthor) == 0 || coauthor[0])
+}
+
+func checkoutWith(t *testing.T, mirror, root, url, ref, branch string, fresh bool, workdir string, coauthor bool) (response, string, string) {
+	t.Helper()
+	cmd := exec.Command("/bin/sh", "-c", script, "checkout", url, ref, branch, flag[fresh], workdir, Name(url), root, "Fixture Agent", DefaultEmail, flag[coauthor], hookText, mirror)
 	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0")
 	out, _ := cmd.Output()
 	return parse(out)
@@ -63,7 +68,7 @@ func TestCheckoutKeepsWorkspaceRemotePrefix(t *testing.T) {
 	}
 	const key, prefix = "url.http://git.example.test/.insteadOf", "ssh://ops@git.example.test:2200/"
 	for range 2 {
-		cmd := exec.Command("/bin/sh", "-c", script, "checkout", bare, "", "agent/a/1", "0", root, Name(bare), root, "Fixture Agent", DefaultEmail, "1", hookText, "http://git.example.test/", prefix)
+		cmd := exec.Command("/bin/sh", "-c", script, "checkout", bare, "", "agent/a/1", "0", root, Name(bare), root, "Fixture Agent", DefaultEmail, "1", hookText, "", "http://git.example.test/", prefix)
 		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0")
 		out, _ := cmd.Output()
 		if result, kind, message := parse(out); result.Path == "" {
@@ -205,7 +210,7 @@ type fakeAuth string
 
 func (a fakeAuth) Authorize(r *http.Request) (relay.Lease, bool) {
 	if r.Header.Get("Authorization") == "Bearer busy" {
-		return relay.Lease{Busy: true}, false
+		return relay.Lease{Refused: relay.ErrBusy}, false
 	}
 	if r.Header.Get("Authorization") != "Bearer "+string(a) {
 		return relay.Lease{}, false
@@ -244,10 +249,10 @@ func TestCheckoutAdmitsWorkspaceRepositories(t *testing.T) {
 		c.ServeHTTP(w, r)
 		return w
 	}
-	if w := call(plain); w.Code != 200 || target.args[5] != "" || len(target.args) != 15 || target.env["GIT_CONFIG_COUNT"] != "1" {
+	if w := call(plain); w.Code != 200 || target.args[5] != "" || len(target.args) != 16 || target.env["GIT_CONFIG_COUNT"] != "1" {
 		t.Fatalf("workspace repository: %d %q %v", w.Code, target.args, target.env)
 	}
-	if w := call(ssh); w.Code != 200 || strings.Join(target.args[15:], "|") != "http://git.example.test/|ssh://deploy@git.example.test:2222/" ||
+	if w := call(ssh); w.Code != 200 || strings.Join(target.args[16:], "|") != "http://git.example.test/|ssh://deploy@git.example.test:2222/" ||
 		target.env["GIT_CONFIG_COUNT"] != "2" || target.env["GIT_CONFIG_KEY_1"] != "url.http://git.example.test/.insteadOf" || target.env["GIT_CONFIG_VALUE_1"] != "ssh://deploy@git.example.test:2222/" || base["GIT_CONFIG_COUNT"] != "1" {
 		t.Fatalf("workspace repository with its own remote prefix: %d %q %v", w.Code, target.args, target.env)
 	}
@@ -286,7 +291,7 @@ func TestCheckoutHandler(t *testing.T) {
 	if w.Code != 200 || strings.TrimSpace(w.Body.String()) != `{"path":"/workspace/work/fixture","branch_name":"agent/a/000000000042"}` {
 		t.Fatalf("checkout: %d %s", w.Code, w.Body)
 	}
-	if got := target.args[4:]; strings.Join(got, "|") != url+"|release|agent/a/000000000042|0|"+WorkDir+"|fixture|"+WorkDir+"|A|"+DefaultEmail+"|1|"+hookText || target.env["GIT_TERMINAL_PROMPT"] != "0" {
+	if got := target.args[4:]; strings.Join(got, "|") != url+"|release|agent/a/000000000042|0|"+WorkDir+"|fixture|"+WorkDir+"|A|"+DefaultEmail+"|1|"+hookText+"|" || target.env["GIT_TERMINAL_PROMPT"] != "0" {
 		t.Fatalf("script arguments: %q", got)
 	}
 	for name, c := range map[string]struct {

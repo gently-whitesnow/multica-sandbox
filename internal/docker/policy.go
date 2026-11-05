@@ -24,15 +24,15 @@ func checkPolicy(data []byte) error {
 }
 
 // expected is the policy of a created container: its network, resources, read-only image
-// mounts with their PATH, exactly the workdir volume when one is named, the loopback host
-// entries and the runtime (empty for runc).
+// mounts with their PATH, exactly the workdir volume when one is named and after it the
+// read-only mirror volume, the loopback host entries and the runtime (empty for runc).
 type expected struct {
-	network      string
-	limits       Resources
-	bundles      []Bundle
-	path, volume string
-	hosts        []string
-	runtime      string
+	network              string
+	limits               Resources
+	bundles              []Bundle
+	path, volume, mirror string
+	hosts                []string
+	runtime              string
 }
 
 // loopbackHosts are the --add-host entries for names served on attempt loopback.
@@ -102,6 +102,9 @@ func checkExpectedPolicy(data []byte, want expected) error {
 	if volume != "" {
 		mounts++
 	}
+	if want.mirror != "" {
+		mounts++
+	}
 	ok := len(h.Mounts) == mounts && len(c.Mounts) == mounts
 	for i, bundle := range bundles {
 		ok = ok && reflect.DeepEqual(h.Mounts[i], map[string]any{"Type": "image", "Source": bundle.Image, "Target": bundle.Target})
@@ -110,6 +113,10 @@ func checkExpectedPolicy(data []byte, want expected) error {
 	if ok && volume != "" {
 		ok = reflect.DeepEqual(h.Mounts[len(bundles)], map[string]any{"Type": "volume", "Source": volume, "Target": repo.WorkDir, "VolumeOptions": map[string]any{"NoCopy": true}})
 		ok = ok && slices.Contains(c.Mounts, mount{"volume", volume, repo.WorkDir, true})
+	}
+	if ok && want.mirror != "" {
+		ok = volume != "" && reflect.DeepEqual(h.Mounts[len(bundles)+1], map[string]any{"Type": "volume", "Source": want.mirror, "Target": repo.MirrorDir, "ReadOnly": true, "VolumeOptions": map[string]any{"NoCopy": true}})
+		ok = ok && slices.Contains(c.Mounts, mount{"volume", want.mirror, repo.MirrorDir, false})
 	}
 	if len(bundles) > 0 {
 		paths := []string{}
