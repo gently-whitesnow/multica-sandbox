@@ -54,6 +54,10 @@ turn are ignored, so the session read is the only source:
   reads failed while the agent kept writing its session. Refinement (0.2.2): the log
   showed the cause, a tool input OpenCode reported as a string instead of an object.
   Such an input, in a session message or an ACP update, reads as no input.
+  Refinement (0.2.3): the next page's cursor already carries ordering. Sending
+  `order` with it returns HTTP 400 (`InvalidCursorError`), so only the first page
+  sets `order=desc`; subsequent pages send the cursor and limit. This was
+  reproduced on 2.2.5 with a retained session exceeding the 50-message page.
 
 Shells of child sessions and background subagents are not followed.
 
