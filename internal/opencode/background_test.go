@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -47,6 +49,48 @@ func (a *sessionAPI) serve(path string) string {
 
 func at(t time.Time) map[string]any {
 	return map[string]any{"created": t.UnixMilli(), "completed": t.UnixMilli()}
+}
+
+func TestNativeMessagesFollowsCursorWithoutOrder(t *testing.T) {
+	const cursor = "next+/=&?"
+	reads := 0
+	r := &running{task: safeTask(), adapter: &Adapter{}, workload: &stubWorkload{api: func(path string) string {
+		reads++
+		u, err := url.Parse(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		q := u.Query()
+		if q.Get("limit") != strconv.Itoa(followPage) {
+			t.Fatalf("page limit: %s", path)
+		}
+		var messages []map[string]any
+		next := ""
+		switch reads {
+		case 1:
+			if q.Get("order") != "desc" || q.Has("cursor") {
+				t.Fatalf("first page: %s", path)
+			}
+			for i := followPage; i > 0; i-- {
+				messages = append(messages, map[string]any{"id": strconv.Itoa(i), "time": map[string]any{"created": i}})
+			}
+			next = cursor
+		case 2:
+			// OpenCode rejects order with cursor, whose payload already carries order.
+			if q.Has("order") || q.Get("cursor") != cursor {
+				t.Fatalf("cursor page: %s", path)
+			}
+			messages = []map[string]any{{"id": "old", "time": map[string]any{"created": 0}}}
+		default:
+			t.Fatal("read beyond the last page")
+		}
+		data, _ := json.Marshal(map[string]any{"data": messages, "cursor": map[string]any{"next": next}})
+		return string(data)
+	}}}
+	got, err := r.nativeMessages(context.Background(), "ses_fixture", 0)
+	if err != nil || reads != 2 || len(got) != followPage+1 || got[0].ID != "old" || got[len(got)-1].ID != strconv.Itoa(followPage) {
+		t.Fatalf("pagination: %d reads, %d messages, %v", reads, len(got), err)
+	}
 }
 
 func TestBackgroundShellEndsTheAttemptWithTheResumedTurn(t *testing.T) {

@@ -232,8 +232,11 @@ func (r *running) nativeMessages(ctx context.Context, id acp.SessionId, floor in
 	var all []nativeMessage
 	cursor := ""
 	for range followPages {
-		query := url.Values{"order": {"desc"}, "limit": {strconv.Itoa(followPage)}}
-		if cursor != "" {
+		query := url.Values{"limit": {strconv.Itoa(followPage)}}
+		if cursor == "" {
+			query.Set("order", "desc")
+		} else {
+			// The cursor carries ordering; OpenCode rejects an explicit order with it.
 			query.Set("cursor", cursor)
 		}
 		var page struct {
