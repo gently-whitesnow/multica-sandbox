@@ -97,8 +97,9 @@ extension. Interrupted or uncertain HTTP owners lose native session continuity;
 workdir files and native comments remain, and the loss is explicit.
 
 Conformance uses disposable fixtures: admission/fallback, mid-turn consumption,
-order/dedup, HTTP response loss, journal phases, cancellation/completion, restart
-state and isolation. SSE is volatile: disconnection fails closed. OpenCode 2.2.7's
+order/dedup, HTTP response loss, journal phases, cancellation/completion, actual
+controller SIGKILL/recovery, restart state and isolation. SSE is volatile:
+disconnection fails closed. OpenCode 2.2.7's
 positive transport probe does not admit that release or other adapters.
 
 ## References

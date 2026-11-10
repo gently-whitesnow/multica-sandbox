@@ -22,8 +22,8 @@ checks (Docker required):
 ./scripts/test-live-steering-native.sh
 ```
 
-Run the real controller, same-run input consumption, clean resume, cancellation
-and restart isolation, and selected MCP rotation:
+Run the real controller, same-run input consumption, clean resume, cancellation,
+controller SIGKILL/recovery, restart isolation and selected MCP rotation:
 
 ```sh
 VERIFY_SERVICE=1 VERIFY_OPENCODE=1 \

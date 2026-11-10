@@ -27,7 +27,8 @@ func liveSteeringService(t *testing.T, api *multica.Client) {
 	writeJSON(t, override, map[string]any{"services": map[string]any{"seed": map[string]any{"environment": map[string]string{"ROTATION_FIXTURE": "1"}}, "provider": providerService()}, "networks": map[string]any{"fixture": map[string]any{"external": true, "name": network, "internal": nil}, "execution": map[string]any{"internal": true}}})
 	startFixture(t, project, override, []string{"gateway", "provider"})
 	f := serviceFixture{fmt.Sprintf("sandbox-steering-controller-%d", stamp), filepath.Join(dir, "controller.json"), t}
-	controller := "d1000000-0000-4000-8000-000000000001"
+	controller := fmt.Sprintf("d1000000-0000-4000-8000-%012x", uint64(stamp)&0xffffffffffff)
+	t.Cleanup(func() { cleanupSteeringSessions(t, controller) })
 	command := `OPENCODE_CONFIG_CONTENT='{"model":"fixture/fixture","enabled_providers":["fixture"],"provider":{"fixture":{"npm":"@ai-sdk/openai-compatible","name":"Fixture","options":{"baseURL":"http://provider:8080/v1"},"models":{"fixture":{"name":"Fixture","limit":{"context":64000,"output":4096}}}}}}' exec opencode serve --stdio --hostname 127.0.0.1 --port 4096`
 	c := service.Config{Server: "http://" + os.Getenv("MULTICA_TEST_SERVER_CONTAINER") + ":8080", AllowHTTP: true, Daemon: controller, Image: officialImage,
 		Command: []string{"/bin/sh", "-c", command}, Timeout: "180s", OpenCode: &service.OpenCodeConfig{LiveSteering: true, Network: project + "_execution", Peers: []string{project + "-provider-1", f.project + "-controller-1"},
@@ -84,6 +85,7 @@ UPDATE agent_task_queue SET trigger_comment_id='d3000000-0000-4000-8000-00000000
 	liveSteeringResult(t, id, session)
 	t.Run("clean-resume", func(t *testing.T) { liveSteeringResume(t, api, s, session) })
 	t.Run("cancel-restart-isolation", func(t *testing.T) { liveSteeringCancel(t, api, s, session, controller) })
+	t.Run("controller-crash-isolation", func(t *testing.T) { liveSteeringCrash(t, api, s, f, controllerContainer, controller) })
 	t.Log("same native task/session consumed ordered supplements before original completion; duplicate creation deduplicated; canonical transcript and usage retained")
 }
 
