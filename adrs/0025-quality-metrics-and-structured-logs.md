@@ -10,9 +10,8 @@ Plain-text logs made these hard to aggregate.
 
 Deployment conventions for metrics and logs:
 
-- metrics use the OpenTelemetry SDK and its Prometheus exporter; names come from
-  OpenTelemetry semantic conventions where they define the measurement, and own
-  names follow `<domain>.<object>.<measurement>`;
+- metrics use OpenTelemetry's SDK/Prometheus exporter and semantic convention names,
+  otherwise `<domain>.<object>.<measurement>`;
 - a service without its own HTTP server serves metrics on a dedicated port; the
   scraper adds `service_name` and the instance label;
 - labels carry only bounded values, a missing value is a fixed fallback, and an
@@ -105,8 +104,10 @@ events as `relay events suppressed` with `count` and source `event`, at the orig
 level. Keep 256 detailed keys and three fixed overflow counters (route `*`), separate
 for ordinary responses, degraded upstreams and local/transport errors. Overflow
 summaries omit status/error type rather than attributing mixed outcomes to one code.
-Disabled levels consume no sampling state or emit summaries; metrics count all
-observations independently of logging and sampling. State and window swaps are locked.
+DEBUG shares the detailed budget with WARN: a diverse 4xx flood can exhaust it,
+leaving each WARN class one overflow detail and aggregated counts until the next window.
+Disabled levels retain no sampling state or summaries; metrics count every observation.
+State and window swaps are locked.
 
 ## Consequences
 
