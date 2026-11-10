@@ -43,13 +43,13 @@ func managedMCPServiceMode(t *testing.T, api *multica.Client, steering bool) {
 	t.Cleanup(func() { compose("down", "-v", "--remove-orphans", "--rmi", "local") })
 	compose("build", "seed", "gateway", "provider")
 	compose("up", "-d", "--wait", "--wait-timeout", "180", "gateway", "provider")
-	controller := "90000000-0000-4000-8000-000000000029"
+	controller := fixtureController(t)
 	agent := "20000000-0000-4000-8000-000000000001"
 	id := "70000000-0000-4000-8000-000000000001"
 	issue := "80000000-0000-4000-8000-000000000001"
 	agentName := "MCP fixture"
 	if steering {
-		controller, agent, id, issue = "d2000000-0000-4000-8000-000000000029", "d2000000-0000-4000-8000-000000000001", "d2000000-0000-4000-8000-000000000002", "d2000000-0000-4000-8000-000000000003"
+		agent, id, issue = "d2000000-0000-4000-8000-000000000001", "d2000000-0000-4000-8000-000000000002", "d2000000-0000-4000-8000-000000000003"
 		agentName = "HTTP MCP fixture"
 	}
 	issuer := "http://keycloak:8080/realms/sandbox-example"

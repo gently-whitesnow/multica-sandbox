@@ -227,7 +227,7 @@ func startSteering(t *testing.T, api *multica.Client, withFaults bool, prepare f
 	if withFaults {
 		e.proxy = "http://127.0.0.1:" + strings.TrimSpace(strings.SplitN(dockerTest(t, "port", project+"-faults-1", "8080/tcp"), ":", 2)[1])
 	}
-	e.controller = fmt.Sprintf("d1000000-0000-4000-8000-%012x", uint64(stamp)&0xffffffffffff)
+	e.controller = fixtureController(t)
 	t.Cleanup(func() { cleanupSteeringSessions(t, e.controller) })
 	e.command = `OPENCODE_CONFIG_CONTENT='{"model":"fixture/fixture","enabled_providers":["fixture"],"provider":{"fixture":{"npm":"@ai-sdk/openai-compatible","name":"Fixture","options":{"baseURL":"http://provider:8080/v1"},"models":{"fixture":{"name":"Fixture","limit":{"context":64000,"output":4096}}}}}}' exec opencode serve --stdio --hostname 127.0.0.1 --port 4096`
 	e.c = service.Config{Server: origin, AllowHTTP: true, Daemon: e.controller, Image: officialImage,

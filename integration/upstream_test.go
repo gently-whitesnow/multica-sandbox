@@ -31,6 +31,14 @@ const workspace = "10000000-0000-4000-8000-000000000002"
 // Reconcile in concurrent runs on one engine leaves this run's executions alone.
 var daemon = fmt.Sprintf("10000000-0000-4000-8000-%012x", rand.Uint64()&(1<<48-1))
 
+// fixtureController gives each fixture a run-scoped Docker owner. Database-local
+// task IDs can repeat across disposable servers; engine ownership cannot.
+func fixtureController(t *testing.T) string {
+	sum := sha256.Sum256([]byte(daemon + ":" + t.Name()))
+	sum[6], sum[8] = sum[6]&0x0f|0x40, sum[8]&0x3f|0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", sum[:4], sum[4:6], sum[6:8], sum[8:10], sum[10:16])
+}
+
 func sql(t *testing.T, query string) string {
 	t.Helper()
 	container := os.Getenv("MULTICA_TEST_DB_CONTAINER")

@@ -98,7 +98,7 @@ func multicaRelayService(t *testing.T, api *multica.Client, agentImage string, n
 	}
 	startFixture(t, project, fixture, targets)
 
-	controller := fmt.Sprintf("90000000-0000-4000-8000-%012d", n)
+	controller := fixtureController(t)
 	agent := fmt.Sprintf("a1000000-0000-4000-8000-%012d", n)
 	issue := fmt.Sprintf("a2000000-0000-4000-8000-%012d", n)
 	id := fmt.Sprintf("a3000000-0000-4000-8000-%012d", n)
