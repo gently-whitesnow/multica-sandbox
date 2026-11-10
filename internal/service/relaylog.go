@@ -15,26 +15,48 @@ const (
 	// event of a window is logged and later ones are counted into one summary when it
 	// closes, so an agent retrying in a loop cannot flood the log. Metrics count them all.
 	relayLogWindow = time.Minute
-	// relayLogKeys bounds the routes sampled per window; further ones share one key.
+	// relayLogKeys bounds detailed keys; overflow has one fixed bucket per event class.
 	relayLogKeys = 256
 )
 
-type refusalKey struct {
-	relay, errorType, route string
-	status                  int
+type relayEvent uint8
+
+const (
+	relayUpstreamResponse relayEvent = iota
+	relayUpstreamError
+	relayRequestRefused
+	relayEventClasses
+)
+
+func (e relayEvent) level() slog.Level {
+	if e == relayUpstreamResponse {
+		return slog.LevelDebug
+	}
+	return slog.LevelWarn
 }
 
-// refusalLog logs relay refusals and upstream errors at warning level: method, a path
-// with secret-like segments redacted and the attempt's task and workspace, never the
-// query, headers or bodies.
+func (e relayEvent) message() string {
+	return [...]string{"relay upstream response", "relay upstream error", "relay request refused"}[e]
+}
+
+type refusalKey struct {
+	errorType, route string
+	status           int
+	event            relayEvent
+}
+
+// refusalLog samples one relay's events, preserving their source and severity even
+// in overflow. Paths redact secret-like segments; queries, headers and bodies are omitted.
 type refusalLog struct {
 	log        *slog.Logger
+	relay      string
 	mu         sync.Mutex
 	suppressed map[refusalKey]int
+	overflow   [relayEventClasses]int
 }
 
-func newRefusalLog(log *slog.Logger) *refusalLog {
-	return &refusalLog{log: log, suppressed: map[refusalKey]int{}}
+func newRefusalLog(log *slog.Logger, relay string) *refusalLog {
+	return &refusalLog{log: log, relay: relay, suppressed: map[refusalKey]int{}}
 }
 
 // run closes a window every interval until ctx ends, then closes the last one.
@@ -52,24 +74,36 @@ func (l *refusalLog) run(ctx context.Context, interval time.Duration) {
 	}
 }
 
-func (l *refusalLog) record(relay string, r *http.Request, attempt string, status int, errorType string, elapsed time.Duration) {
-	path, route := redactPath(r.URL.Path)
-	key := refusalKey{relay, errorType, route, status}
-	l.mu.Lock()
-	if _, seen := l.suppressed[key]; !seen && len(l.suppressed) >= relayLogKeys {
-		key = refusalKey{relay: relay, route: "*"}
+func (l *refusalLog) record(r *http.Request, attempt string, status int, errorType string, elapsed time.Duration) {
+	event := relayUpstreamResponse
+	switch {
+	case errorType != "":
+		event = relayRequestRefused
+	case status == http.StatusTooManyRequests || status >= 500:
+		event = relayUpstreamError
 	}
+	if !l.log.Enabled(r.Context(), event.level()) {
+		return
+	}
+	path, route := redactPath(r.URL.Path)
+	key := refusalKey{errorType, route, status, event}
+	l.mu.Lock()
 	n, seen := l.suppressed[key]
-	if seen {
+	switch {
+	case seen:
 		l.suppressed[key] = n + 1
-	} else {
+	case len(l.suppressed) < relayLogKeys:
 		l.suppressed[key] = 0
+	default:
+		route = "*"
+		seen = l.overflow[event] > 0
+		l.overflow[event]++
 	}
 	l.mu.Unlock()
 	if seen {
 		return
 	}
-	attrs := []any{"relay", relay, "method", r.Method, "path", path, "route", route}
+	attrs := []any{"relay", l.relay, "method", r.Method, "path", path, "route", route}
 	if status != 0 {
 		attrs = append(attrs, "status", status)
 	}
@@ -81,31 +115,34 @@ func (l *refusalLog) record(relay string, r *http.Request, attempt string, statu
 		attrs = append(attrs, "workspace", parts[0], "task", parts[2])
 	}
 	attrs = append(attrs, "seconds", elapsed.Seconds())
-	msg := "relay upstream error"
-	if errorType != "" {
-		msg = "relay request refused"
-	}
-	l.log.Warn(msg, attrs...)
+	l.log.Log(r.Context(), event.level(), event.message(), attrs...)
 }
 
 // flush summarizes the window's suppressed events and opens the next window.
 func (l *refusalLog) flush() {
 	l.mu.Lock()
 	suppressed := l.suppressed
+	overflow := l.overflow
 	l.suppressed = map[refusalKey]int{}
+	l.overflow = [relayEventClasses]int{}
 	l.mu.Unlock()
+	for event, n := range overflow {
+		if n > 1 {
+			suppressed[refusalKey{route: "*", event: relayEvent(event)}] = n - 1
+		}
+	}
 	for key, n := range suppressed {
 		if n == 0 {
 			continue
 		}
-		attrs := []any{"relay", key.relay, "route", key.route}
+		attrs := []any{"relay", l.relay, "route", key.route, "event", key.event.message()}
 		if key.status != 0 {
 			attrs = append(attrs, "status", key.status)
 		}
 		if key.errorType != "" {
 			attrs = append(attrs, "error_type", key.errorType)
 		}
-		l.log.Warn("relay events suppressed", append(attrs, "count", n)...)
+		l.log.Log(context.Background(), key.event.level(), "relay events suppressed", append(attrs, "count", n)...)
 	}
 }
 

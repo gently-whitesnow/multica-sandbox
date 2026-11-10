@@ -112,7 +112,7 @@ func TestAttemptEvents(t *testing.T) {
 // workspace, a redacted path, never the query or headers.
 func TestRelayRecordLogsRefusals(t *testing.T) {
 	c, log, m := observed(t, false)
-	refusals := newRefusalLog(c.logger())
+	refusals := newRefusalLog(c.logger(), "inference")
 	record := c.relayRecord("inference", refusals)
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions?key=secret", nil)
 	req.Header.Set("Authorization", "Bearer opaque-secret")
@@ -149,8 +149,8 @@ func TestRelayRecordLogsRefusals(t *testing.T) {
 // An agent repeating a refused call logs once per route and window; the rest is counted
 // into one summary when the window closes, and routes beyond the bound share one key.
 func TestRelayRefusalLogIsSampled(t *testing.T) {
-	c, log, _ := observed(t, false)
-	refusals := newRefusalLog(c.logger())
+	c, log, _ := observed(t, true)
+	refusals := newRefusalLog(c.logger(), "multica")
 	record := c.relayRecord("multica", refusals)
 	for i := range 50 {
 		req := httptest.NewRequest(http.MethodGet, "/api/issues/"+strconv.Itoa(i)+"/comments", nil)

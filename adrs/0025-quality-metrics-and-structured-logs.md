@@ -5,14 +5,10 @@ Date: 2026-10-30
 
 ## Context
 
-Operators judge the sandbox by outcomes: how many attempts succeed, why the others
-fail, how long attempts and their preparation take, how often sessions resume, and
-whether relays, Multica and the attempt pool hold up. The controller wrote plain-text
-lines to stdout, one `finished` summary per attempt among them, and exposed no metrics.
-Text lines cannot be aggregated, and a log shipper has to parse them.
+Operators need outcomes, causes, latency, continuity and service health.
+Plain-text logs made these hard to aggregate.
 
-The deployment scrapes metrics with Prometheus and ships container output to a log
-store. Its conventions for services:
+Deployment conventions for metrics and logs:
 
 - metrics use the OpenTelemetry SDK and its Prometheus exporter; names come from
   OpenTelemetry semantic conventions where they define the measurement, and own
@@ -28,13 +24,10 @@ store. Its conventions for services:
 
 ## Decision
 
-**Metrics.** With `metrics_listen` set, the controller serves `/metrics`, the
-Prometheus default scrape path, and `/readyz` (ADR 0031) on that address and nothing
-else there; scrapers need no path override. The listener is separate from the relays,
-which attempts can reach. Instruments use the OpenTelemetry Go SDK and Prometheus
-exporter, without scope labels and `target_info`, with a limit of 2000 series per
-instrument; the standard Go runtime and process collectors (`go_*`, `process_*`) keep
-their Prometheus names:
+**Metrics.** `metrics_listen` serves only `/metrics` and `/readyz` (ADR 0031),
+separately from agent-accessible relays. OpenTelemetry's Prometheus exporter omits
+scope labels and `target_info`, limiting each instrument to 2000 series. Runtime
+and process collectors retain standard `go_*` and `process_*` names:
 
 | Metric (Prometheus) | Type | Labels | Question |
 | --- | --- | --- | --- |
@@ -81,8 +74,8 @@ Task, workspace, agent and session IDs, models, credentials, prompts and output 
 become labels. Both histograms are recorded when the attempt reports, because the
 continuity of a run is known only then.
 
-**Logs.** The controller writes JSON lines to stdout: `time`, `level`, `msg` and event
-fields in snake_case. `attempt finished` replaces the `finished` line and carries
+**Logs.** JSON lines on stdout carry `time`, `level`, `msg` and snake_case fields.
+`attempt finished` carries
 identity, `status`, `reason`, Multica's `failure_reason`, timings in seconds,
 continuity, model, tokens, peak memory, session and the safe failure text Multica
 also receives. Failures and degradations are `WARN`. `"debug": true` enables `DEBUG`
@@ -90,23 +83,37 @@ events: failed Multica requests (route template, status or `error_type`) and
 the existing identity and inference diagnostics. Debug events never include headers,
 query strings, bodies or credentials.
 
-Relay refusals (`relay request refused`) and upstream answers from 400 (`relay
-upstream error`) are `WARN` without debug: relay, method, path, `route`, status or
-`error_type`, and a known grant's `task` and `workspace`. Credential-like segments
-(token prefixes, JWTs, long mixed opaque strings) become `{redacted}`; `route` also
-turns identifiers into `{id}`. Per relay, outcome and route the first event of a minute
-is logged and the rest summarized as `relay events suppressed` with `count` (past 256
-routes, route `*`). Queries, headers, bodies and credentials are never logged.
+Relay logging distinguishes upstream responses (`err == nil`) from local refusals
+and transport failures, regardless of HTTP status:
+
+- Upstream 4xx except 429: `DEBUG`, `relay upstream response`. Protocol and discovery
+  responses need not mean sandbox failure; neither endpoint exceptions nor attempt
+  success determine this level. Investigate metrics and attempt outcomes together.
+- Upstream 429/5xx: `WARN`, `relay upstream error`. Rate limiting signals reduced
+  upstream capacity even if the caller later recovers.
+- Local policy/credential refusals, capacity limits and transport failures: `WARN`,
+  `relay request refused`, with `error_type`. Attempt failures remain `WARN`.
+- Upstream responses below 400: metrics only.
+
+Details carry relay, method, path, `route`, status or `error_type`, and a known
+grant's `task` and `workspace`. Credential-like path segments become `{redacted}`;
+`route` also turns identifiers into `{id}`. Queries, headers, bodies and credentials
+are never logged. HTTP behavior, authorization and retries are unchanged.
+
+Per relay, outcome and route, log the first event per minute; summarize subsequent
+events as `relay events suppressed` with `count` and source `event`, at the original
+level. Keep 256 detailed keys and three fixed overflow counters (route `*`), separate
+for ordinary responses, degraded upstreams and local/transport errors. Overflow
+summaries omit status/error type rather than attributing mixed outcomes to one code.
+Disabled levels consume no sampling state or emit summaries; metrics count all
+observations independently of logging and sampling. State and window swaps are locked.
 
 ## Consequences
 
-Success rate, failure causes, latency percentiles, retries, refusals and pool
-pressure are queryable without parsing logs, and a log shipper reads the output as
-JSON. Log consumers that matched the old text lines must match `msg` and fields
-instead. The scrape port, its exposure and any log shipping are deployment
-configuration. Attempts interrupted by a controller restart are not recorded. Model
-and token use stay in logs only. This adds the OpenTelemetry metric SDK, its
-Prometheus exporter and `prometheus/client_golang`.
+Metrics expose outcomes, latency, retries and pressure; JSON logs retain details.
+Consumers must match `msg` and fields. Scraping and shipping are deployment-owned.
+Restart-interrupted attempts are not recorded. Model and token use stay in logs.
+Dependencies: OpenTelemetry SDK/exporter and `prometheus/client_golang`.
 
 ## References
 
