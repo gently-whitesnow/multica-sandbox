@@ -25,19 +25,15 @@ from verified behavior.
   reusable identity sources and automatically sized execution resources.
 - `adrs/0029-dynamic-http-mcp.md`: native remote MCP selection, controller-held
   headers/agent ENV and public proxy transport without per-endpoint rollout.
-- `adrs/0030-native-env-and-explicit-iam.md`: native Environment, common IAM keys
-  and explicit MCP header selection without per-agent recipient bindings.
+- `adrs/0030-native-env-and-explicit-iam.md`: native Environment, IAM keys and explicit MCP headers.
 - `adrs/0031-controller-self-deploy.md`: drain signals, `/readyz`, release artifacts
   and the manual `deploy.yml` controller rollout to vps-worker.
-- `adrs/0032-opencode-background-shells-and-watchdogs.md`: background shells after
-  `end_turn`, the tool budget and memory stalls.
+- `adrs/0032-opencode-background-shells-and-watchdogs.md`: background shells, tool budgets and memory stalls.
 - `adrs/0033-release-versions.md`: `VERSION`, image `v<VERSION>` tags and Git tags.
-- `adrs/0034-session-disk-reclamation.md`: artifact pruning, disk-pressure collection
-  and the optional byte budget of retained session volumes.
+- `adrs/0034-session-disk-reclamation.md`: artifact pruning, disk-pressure collection and retained byte budgets.
 - `adrs/0035-reference-mirrors.md`: per-workspace read-only reference mirrors for new
   checkouts, their refresh through the Git relay and collection.
-- `adrs/0036-live-steering-contract-gates.md`: native supplement admission,
-  opt-in HTTP steering and durable delivery/recovery guarantees.
+- `adrs/0036-live-steering-contract-gates.md`: native admission, opt-in HTTP steering and durable recovery.
 - `examples/end-to-end/`: opt-in real Multica/OpenCode/inference lab.
 - `examples/identity-mcp/`: disposable identity and MCP contract fixture.
 - `internal/inference/`: workspace gateway bindings, relay policy and advisory model catalogs.
@@ -51,6 +47,8 @@ from verified behavior.
   controller mounts the `multica` CLI artifact (`deploy/multica-cli.Dockerfile`).
 - `examples/tool-bundle/`: example user-owned tool bundle (static `jq`).
 - `examples/acp-spike/`: `opencode acp` capability spike with fixtures (ADR 0023).
+- `examples/live-steering/`, `scripts/test-live-steering-native.sh`: opt-in native
+  supplement admission patch and disposable HTTP steering/recovery fixtures (ADR 0036).
 - `examples/sysbox-host/`: Lima/Linux Sysbox host recipe, attempt pool slice and engine test image (ADR 0019, 0020).
 - `internal/pool/`: attempt pool slice limits, PSI admission and attempt memory events (ADR 0020).
 - `internal/metrics/`: controller metrics on `/metrics` (ADR 0025).
@@ -65,8 +63,7 @@ from verified behavior.
 - [GitHub Project](https://github.com/users/gently-whitesnow/projects/2): delivery;
   issues hold acceptance and handoff state, ADRs hold durable decisions.
 - `.harness.json`: pinned repository quality contract.
-- `scripts/install-harness.sh`, `verify.sh`: setup and verification;
-  `scripts/opencode-release.sh` admits an OpenCode release (ADR 0023).
+- `scripts/install-harness.sh`, `verify.sh`: setup/verification; `scripts/opencode-release.sh`: image admission (ADR 0023).
 
 ## Rules
 
@@ -105,6 +102,9 @@ Run `VERIFY_CONTAINERS=1 ./verify.sh` for backend changes and
 `VERIFY_SERVICE=1 ./verify.sh` for service/packaging changes. Never run test commands
 against production tasks. Keep fixture data generic.
 Run `VERIFY_IDENTITY=1 ./verify.sh` for identity/MCP fixture changes.
+For steering, run `VERIFY_SERVICE=1 VERIFY_OPENCODE=1 ./scripts/test-live-steering-native.sh` with the service/MCP filters in `examples/live-steering/README.md`. The wrapper sets
+`VERIFY_STEERING_NATIVE_PATCH=1` only for a disposable pinned server clone; ordinary
+`./verify.sh` does not exercise real steering. Never patch an installed server.
 Run `VERIFY_DYNAMIC_MCP=1 ./verify.sh` for public remote MCP selection/transport;
 the fixture verifies real OpenCode tools, secret isolation and retained changes.
 Run `VERIFY_INFERENCE=1 ./verify.sh` for native OpenCode/relay/LiteLLM workspace-key

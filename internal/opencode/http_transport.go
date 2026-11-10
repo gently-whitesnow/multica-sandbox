@@ -16,6 +16,10 @@ import (
 
 var httpPollInterval = 250 * time.Millisecond
 var supplementPollInterval = 5 * time.Second
+var supplementIdleInterval = 30 * time.Second
+
+// Leave room after withdrawal for finite transport teardown and worker return.
+const httpWorkerGrace = 8 * time.Second
 
 // converseHTTP owns one server for the whole attempt. Every request names its
 // loopback origin; no API operation may discover or start a different service.
@@ -80,7 +84,7 @@ func (r *running) converseHTTP(ctx context.Context, _ io.Writer, stdout io.Reade
 }
 
 func (r *running) httpEvents(ctx context.Context, consume func(httpEvent)) error {
-	command := []string{"/bin/sh", "-c", `exec wget -q -O - --header "Authorization: Basic $SANDBOX_HTTP_AUTH" http://127.0.0.1:4096/api/event`}
+	command := []string{"/bin/sh", "-c", `exec wget -T 0 -q -O - --header "Authorization: Basic $SANDBOX_HTTP_AUTH" http://127.0.0.1:4096/api/event`}
 	return r.stream(ctx, command, &r.stderr, func(_ io.Writer, stdout io.Reader) error {
 		if closer, ok := stdout.(io.Closer); ok {
 			stop := context.AfterFunc(ctx, func() { _ = closer.Close() })
@@ -95,14 +99,22 @@ func (r *running) httpEvents(ctx context.Context, consume func(httpEvent)) error
 }
 
 func (h *httpTurn) run(ctx context.Context, streamDone <-chan error) error {
+	return h.runWorker(ctx, streamDone, h.supplements)
+}
+
+func (h *httpTurn) runWorker(ctx context.Context, streamDone <-chan error, worker func(context.Context)) error {
 	workerCtx, stopWorker := context.WithCancel(ctx)
 	workerDone := make(chan struct{})
-	go func() { defer close(workerDone); h.supplements(workerCtx) }()
+	go func() { defer close(workerDone); worker(workerCtx) }()
+	joined := false
 	defer func() {
 		stopWorker()
+		if joined {
+			return
+		}
 		select {
 		case <-workerDone:
-		case <-time.After(cancelGrace):
+		case <-time.After(httpWorkerGrace):
 		}
 	}()
 	ticker := time.NewTicker(httpPollInterval)
@@ -138,9 +150,11 @@ func (h *httpTurn) run(ctx context.Context, streamDone <-chan error) error {
 		stopWorker()
 		select {
 		case <-workerDone:
+			joined = true
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(cancelGrace):
+		case <-time.After(httpWorkerGrace):
+			joined = true
 			return &execution.HostFailure{Message: "Sandbox could not settle OpenCode additional input before cleanup"}
 		}
 		if h.r.adapter.Steering != nil {
@@ -215,6 +229,7 @@ func (h *httpTurn) supplements(ctx context.Context) {
 	if h.r.adapter.Steering == nil || !h.r.adapter.Steering.SupplementsNegotiated(h.r.task) {
 		return
 	}
+	updates := h.r.adapter.Steering.SupplementUpdates(h.r.task)
 	for {
 		started, busy, _, _, _, _, _ := h.status()
 		if started && busy {
@@ -223,11 +238,13 @@ func (h *httpTurn) supplements(ctx context.Context) {
 				continue
 			}
 		}
-		timer := time.NewTimer(supplementPollInterval)
+		timer := time.NewTimer(supplementIdleInterval)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
 			return
+		case <-updates:
+			timer.Stop()
 		case <-timer.C:
 		}
 	}

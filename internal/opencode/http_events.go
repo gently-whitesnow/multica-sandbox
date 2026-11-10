@@ -2,10 +2,13 @@ package opencode
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"strconv"
 	"strings"
@@ -61,7 +64,7 @@ func (e *httpEvent) UnmarshalJSON(raw []byte) error {
 
 func nativeHTTPEventType(kind string) bool {
 	switch kind {
-	case "session.created", "session.inbox.delivered", "session.execution.started", "session.execution.succeeded", "session.execution.failed", "session.execution.interrupted",
+	case "session.created", "session.inbox.delivered", "session.inbox.cancelled", "session.execution.started", "session.execution.succeeded", "session.execution.failed", "session.execution.interrupted",
 		"session.step.started", "session.step.ended", "session.step.failed", "session.shell.started", "session.shell.ended",
 		"session.text.delta", "session.text.ended", "session.reasoning.delta", "session.reasoning.ended",
 		"session.tool.input.started", "session.tool.called", "session.tool.progress", "session.tool.success", "session.tool.failed", "permission.asked", "form.created",
@@ -80,6 +83,13 @@ type httpCall struct {
 type httpPromotion struct {
 	step, execution int64
 	processed       bool
+	verified        bool
+	verifyAfter     time.Time
+}
+
+type httpText struct {
+	size   int
+	digest hash.Hash
 }
 
 type httpTurn struct {
@@ -100,11 +110,12 @@ type httpTurn struct {
 	calls                    map[string]*httpCall
 	doneCalls                map[string]bool
 	doneCallOrder            []string
-	texts                    map[string]string
+	texts                    map[string]*httpText
 	doneTexts                map[string]bool
 	doneTextOrder            []string
 	shells                   map[string]bool
 	delivered                map[string]httpPromotion
+	cancelled                map[string]bool
 	unsafeResume             bool
 	fatal                    bool
 }
@@ -112,7 +123,7 @@ type httpTurn struct {
 func newHTTPTurn(r *running, session string) *httpTurn {
 	return &httpTurn{r: r, session: session, connected: make(chan struct{}), changed: make(chan struct{}, 1),
 		seen: map[string]bool{}, owned: map[string]bool{session: true}, calls: map[string]*httpCall{},
-		texts: map[string]string{}, shells: map[string]bool{}, delivered: map[string]httpPromotion{}, doneCalls: map[string]bool{}, doneTexts: map[string]bool{}}
+		texts: map[string]*httpText{}, shells: map[string]bool{}, delivered: map[string]httpPromotion{}, cancelled: map[string]bool{}, doneCalls: map[string]bool{}, doneTexts: map[string]bool{}}
 }
 
 func (h *httpTurn) signal() {
@@ -146,7 +157,7 @@ func (h *httpTurn) consume(event httpEvent) {
 		return
 	}
 	h.r.nativeClean = false
-	if len(h.calls) > 4096 || len(h.texts) > 4096 || len(h.owned) > 4096 || len(h.delivered) > 8192 {
+	if len(h.calls) > 4096 || len(h.texts) > 4096 || len(h.owned) > 4096 || len(h.delivered) > 8192 || len(h.cancelled) > 8192 {
 		h.fatal = true
 		h.failure = &execution.HostFailure{Message: "Sandbox bounded native HTTP event state was exhausted"}
 		h.signal()
@@ -185,14 +196,22 @@ func (h *httpTurn) textEvent(e httpEvent) {
 	if h.doneTexts[key] {
 		return
 	}
+	prior := h.texts[key]
+	if prior == nil {
+		prior = &httpText{digest: sha256.New()}
+		h.texts[key] = prior
+	}
 	switch {
 	case strings.HasSuffix(e.Type, ".delta"):
-		h.texts[key] += e.Data.Delta
+		prior.size += len(e.Data.Delta)
+		_, _ = prior.digest.Write([]byte(e.Data.Delta))
 		h.r.events.chunk(kind, e.Data.Delta)
 	case strings.HasSuffix(e.Type, ".ended"):
-		prior := h.texts[key]
-		if strings.HasPrefix(e.Data.Text, prior) {
-			h.r.events.chunk(kind, strings.TrimPrefix(e.Data.Text, prior))
+		if len(e.Data.Text) >= prior.size {
+			prefix := sha256.Sum256([]byte(e.Data.Text[:prior.size]))
+			if bytes.Equal(prefix[:], prior.digest.Sum(nil)) {
+				h.r.events.chunk(kind, e.Data.Text[prior.size:])
+			}
 		}
 		delete(h.texts, key)
 		h.doneTexts[key] = true
@@ -289,7 +308,11 @@ func (h *httpTurn) lifecycleEvent(e httpEvent) {
 	}
 	switch e.Type {
 	case "session.inbox.delivered":
-		h.delivered[e.Data.InboxID] = httpPromotion{step: h.step, execution: h.execution}
+		if _, known := h.delivered[e.Data.InboxID]; !known {
+			h.delivered[e.Data.InboxID] = httpPromotion{step: h.step, execution: h.execution}
+		}
+	case "session.inbox.cancelled":
+		h.cancelled[e.Data.InboxID] = true
 	case "session.execution.started":
 		h.started, h.busy, h.terminal = true, true, false
 		h.execution++

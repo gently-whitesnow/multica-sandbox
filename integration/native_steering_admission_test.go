@@ -49,6 +49,7 @@ func nativeSteeringAdmission(t *testing.T, api *multica.Client) {
 	missing.create(1, "no capability", 412)
 	missing.finish()
 	t.Run("client-journal", func(t *testing.T) { nativeSupplementJournal(t, api) })
+	t.Run("client-terminal-ack-quarantine", func(t *testing.T) { nativeSupplementAckQuarantine(t, api) })
 	t.Run("receipt-inspection", func(t *testing.T) { supplementInspection(t, api) })
 	t.Log("fixture-only SQL admission enables native OpenCode negotiation, direct creation and composer binding; no agent delivery is asserted")
 }

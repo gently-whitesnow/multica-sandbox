@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 )
 
 func restartSupplementClient(t *testing.T, c *Client, dir string) *Client {
@@ -31,6 +32,7 @@ func TestSupplementConsumptionReplaysBeforeTerminalAfterRestart(t *testing.T) {
 		t.Fatal("expected ack outage")
 	}
 	restarted := restartSupplementClient(t, c, dir)
+	restarted.supplements.now = func() time.Time { return time.Now().Add(time.Hour) }
 	if err = restarted.UseOutbox(filepath.Join(t.TempDir(), "reports")); err != nil {
 		t.Fatal(err)
 	}

@@ -230,6 +230,8 @@ func newOpenCodeAdapter(ctx context.Context, c Config, stateDir string, api *mul
 		return nil, nil, err
 	}
 	adapter := &opencode.Adapter{Server: strings.TrimRight(c.Server, "/"), Controller: c.Daemon, Issuer: issuer, Authority: authority, Status: api, Reporter: api, Workloads: workloads, Command: c.Command, IdleWatchdog: watchdog, ToolWatchdog: toolWatchdog, MCPPublicProxy: publicProxy, CompactionMaxTokens: c.OpenCode.CompactionMaxTokens, Log: log}
+	// Retire an interrupted HTTP owner even after the operator switches back to ACP.
+	adapter.OwnerState = filepath.Join(stateDir, "http-owners")
 	if c.OpenCode.LiveSteering {
 		if err := opencode.CheckSteeringImage(report); err != nil {
 			return nil, nil, err
@@ -238,7 +240,6 @@ func newOpenCodeAdapter(ctx context.Context, c Config, stateDir string, api *mul
 			return nil, nil, err
 		}
 		adapter.Steering = api
-		adapter.OwnerState = filepath.Join(stateDir, "http-owners")
 	}
 	if issuer != nil || publicProxy != nil {
 		adapter.MCPRelay = opencode.NewMCPRelay()

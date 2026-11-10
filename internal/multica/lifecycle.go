@@ -171,8 +171,12 @@ func (c *Client) startTask(ctx context.Context, t Task, offer bool) (bool, error
 	}
 	negotiated := false
 	err := retry(ctx, startRetry, func(ctx context.Context) error {
-		data, err := c.send(ctx, http.MethodPost, "/api/daemon/tasks/"+t.ID+"/start", map[string]any{"runtime_id": t.RuntimeID, "dispatched_at": t.DispatchedAt, "capabilities": caps}, responseLimit)
-		if err != nil {
+		read := 0
+		if offer {
+			read = responseLimit
+		}
+		data, err := c.send(ctx, http.MethodPost, "/api/daemon/tasks/"+t.ID+"/start", map[string]any{"runtime_id": t.RuntimeID, "dispatched_at": t.DispatchedAt, "capabilities": caps}, read)
+		if err != nil || !offer {
 			return err
 		}
 		var response struct {

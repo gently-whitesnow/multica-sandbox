@@ -21,6 +21,7 @@ const (
 	WakeupPendingWork = "daemon:pending_work"
 	WakeupTask        = "daemon:task_available"
 	WakeupWorkspaces  = "daemon:workspaces_changed"
+	WakeupSupplement  = "daemon:task_supplement_available"
 )
 
 // wakeupPongWait ends a connection without frames or server pings for this long; the
@@ -91,12 +92,17 @@ func (c *Client) Wakeups(ctx context.Context, runtimes []string, connected func(
 		}
 		var payload struct {
 			Runtime string `json:"runtime_id"`
+			Task    string `json:"task_id"`
 		}
 		if json.Unmarshal(data, &msg) != nil {
 			continue
 		}
 		_ = json.Unmarshal(msg.Payload, &payload)
 		switch msg.Type {
+		case WakeupSupplement:
+			if slices.Contains(runtimes, payload.Runtime) {
+				c.WakeSupplement(payload.Runtime, payload.Task)
+			}
 		case WakeupPendingWork, WakeupTask, WakeupWorkspaces:
 			deliver(Wakeup{msg.Type, payload.Runtime})
 		}

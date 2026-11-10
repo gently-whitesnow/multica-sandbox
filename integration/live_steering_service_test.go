@@ -84,8 +84,15 @@ UPDATE agent_task_queue SET trigger_comment_id='d3000000-0000-4000-8000-00000000
 	s.receipt(second, "delivered||1")
 	liveSteeringResult(t, id, session)
 	t.Run("clean-resume", func(t *testing.T) { liveSteeringResume(t, api, s, session) })
-	t.Run("cancel-restart-isolation", func(t *testing.T) { liveSteeringCancel(t, api, s, session, controller) })
+	t.Run("cancel-restart-isolation", func(t *testing.T) { liveSteeringCancel(t, api, s, 3, controller, nil) })
 	t.Run("controller-crash-isolation", func(t *testing.T) { liveSteeringCrash(t, api, s, f, controllerContainer, controller) })
+	t.Run("disable-steering-acp", func(t *testing.T) {
+		liveSteeringCancel(t, api, s, 5, controller, func() {
+			c.OpenCode.LiveSteering = false
+			c.Command = []string{"/bin/sh", "-c", strings.Replace(command, "opencode serve --stdio --hostname 127.0.0.1 --port 4096", "opencode acp", 1)}
+			steeringSwitchToACP(t, f, controllerContainer, filepath.Join(dir, "config.json"), c)
+		})
+	})
 	t.Log("same native task/session consumed ordered supplements before original completion; duplicate creation deduplicated; canonical transcript and usage retained")
 }
 
@@ -117,13 +124,14 @@ func liveSteeringResume(t *testing.T, api *multica.Client, s *supplements, origi
 	}
 }
 
-func liveSteeringCancel(t *testing.T, api *multica.Client, s *supplements, original, controller string) {
+func liveSteeringCancel(t *testing.T, api *multica.Client, s *supplements, requestID int, controller string, beforeResume func()) {
 	s = steeringScope(t, s)
 	id := steeringFollowup(t, s, "live-steering-cancel-check")
 	eventually(t, "cancellation tool active", func() bool { return liveSteeringMarker(t, controller, "/workspace/.steering-cancel-active") != "" })
+	original := sql(t, fmt.Sprintf("SELECT session_id FROM agent_task_queue WHERE id='%s';", id))
 	cancelled := *s
 	cancelled.task.ID, cancelled.path = id, "/api/issues/"+s.task.IssueID+"/tasks/"+id+"/supplements"
-	comment := cancelled.create(3, "live-steering-guidance-never", 201)
+	comment := cancelled.create(requestID, "live-steering-guidance-never", 201)
 	eventually(t, "cancellation-race claim", func() bool {
 		return sql(t, fmt.Sprintf("SELECT status FROM task_supplement WHERE task_id='%s' AND comment_id='%s';", id, comment)) == "delivering"
 	})
@@ -133,6 +141,9 @@ func liveSteeringCancel(t *testing.T, api *multica.Client, s *supplements, origi
 		return strings.TrimSpace(dockerTest(t, "ps", "-q", "--filter", "label=io.multica-sandbox.owner="+controller)) == ""
 	})
 	cancelled.receipt(comment, "failed|turn_ended|1")
+	if beforeResume != nil {
+		beforeResume()
+	}
 	fresh := steeringFollowup(t, s, "live-steering-resume-check")
 	waitTask(t, api, fresh, "completed")
 	session := sql(t, fmt.Sprintf("SELECT session_id FROM agent_task_queue WHERE id='%s';", fresh))

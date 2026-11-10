@@ -40,10 +40,19 @@ Additional comparison probes:
 
 ```sh
 go run ./examples/acp-spike -http-steering-probe -version 2.2.5
-go run ./examples/acp-spike -plugin-steering-probe -version 2.2.5
 ```
 
-The plugin probe uses the supported server SDK inside the original ACP owner.
-The selected HTTP transport additionally exposes inbox inspection/withdrawal for
-completion races. A positive transport probe alone does not admit another image
+The selected HTTP transport exposes inbox inspection/withdrawal for completion
+races. A positive transport probe alone does not admit another image
 version. No fixture patch is applied to an installed or production server.
+
+Verify actual request deadlines, ephemeral body cleanup, idle SSE, stdin EOF and
+native withdrawal/quiescence (Docker; no inference account):
+
+```sh
+VERIFY_HTTP_RUNTIME=1 go test -race ./internal/opencode -run '^TestHTTPRuntime' -count=1 -timeout=90s
+```
+
+Stable-ID retry dedup and consumed-ack replay after SIGKILL currently use fake
+fixtures. Real controller SIGKILL verifies unconsumed-claim recovery and isolation.
+Ordinary `./verify.sh` does not run these real paths without the explicit flags.

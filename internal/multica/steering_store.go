@@ -17,6 +17,8 @@ type supplementStore struct {
 	mu         sync.Mutex
 	negotiated map[string]string
 	flight     map[string]bool
+	wake       map[string]chan struct{}
+	now        func() time.Time
 }
 
 // supplementRecord contains guidance and references, never claim/service credentials.
@@ -32,6 +34,8 @@ type supplementRecord struct {
 	Phase      string          `json:"phase"`
 	Current    *taskSupplement `json:"current,omitempty"`
 	Done       []string        `json:"done,omitempty"`
+	Failures   int             `json:"failures,omitempty"`
+	RetryAfter int64           `json:"retry_after,omitempty"`
 }
 
 // UseSupplements must run before the client is used, only for a conformant adapter.
@@ -51,7 +55,7 @@ func (c *Client) UseSupplements(dir string) error {
 	if err != nil {
 		return err
 	}
-	c.supplements = &supplementStore{dir: dir, negotiated: map[string]string{}, flight: map[string]bool{}}
+	c.supplements = &supplementStore{dir: dir, negotiated: map[string]string{}, flight: map[string]bool{}, wake: map[string]chan struct{}{}, now: time.Now}
 	return nil
 }
 
@@ -61,6 +65,8 @@ func (s *supplementStore) negotiate(t Task, enabled bool) {
 	delete(s.negotiated, t.AttemptKey())
 	if enabled {
 		s.negotiated[t.AttemptKey()] = t.ID
+	} else {
+		delete(s.wake, t.AttemptKey())
 	}
 }
 
@@ -112,7 +118,7 @@ func (s *supplementStore) load(c *Client, t Task, session string) (supplementRec
 
 func (r supplementRecord) valid(server string) bool {
 	_, err := time.Parse(time.RFC3339Nano, r.Dispatched)
-	if r.Version != 1 || r.Server != server || !validID(r.Workspace) || !validID(r.Runtime) || !validID(r.Task) || !validID(r.Issue) || err != nil || !supplementSession.MatchString(r.Session) || len(r.Done) > 4096 {
+	if r.Version != 1 || r.Server != server || !validID(r.Workspace) || !validID(r.Runtime) || !validID(r.Task) || !validID(r.Issue) || err != nil || !supplementSession.MatchString(r.Session) || len(r.Done) > 4096 || r.Failures < 0 || r.Failures > 8 || r.RetryAfter < 0 {
 		return false
 	}
 	for _, id := range r.Done {

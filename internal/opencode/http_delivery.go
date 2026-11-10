@@ -7,6 +7,8 @@ import (
 	"time"
 )
 
+const httpWithdrawGrace = 2 * time.Second
+
 type httpInboxItem struct {
 	ID      string `json:"id"`
 	Payload struct {
@@ -58,6 +60,19 @@ func (h *httpTurn) deliver(ctx context.Context, id, text string) error {
 }
 
 func (h *httpTurn) consumed(ctx context.Context, id string, generation int64) bool {
+	h.mu.Lock()
+	promotion, promoted := h.delivered[id]
+	if !promoted || !promotion.processed || promotion.execution != generation {
+		h.mu.Unlock()
+		return false
+	}
+	if promotion.verified || time.Now().Before(promotion.verifyAfter) {
+		h.mu.Unlock()
+		return promotion.verified
+	}
+	promotion.verifyAfter = time.Now().Add(time.Second)
+	h.delivered[id] = promotion
+	h.mu.Unlock()
 	var message struct {
 		Data struct {
 			ID, Type string
@@ -69,17 +84,20 @@ func (h *httpTurn) consumed(ctx context.Context, id string, generation int64) bo
 	if err := h.r.httpAPI(read, "GET", "/api/session/"+h.session+"/message/"+id, nil, &message); err != nil {
 		return false
 	}
-	h.mu.Lock()
-	promotion, promoted := h.delivered[id]
-	h.mu.Unlock()
 	// Promotion alone is not enough: a step must have dispatched after the
 	// canonical input was promoted, within the execution that accepted it.
-	return promoted && promotion.processed && promotion.execution == generation &&
-		message.Data.ID == id && message.Data.Type == "user" && message.Data.Time.Created > 0
+	if message.Data.ID != id || message.Data.Type != "user" || message.Data.Time.Created <= 0 {
+		return false
+	}
+	h.mu.Lock()
+	promotion.verified = true
+	h.delivered[id] = promotion
+	h.mu.Unlock()
+	return true
 }
 
 func (h *httpTurn) withdraw(ctx context.Context, id string, generation int64) error {
-	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), cancelGrace)
+	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), httpWithdrawGrace)
 	defer cancel()
 	if h.consumed(cleanup, id, generation) {
 		return nil
@@ -87,9 +105,28 @@ func (h *httpTurn) withdraw(ctx context.Context, id string, generation int64) er
 	// Cancellation only withdraws pending input. It never interrupts the agent
 	// loop, and a concurrent promotion wins atomically in OpenCode's inbox.
 	err := h.r.httpAPI(cleanup, "DELETE", "/api/session/"+h.session+"/inbox/"+id, nil, nil)
-	if h.consumed(cleanup, id, generation) {
-		return nil
+	ticker := time.NewTicker(httpPollInterval)
+	defer ticker.Stop()
+	for {
+		if h.consumed(cleanup, id, generation) {
+			return nil
+		}
+		h.mu.Lock()
+		cancelled := h.cancelled[id]
+		h.mu.Unlock()
+		if cancelled {
+			return errHTTPInputEnded
+		}
+		select {
+		case <-cleanup.Done():
+			return h.uncertainWithdrawal(err)
+		case <-ticker.C:
+		case <-h.changed:
+		}
 	}
+}
+
+func (h *httpTurn) uncertainWithdrawal(err error) error {
 	h.mu.Lock()
 	h.unsafeResume = true
 	h.r.nativeClean = false

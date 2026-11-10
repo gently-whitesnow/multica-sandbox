@@ -7,7 +7,8 @@ func TestSteeringImageGate(t *testing.T) {
 		report  string
 		allowed bool
 	}{
-		{"version opencode v2.2.5\nwget /bin/wget\nsync /bin/sync\n", true},
+		{"version opencode v2.2.5\nwget /bin/wget\nsync /bin/sync\ntimeout /bin/timeout\n", true},
+		{"version opencode v2.2.5\nwget /bin/wget\nsync /bin/sync\n", false},
 		{"version opencode v2.2.5\nwget /bin/wget\n", false},
 		{"version opencode v2.2.5\nwget \n", false},
 		{"version opencode v2.2.2\nwget /bin/wget\n", false},

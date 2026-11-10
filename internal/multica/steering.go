@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -32,13 +33,17 @@ func (c *Client) ProcessSupplement(ctx context.Context, t Task, session string, 
 	if err != nil {
 		return false, err
 	}
+	if s.deferred(record) {
+		return false, nil
+	}
 	if record.Phase == "consumed" {
 		return c.ackSupplement(ctx, &record)
 	}
 	status, err := c.Status(ctx, t.ID)
 	if err != nil {
-		if Missing(err) {
+		if supplementGone(err) {
 			s.retire(t.ID)
+			err = errors.Join(err, s.remove(key))
 		}
 		return false, err
 	}
@@ -81,7 +86,7 @@ func (c *Client) ProcessSupplement(ctx context.Context, t Task, session string, 
 }
 
 func (c *Client) claimSupplement(ctx context.Context, t Task, record *supplementRecord) error {
-	views, err := c.inspectSupplements(ctx, t)
+	views, err := c.inspectSupplements(ctx, t, record.Done)
 	if err != nil {
 		return err
 	}
@@ -111,9 +116,18 @@ func (c *Client) claimSupplement(ctx context.Context, t Task, record *supplement
 		if err = c.supplements.save(*record); err != nil {
 			return err
 		}
+		if err = ctx.Err(); err != nil {
+			record.Phase = "idle"
+			return errors.Join(err, c.supplements.save(*record))
+		}
 		var message taskSupplement
 		err = c.call(ctx, http.MethodPost, "/api/daemon/tasks/"+t.ID+"/supplements/claim", map[string]any{"capabilities": []string{"task-supplement-author-v1"}}, &message)
 		if err != nil {
+			var rejection *HTTPError
+			if errors.As(err, &rejection) && rejection.Status >= 400 && rejection.Status < 500 && rejection.Status != http.StatusRequestTimeout {
+				record.Phase = "idle"
+				return c.supplements.delay(record, err)
+			}
 			return err
 		}
 		if message.CommentID == "" {
@@ -138,12 +152,15 @@ func supplementMessageID(record supplementRecord, comment string) string {
 }
 
 func (c *Client) ackSupplement(ctx context.Context, record *supplementRecord) (bool, error) {
+	if c.supplements.deferred(*record) {
+		return false, nil
+	}
 	if err := c.taskPost(ctx, record.Task, "supplements/"+record.Current.CommentID+"/ack", map[string]any{"delivered": true}); err != nil {
-		return false, err
+		return false, c.failedSupplementAck(ctx, record, err)
 	}
 	if !slices.Contains(record.Done, record.Current.CommentID) {
 		record.Done = append(record.Done, record.Current.CommentID)
 	}
-	record.Current, record.Phase = nil, "idle"
+	record.Current, record.Phase, record.Failures, record.RetryAfter = nil, "idle", 0, 0
 	return true, c.supplements.save(*record)
 }

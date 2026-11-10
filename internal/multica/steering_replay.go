@@ -10,7 +10,7 @@ import (
 )
 
 // ReplaySupplementAcks never injects guidance after restart. Proven consumption
-// is acknowledged before terminal reports/recovery; all other rows settle natively.
+// is replayed subject to persisted backoff; all other rows settle natively.
 func (c *Client) ReplaySupplementAcks(ctx context.Context) (int, error) {
 	s := c.supplements
 	if s == nil {
@@ -51,6 +51,9 @@ func (c *Client) replaySupplement(ctx context.Context, name string) (int, error)
 	if err != nil {
 		return 0, err
 	}
+	if s.deferred(record) {
+		return 0, nil
+	}
 	delivered := 0
 	if record.Phase == "consumed" {
 		if _, err := c.ackSupplement(resent(ctx), &record); err != nil {
@@ -60,7 +63,10 @@ func (c *Client) replaySupplement(ctx context.Context, name string) (int, error)
 	}
 	status, err := c.Status(ctx, record.Task)
 	if err != nil {
-		return delivered, err
+		if supplementGone(err) {
+			return delivered, c.removeSupplement(record)
+		}
+		return delivered, s.delay(&record, err)
 	}
 	if terminalSupplementStatus(status) {
 		s.retire(record.Task)
@@ -95,6 +101,7 @@ func (s *supplementStore) retire(task string) {
 	for key, id := range s.negotiated {
 		if id == task {
 			delete(s.negotiated, key)
+			delete(s.wake, key)
 		}
 	}
 }

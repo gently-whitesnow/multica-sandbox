@@ -23,7 +23,7 @@ func (w *httpStreamWorkload) StreamStderr(ctx context.Context, args []string, en
 }
 
 func (w *httpStreamWorkload) Stream(ctx context.Context, args []string, env map[string]string, converse func(io.Writer, io.Reader) error) error {
-	if args[0] == "opencode" || len(args) > 3 && args[3] == "native-http" {
+	if args[0] == "opencode" || args[0] == "timeout" || len(args) > 3 && args[3] == "native-http" {
 		return w.nativeHTTPWorkload.Stream(ctx, args, env, converse)
 	}
 	reader, writer := io.Pipe()

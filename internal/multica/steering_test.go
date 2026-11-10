@@ -27,6 +27,9 @@ type supplementFixture struct {
 	lostClaim                            bool
 	noCommit                             bool
 	ackFailures                          int
+	claimStatus, ackStatus, statusCode   int
+	timelines                            int
+	statuses                             int
 	claims, acks                         int
 	truncated, omitMetadata, omitReceipt bool
 	mismatch                             string
@@ -81,6 +84,11 @@ func (f *supplementFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeSupplementJSON(w, map[string]string{})
 		}
 	case strings.HasSuffix(r.URL.Path, "/status"):
+		f.statuses++
+		if f.statusCode != 0 {
+			w.WriteHeader(f.statusCode)
+			return
+		}
 		writeSupplementJSON(w, map[string]string{"status": f.status})
 	case strings.HasSuffix(r.URL.Path, "/task-runs"):
 		f.serveRuns(w)
@@ -152,6 +160,7 @@ func (f *supplementFixture) serveRuns(w http.ResponseWriter) {
 }
 
 func (f *supplementFixture) serveTimeline(w http.ResponseWriter) {
+	f.timelines++
 	if f.truncated {
 		w.Header().Set("X-Timeline-Truncated", "comment")
 	}
@@ -168,6 +177,10 @@ func (f *supplementFixture) serveTimeline(w http.ResponseWriter) {
 
 func (f *supplementFixture) serveClaim(w http.ResponseWriter) {
 	f.claims++
+	if f.claimStatus != 0 {
+		w.WriteHeader(f.claimStatus)
+		return
+	}
 	if f.checkPhase != nil {
 		f.checkPhase("claiming")
 	}
@@ -195,6 +208,10 @@ func (f *supplementFixture) serveClaim(w http.ResponseWriter) {
 func (f *supplementFixture) serveAck(w http.ResponseWriter, r *http.Request) {
 	f.acks++
 	f.events = append(f.events, "ack")
+	if f.ackStatus != 0 {
+		w.WriteHeader(f.ackStatus)
+		return
+	}
 	if f.checkPhase != nil {
 		f.checkPhase("consumed")
 	}
@@ -302,6 +319,7 @@ func TestSupplementAckRetryNeverReinjects(t *testing.T) {
 	if supplementPhase(t, c, f.task, dir).Phase != "consumed" {
 		t.Fatal("consumption lost on ack outage")
 	}
+	c.supplements.now = func() time.Time { return time.Now().Add(time.Hour) }
 	if progress, err := c.ProcessSupplement(context.Background(), f.task, "ses_fixture", deliver); err != nil || !progress || calls != 1 || f.claimCount() != 1 || f.ackCount() != 2 {
 		t.Fatalf("ack replay reinjected: calls=%d, err=%v", calls, err)
 	}

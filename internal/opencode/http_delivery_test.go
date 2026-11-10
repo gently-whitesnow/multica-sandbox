@@ -23,6 +23,9 @@ func (w *nativeHTTPWorkload) Stream(ctx context.Context, args []string, env map[
 	w.mu.Lock()
 	w.commands = append(w.commands, append([]string{}, args...))
 	w.mu.Unlock()
+	if args[0] == "timeout" {
+		args = args[6:]
+	}
 	reader, writer := io.Pipe()
 	input := &httpTestInput{closed: make(chan struct{})}
 	normalized := append([]string{}, args...)
@@ -59,9 +62,10 @@ func (w *nativeHTTPWorkload) StreamStderr(ctx context.Context, args []string, en
 type httpTestInput struct {
 	bytes.Buffer
 	closed chan struct{}
+	once   sync.Once
 }
 
-func (i *httpTestInput) Close() error { close(i.closed); return nil }
+func (i *httpTestInput) Close() error { i.once.Do(func() { close(i.closed) }); return nil }
 
 func (w *nativeHTTPWorkload) Capture(ctx context.Context, args []string, env map[string]string) ([]byte, error) {
 	w.mu.Lock()
@@ -94,9 +98,20 @@ func TestHTTPDeliveryRequiresPromotionAndNewStep(t *testing.T) {
 	if h.consumed(context.Background(), "msg_guidance", 1) {
 		t.Fatal("promotion alone acknowledged delivery")
 	}
+	if len(w.requests) != 0 {
+		t.Fatal("unprocessed input spawned a native API process")
+	}
 	h.consume(nativeEvent(t, "2", "session.step.started", "ses_root", nil))
 	if !h.consumed(context.Background(), "msg_guidance", 1) {
 		t.Fatal("same-execution processing boundary was not accepted")
+	}
+	for range 1000 {
+		if !h.consumed(context.Background(), "msg_guidance", 1) {
+			t.Fatal("verified processing proof was not cached")
+		}
+	}
+	if len(w.requests) != 1 {
+		t.Fatalf("canonical validation requests=%d, expected1", len(w.requests))
 	}
 	h.consume(nativeEvent(t, "3", "session.execution.started", "ses_root", nil))
 	if !h.consumed(context.Background(), "msg_guidance", 1) {
@@ -111,10 +126,19 @@ func TestHTTPDeliveryRequiresPromotionAndNewStep(t *testing.T) {
 }
 
 func TestHTTPDeliveryCompletionRaceWithdrawsWithoutInterrupt(t *testing.T) {
-	_, h, w := nativeHTTPFixture()
+	r, h, w := nativeHTTPFixture()
 	w.captureHTTP = func(_ context.Context, args []string) ([]byte, error) {
 		if args[4] == "POST" {
 			h.consume(nativeEvent(t, "terminal", "session.execution.succeeded", "ses_root", nil))
+		}
+		if args[4] == "DELETE" {
+			h.consume(nativeEvent(t, "cancelled", "session.inbox.cancelled", "ses_root", map[string]any{"inboxID": "msg_guidance"}))
+		}
+		if strings.HasSuffix(args[5], "/active") {
+			return []byte(`{"data":{}}`), nil
+		}
+		if strings.HasSuffix(args[5], "/inbox") || strings.HasPrefix(args[5], "/api/shell?") {
+			return []byte(`{"data":[]}`), nil
 		}
 		return []byte(`{}`), nil
 	}
@@ -134,8 +158,25 @@ func TestHTTPDeliveryCompletionRaceWithdrawsWithoutInterrupt(t *testing.T) {
 	if !withdrawn {
 		t.Fatal("completion race left pending guidance for session resume")
 	}
-	if !h.unsafeResume {
-		t.Fatal("ambiguous promotion could be reused by the next attempt")
+	if h.unsafeResume {
+		t.Fatal("proven pending cancellation retired an intact session")
+	}
+	h.markClean(context.Background())
+	if !r.nativeClean {
+		t.Fatal("cancelled pending input prevented clean session continuity")
+	}
+}
+
+func TestHTTPWithdrawalNoOpResponseDoesNotProveCancellation(t *testing.T) {
+	_, h, w := nativeHTTPFixture()
+	w.captureHTTP = func(context.Context, []string) ([]byte, error) { return nil, nil }
+	h.consume(nativeEvent(t, "promotion", "session.inbox.delivered", "ses_root", map[string]any{"inboxID": "msg_guidance"}))
+	err := h.withdraw(context.Background(), "msg_guidance", 1)
+	if !errors.Is(err, errHTTPInputEnded) || !h.unsafeResume {
+		t.Fatalf("ambiguous no-op response: err=%v unsafe=%v", err, h.unsafeResume)
+	}
+	if len(w.requests) != 1 || w.requests[0][4] != "DELETE" {
+		t.Fatal("unprocessed canonical history was polled")
 	}
 }
 

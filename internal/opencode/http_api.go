@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,6 +19,8 @@ import (
 )
 
 const nativeHTTPOrigin = "http://127.0.0.1:4096"
+
+const httpRequestTimeout = 30 * time.Second
 
 var errHTTPInputEnded = errors.New("OpenCode active turn ended before additional input was consumed")
 
@@ -54,26 +57,58 @@ func (r *running) configureNativeHTTP(config []byte) ([]byte, error) {
 	return json.Marshal(projected)
 }
 
-// httpAPI uses the maintained CLI against this attempt's already-running owner.
+// httpAPI uses maintained tools against this attempt's already-running owner.
 func (r *running) httpAPI(ctx context.Context, method, path string, body any, out any) error {
-	args := []string{"opencode", "--server", nativeHTTPOrigin, "api", method, path}
+	ctx, cancel := context.WithTimeout(ctx, httpRequestTimeout)
+	defer cancel()
+	args, request, err := nativeHTTPRequest(ctx, method, path, body)
+	if err != nil {
+		return err
+	}
+	data, err := r.streamHTTP(ctx, args, request)
+	if err != nil {
+		return err
+	}
+	if out != nil && json.Unmarshal(data, out) != nil {
+		return &execution.AgentFailure{Message: "OpenCode native HTTP response invalid"}
+	}
+	return nil
+}
+
+func nativeHTTPRequest(ctx context.Context, method, path string, body any) ([]string, []byte, error) {
+	deadline, _ := ctx.Deadline()
+	seconds := strconv.FormatInt(max(1, int64((time.Until(deadline)+time.Second-1)/time.Second)), 10)
+	args := []string{"timeout", "-s", "TERM", "-k", "1", seconds, "opencode", "--server", nativeHTTPOrigin, "api", method, path}
 	var request []byte
 	if body != nil {
 		if method != "POST" {
-			return ErrDenied
+			return nil, nil, ErrDenied
 		}
 		data, err := json.Marshal(body)
 		if err != nil {
-			return err
+			return nil, nil, err
 		}
 		request = data
 		if len(request) > 4<<20 {
-			return ErrDenied
+			return nil, nil, ErrDenied
 		}
-		args = []string{"/bin/sh", "-c", `set -eu; umask 077; f=$2; trap 'rm -f "$f"' EXIT HUP INT TERM; cat > "$f"; wget -q -O - --header "Authorization: Basic $SANDBOX_HTTP_AUTH" --header 'Content-Type: application/json' --post-file "$f" "$1"`, "native-http", nativeHTTPOrigin + path, "/workspace/native-http-" + rand.Text() + ".json"}
+		args = []string{"/bin/sh", "-c", `set -eu; umask 077; f=$2; trap 'rm -f "$f"' EXIT HUP INT TERM; cat > "$f"; timeout -s TERM -k 1 "$3" wget -T "$3" -q -O - --header "Authorization: Basic $SANDBOX_HTTP_AUTH" --header 'Content-Type: application/json' --post-file "$f" "$1"`, "native-http", nativeHTTPOrigin + path, "/tmp/native-http-" + rand.Text() + ".json", seconds}
 	}
+	return args, request, nil
+}
+
+func (r *running) streamHTTP(ctx context.Context, args []string, request []byte) ([]byte, error) {
 	var data []byte
 	err := r.stream(ctx, args, &r.stderr, func(stdin io.Writer, stdout io.Reader) error {
+		stop := context.AfterFunc(ctx, func() {
+			if closer, ok := stdin.(io.Closer); ok {
+				_ = closer.Close()
+			}
+			if closer, ok := stdout.(io.Closer); ok {
+				_ = closer.Close()
+			}
+		})
+		defer stop()
 		if request != nil {
 			if _, err := stdin.Write(request); err != nil {
 				return err
@@ -97,14 +132,14 @@ func (r *running) httpAPI(ctx context.Context, method, path string, body any, ou
 		var oom *execution.OOMError
 		var stall *execution.MemoryStallError
 		if errors.As(err, &oom) || errors.As(err, &stall) {
-			return err
+			return nil, err
 		}
-		return &execution.AgentFailure{Message: "OpenCode native HTTP request failed"}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, &execution.AgentFailure{Message: "OpenCode native HTTP request failed"}
 	}
-	if out != nil && json.Unmarshal(data, out) != nil {
-		return &execution.AgentFailure{Message: "OpenCode native HTTP response invalid"}
-	}
-	return nil
+	return data, nil
 }
 
 type nativeSession struct {

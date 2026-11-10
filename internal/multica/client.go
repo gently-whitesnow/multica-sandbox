@@ -151,7 +151,10 @@ func (c *Client) sendHeaders(ctx context.Context, method, path string, body any,
 	}
 	data, err = io.ReadAll(io.LimitReader(resp.Body, int64(read)+1))
 	if err != nil {
-		return nil, errTransport
+		if c.supplements != nil {
+			return nil, errTransport
+		}
+		return nil, fmt.Errorf("read Multica response")
 	}
 	if len(data) > read {
 		return nil, fmt.Errorf("Multica response exceeds limit")

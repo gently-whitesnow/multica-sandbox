@@ -59,7 +59,7 @@ type supplementEntry struct {
 
 // inspectSupplements uses the claim's task token only in memory. Native issue
 // APIs do not accept an mdt_ runtime credential, and optional hydration can fail.
-func (c *Client) inspectSupplements(ctx context.Context, t Task) ([]supplementView, error) {
+func (c *Client) inspectSupplements(ctx context.Context, t Task, done []string) ([]supplementView, error) {
 	token, err := t.TaskToken()
 	if err != nil {
 		return nil, ErrSupplementUncertain
@@ -89,6 +89,13 @@ func (c *Client) inspectSupplements(ctx context.Context, t Task) ([]supplementVi
 		}
 		return nil, ErrSupplementUncertain
 	}
+	ids, err := unacknowledgedSupplementIDs(task.Comments, done)
+	if err != nil {
+		return nil, err
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
 	// Public history truncates dispatched_at to seconds. The supported /start
 	// replay locks and checks the original PostgreSQL timestamp exactly; it
 	// does not re-emit lifecycle events for an already-running task.
@@ -107,7 +114,26 @@ func (c *Client) inspectSupplements(ctx context.Context, t Task) ([]supplementVi
 	if json.Unmarshal(data, &entries) != nil {
 		return nil, ErrSupplementUncertain
 	}
-	return supplementViews(t.ID, task.Comments, entries)
+	return supplementViews(t.ID, ids, entries)
+}
+
+func unacknowledgedSupplementIDs(ids, done []string) ([]string, error) {
+	seen := make(map[string]bool, len(ids))
+	known := make(map[string]bool, len(done))
+	for _, id := range done {
+		known[id] = true
+	}
+	remaining := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if !validID(id) || seen[id] {
+			return nil, ErrSupplementUncertain
+		}
+		seen[id] = true
+		if !known[id] {
+			remaining = append(remaining, id)
+		}
+	}
+	return remaining, nil
 }
 
 func (c *Client) fenceSupplement(ctx context.Context, t Task) error {
@@ -122,9 +148,16 @@ func (c *Client) fenceSupplement(ctx context.Context, t Task) error {
 }
 
 func supplementViews(task string, ids []string, entries []supplementEntry) ([]supplementView, error) {
+	wanted := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		if !validID(id) || wanted[id] {
+			return nil, ErrSupplementUncertain
+		}
+		wanted[id] = true
+	}
 	byID := map[string]supplementView{}
 	for _, entry := range entries {
-		if !slices.Contains(ids, entry.ID) {
+		if !wanted[entry.ID] {
 			continue
 		}
 		if _, duplicate := byID[entry.ID]; duplicate || entry.Type != "comment" || entry.DeletedAt != nil {

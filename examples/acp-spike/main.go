@@ -36,7 +36,6 @@ func main() {
 	host := flag.String("host", "host.docker.internal", "host name the container uses to reach the fixtures")
 	keep := flag.Bool("keep", false, "keep the container for inspection")
 	steering := flag.Bool("steering-probe", false, "only probe concurrent input during an active prompt; fail unless rejected without ending the original")
-	pluginSteering := flag.Bool("plugin-steering-probe", false, "probe native input through a server plugin in the same active ACP service")
 	httpSteering := flag.Bool("http-steering-probe", false, "probe native HTTP steering into the same attached CLI turn")
 	flag.BoolVar(&debug, "debug", false, "log fixture requests")
 	flag.BoolVar(&acpMCP, "acp-mcp", false, "also pass the MCP fixture through session/new with a static header")
@@ -52,7 +51,7 @@ func main() {
 			*image = opencode.Images[i]
 		}
 	}
-	if err := run(*image, *host, *keep, *steering, *pluginSteering, *httpSteering); err != nil {
+	if err := run(*image, *host, *keep, *steering, *httpSteering); err != nil {
 		fmt.Fprintln(os.Stderr, "acp-spike:", err)
 		os.Exit(1)
 	}
@@ -87,7 +86,7 @@ func (s *spike) sessionMCP() []acp.McpServer {
 	return []acp.McpServer{{Http: &acp.McpServerHttpInline{Type: "http", Name: "viaacp", Url: s.mcpURL, Headers: []acp.HttpHeader{{Name: "Authorization", Value: "Bearer acp-header"}}}}}
 }
 
-func run(image, host string, keep, steering, pluginSteering, httpSteering bool) error {
+func run(image, host string, keep, steering, httpSteering bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -114,18 +113,9 @@ func run(image, host string, keep, steering, pluginSteering, httpSteering bool) 
 	if httpSteering {
 		return s.httpSteeringTurn(ctx)
 	}
-	if pluginSteering {
-		if err := s.projectSteeringPlugin(ctx); err != nil {
-			return err
-		}
-	}
 	a, id, err := s.handshake(ctx)
 	if err != nil {
 		return err
-	}
-	if pluginSteering {
-		defer a.stop()
-		return s.pluginSteeringTurn(ctx, a, id)
 	}
 	if steering {
 		defer a.stop()
