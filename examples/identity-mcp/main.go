@@ -6,8 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"time"
+
+	"github.com/gently-whitesnow/multica-sandbox/examples/identity-mcp/faultproxy"
 )
 
 func main() {
@@ -45,6 +48,8 @@ func main() {
 		err = rotation()
 	case "scenario":
 		err = scenario()
+	case "fault-proxy":
+		err = faultProxy()
 	default:
 		err = fmt.Errorf("unknown example mode")
 	}
@@ -93,6 +98,20 @@ func initialize() error {
 }
 func serve(address string, h http.Handler) error {
 	server := &http.Server{Addr: address, Handler: h, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 15 * time.Second, MaxHeaderBytes: 16 << 10}
+	return server.ListenAndServe()
+}
+
+// faultProxy fronts the disposable Multica server named by UPSTREAM (ADR 0036 tests).
+// Held requests and daemon WebSockets outlive the fixture's usual write timeout.
+func faultProxy() error {
+	upstream, err := url.Parse(os.Getenv("UPSTREAM"))
+	if err != nil || upstream.Scheme != "http" || upstream.Host == "" {
+		return fmt.Errorf("fault proxy needs an http UPSTREAM")
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	mux.Handle("/", faultproxy.Handler(upstream))
+	server := &http.Server{Addr: ":8080", Handler: mux, ReadHeaderTimeout: 5 * time.Second, MaxHeaderBytes: 16 << 10}
 	return server.ListenAndServe()
 }
 

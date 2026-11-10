@@ -2,7 +2,6 @@ package multica
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -14,9 +13,8 @@ import (
 
 const taskSupplementCapability = "task-supplement-v1"
 
-// ErrSupplementUncertain requires inspection or native terminal settlement;
-// retrying a new claim after an ambiguous response could skip an earlier input.
-var ErrSupplementUncertain = errors.New("supplement delivery needs complete native receipt inspection")
+// ErrSupplementUncertain defers delivery: the native receipt state could not be read.
+var ErrSupplementUncertain = errors.New("supplement delivery needs native receipt inspection")
 var ErrSupplementEnded = errors.New("supplement turn has ended")
 
 var supplementSession = regexp.MustCompile(`^ses_[A-Za-z0-9]{1,64}$`)
@@ -32,108 +30,72 @@ func (s taskSupplement) valid() bool {
 	return validID(s.CommentID) && (s.AuthorType == "member" || s.AuthorType == "agent") && len(s.AuthorName) <= 1024 && len(s.Content) <= 64<<10 && strings.TrimSpace(s.Content) != ""
 }
 
-type supplementView struct {
-	Status  string
-	Message taskSupplement
+// supplementInspection is the daemon's bounded read of its own delivery state:
+// the run status, its oldest unacknowledged claim and, when asked, one receipt.
+type supplementInspection struct {
+	Status     string          `json:"task_status"`
+	Delivering *taskSupplement `json:"delivering"`
+	Receipt    *struct {
+		CommentID     string `json:"comment_id"`
+		Status        string `json:"status"`
+		FailureReason string `json:"failure_reason"`
+		Attempts      int    `json:"attempt_count"`
+	} `json:"receipt"`
 }
 
-type supplementTaskView struct {
-	Task
-	Status     string   `json:"status"`
-	Capability string   `json:"supplement_capability"`
-	Comments   []string `json:"supplement_comment_ids"`
-}
+var supplementReceiptStatuses = []string{"none", "pending", "delivering", "delivered", "failed"}
 
-type supplementEntry struct {
-	ID        string
-	Type      string
-	Content   string
-	ActorType string  `json:"actor_type"`
-	ActorName string  `json:"actor_name"`
-	DeletedAt *string `json:"deleted_at"`
-	Receipts  []struct {
-		TaskID string `json:"task_id"`
-		Status string
-	} `json:"supplements"`
-}
-
-// inspectSupplements uses the claim's task token only in memory. Native issue
-// APIs do not accept an mdt_ runtime credential, and optional hydration can fail.
-func (c *Client) inspectSupplements(ctx context.Context, t Task, done []string) ([]supplementView, error) {
-	token, err := t.TaskToken()
-	if err != nil {
-		return nil, ErrSupplementUncertain
+// inspectSupplement needs neither the timeline nor a task token, so restart
+// replay can use it. A server without the endpoint is uncertain, not a lost task.
+func (c *Client) inspectSupplement(ctx context.Context, task, comment string) (supplementInspection, error) {
+	var view supplementInspection
+	path := "/api/daemon/tasks/" + task + "/supplements"
+	if comment != "" {
+		path += "?comment_id=" + comment
 	}
-	reader := *c
-	reader.token = token
-	prefix := "/api/issues/" + t.IssueID
-	var tasks []supplementTaskView
-	if err = reader.call(ctx, http.MethodGet, prefix+"/task-runs", nil, &tasks); err != nil {
-		return nil, err
-	}
-	var task *supplementTaskView
-	for i := range tasks {
-		if tasks[i].ID == t.ID {
-			if task != nil {
-				return nil, ErrSupplementUncertain
+	if err := c.call(ctx, http.MethodGet, path, nil, &view); err != nil {
+		if Missing(err) || statusIs(err, http.StatusMethodNotAllowed) {
+			if _, statusErr := c.Status(ctx, task); !supplementGone(statusErr) {
+				return view, fmt.Errorf("%w: the server lacks receipt inspection", ErrSupplementUncertain)
 			}
-			task = &tasks[i]
 		}
+		return view, err
 	}
-	if task == nil || task.RuntimeID != t.RuntimeID || task.WorkspaceID != t.WorkspaceID || task.AgentID != t.AgentID || task.IssueID != t.IssueID || task.Capability != taskSupplementCapability || len(task.Comments) > 4096 {
-		return nil, ErrSupplementUncertain
+	valid := view.Status != "" && (view.Delivering == nil || validID(view.Delivering.CommentID))
+	if comment == "" {
+		valid = valid && view.Receipt == nil
+	} else {
+		valid = valid && view.Receipt != nil && strings.EqualFold(view.Receipt.CommentID, comment) && slices.Contains(supplementReceiptStatuses, view.Receipt.Status)
 	}
-	if task.Status != "running" {
-		if terminalSupplementStatus(task.Status) {
-			return nil, ErrSupplementEnded
-		}
-		return nil, ErrSupplementUncertain
+	if !valid {
+		return view, ErrSupplementUncertain
 	}
-	ids, err := unacknowledgedSupplementIDs(task.Comments, done)
-	if err != nil {
-		return nil, err
-	}
-	if len(ids) == 0 {
-		return nil, nil
-	}
-	// Public history truncates dispatched_at to seconds. The supported /start
-	// replay locks and checks the original PostgreSQL timestamp exactly; it
-	// does not re-emit lifecycle events for an already-running task.
-	if err = c.fenceSupplement(ctx, t); err != nil {
-		return nil, err
-	}
-	headers := http.Header{}
-	data, err := reader.sendHeaders(ctx, http.MethodGet, prefix+"/timeline", nil, responseLimit, headers)
-	if err != nil {
-		return nil, err
-	}
-	if strings.Contains(headers.Get("X-Timeline-Truncated"), "comment") {
-		return nil, ErrSupplementUncertain
-	}
-	var entries []supplementEntry
-	if json.Unmarshal(data, &entries) != nil {
-		return nil, ErrSupplementUncertain
-	}
-	return supplementViews(t.ID, ids, entries)
+	return view, nil
 }
 
-func unacknowledgedSupplementIDs(ids, done []string) ([]string, error) {
-	seen := make(map[string]bool, len(ids))
-	known := make(map[string]bool, len(done))
-	for _, id := range done {
-		known[id] = true
+// runningSupplements inspects a run that must still accept additional input.
+func (c *Client) runningSupplements(ctx context.Context, record *supplementRecord, comment string) (supplementInspection, error) {
+	view, err := c.inspectSupplement(ctx, record.Task, comment)
+	switch {
+	case supplementGone(err):
+		err = errors.Join(err, c.removeSupplement(*record))
+	case err == nil && terminalSupplementStatus(view.Status):
+		c.supplements.retire(record.Task)
+		err = ErrSupplementEnded
+	case err == nil && view.Status != "running":
+		err = ErrSupplementUncertain
 	}
-	remaining := make([]string, 0, len(ids))
-	for _, id := range ids {
-		if !validID(id) || seen[id] {
-			return nil, ErrSupplementUncertain
-		}
-		seen[id] = true
-		if !known[id] {
-			remaining = append(remaining, id)
-		}
+	if err != nil && !supplementGone(err) && !errors.Is(err, ErrSupplementEnded) {
+		err = c.supplements.delay(record, err)
 	}
-	return remaining, nil
+	return view, err
+}
+
+// supplementReceipts reports whether the server offers receipt inspection for a
+// dispatched task; without it the capability is not offered at all.
+func (c *Client) supplementReceipts(ctx context.Context, t Task) bool {
+	_, err := c.inspectSupplement(ctx, t.ID, "")
+	return err == nil
 }
 
 func (c *Client) fenceSupplement(ctx context.Context, t Task) error {
@@ -145,48 +107,6 @@ func (c *Client) fenceSupplement(ctx context.Context, t Task) error {
 		return ErrSupplementUncertain
 	}
 	return nil
-}
-
-func supplementViews(task string, ids []string, entries []supplementEntry) ([]supplementView, error) {
-	wanted := make(map[string]bool, len(ids))
-	for _, id := range ids {
-		if !validID(id) || wanted[id] {
-			return nil, ErrSupplementUncertain
-		}
-		wanted[id] = true
-	}
-	byID := map[string]supplementView{}
-	for _, entry := range entries {
-		if !wanted[entry.ID] {
-			continue
-		}
-		if _, duplicate := byID[entry.ID]; duplicate || entry.Type != "comment" || entry.DeletedAt != nil {
-			return nil, ErrSupplementUncertain
-		}
-		view := supplementView{Message: taskSupplement{entry.ID, entry.ActorType, entry.ActorName, entry.Content}}
-		for _, receipt := range entry.Receipts {
-			if receipt.TaskID == task {
-				if view.Status != "" {
-					return nil, ErrSupplementUncertain
-				}
-				view.Status = receipt.Status
-			}
-		}
-		if !view.Message.valid() || !slices.Contains([]string{"pending", "delivering", "delivered", "failed"}, view.Status) {
-			return nil, ErrSupplementUncertain
-		}
-		byID[entry.ID] = view
-	}
-	out := make([]supplementView, 0, len(ids))
-	for _, id := range ids {
-		view, ok := byID[id]
-		if !validID(id) || !ok {
-			return nil, ErrSupplementUncertain
-		}
-		out = append(out, view)
-		delete(byID, id)
-	}
-	return out, nil
 }
 
 // formatSupplement preserves native author authority: peer input never becomes a

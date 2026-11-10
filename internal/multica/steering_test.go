@@ -16,25 +16,30 @@ import (
 	"time"
 )
 
+type supplementRow struct {
+	Status  string
+	Message taskSupplement
+	claimed int
+}
+
 type supplementFixture struct {
-	mu                                   sync.Mutex
-	task                                 Task
-	rows                                 []supplementView
-	capability                           bool
-	startBody                            *string
-	offered                              bool
-	status                               string
-	lostClaim                            bool
-	noCommit                             bool
-	ackFailures                          int
-	claimStatus, ackStatus, statusCode   int
-	timelines                            int
-	statuses                             int
-	claims, acks                         int
-	truncated, omitMetadata, omitReceipt bool
-	mismatch                             string
-	events                               []string
-	checkPhase                           func(string)
+	mu                                 sync.Mutex
+	task                               Task
+	rows                               []supplementRow
+	capability                         bool
+	startBody                          *string
+	offered                            bool
+	status                             string
+	lostClaim                          bool
+	noCommit                           bool
+	ackFailures                        int
+	claimStatus, ackStatus, statusCode int
+	inspectStatus                      int
+	inspectBody                        string
+	inspects, statuses                 int
+	claims, acks, nacks                int
+	events                             []string
+	checkPhase                         func(string)
 }
 
 func newSupplementFixture(t *testing.T) (*supplementFixture, *Client, string) {
@@ -43,7 +48,7 @@ func newSupplementFixture(t *testing.T) (*supplementFixture, *Client, string) {
 	task.Agent = &Agent{ID: task.AgentID}
 	f := &supplementFixture{task: task, capability: true, status: "running"}
 	for n, author := range []string{"member", "agent"} {
-		f.rows = append(f.rows, supplementView{Status: "pending", Message: taskSupplement{fmt.Sprintf("66666666-6666-4666-8666-%012d", n), author, "Fixture\nAuthor", fmt.Sprintf("guidance %d", n)}})
+		f.rows = append(f.rows, supplementRow{Status: "pending", Message: taskSupplement{fmt.Sprintf("66666666-6666-4666-8666-%012d", n), author, "Fixture\nAuthor", fmt.Sprintf("guidance %d", n)}})
 	}
 	server := httptest.NewServer(f)
 	t.Cleanup(server.Close)
@@ -69,7 +74,7 @@ func (f *supplementFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			Dispatched   string `json:"dispatched_at"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&request)
-		if request.Runtime != f.task.RuntimeID || request.Dispatched != f.task.DispatchedAt || f.mismatch == "dispatch" {
+		if request.Runtime != f.task.RuntimeID || request.Dispatched != f.task.DispatchedAt {
 			w.WriteHeader(409)
 			return
 		}
@@ -90,10 +95,8 @@ func (f *supplementFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeSupplementJSON(w, map[string]string{"status": f.status})
-	case strings.HasSuffix(r.URL.Path, "/task-runs"):
-		f.serveRuns(w)
-	case strings.HasSuffix(r.URL.Path, "/timeline"):
-		f.serveTimeline(w)
+	case strings.HasSuffix(r.URL.Path, "/supplements") && r.Method == http.MethodGet:
+		f.serveInspect(w, r)
 	case strings.HasSuffix(r.URL.Path, "/claim"):
 		f.serveClaim(w)
 	case strings.HasSuffix(r.URL.Path, "/ack"):
@@ -108,16 +111,19 @@ func (f *supplementFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func writeSupplementJSON(w http.ResponseWriter, value any) { _ = json.NewEncoder(w).Encode(value) }
 
-func (f *supplementFixture) claimCount() int {
+func (f *supplementFixture) count(value *int) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.claims
+	return *value
 }
 
-func (f *supplementFixture) ackCount() int {
+func (f *supplementFixture) claimCount() int { return f.count(&f.claims) }
+func (f *supplementFixture) ackCount() int   { return f.count(&f.acks) }
+
+func (f *supplementFixture) set(change func()) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.acks
+	change()
 }
 
 func (f *supplementFixture) isOffered() bool {
@@ -132,47 +138,45 @@ func (f *supplementFixture) eventLog() []string {
 	return append([]string(nil), f.events...)
 }
 
-func (f *supplementFixture) serveRuns(w http.ResponseWriter) {
-	task := f.task
-	if dispatched, err := time.Parse(time.RFC3339Nano, task.DispatchedAt); err == nil {
-		task.DispatchedAt = dispatched.Truncate(time.Second).Format(time.RFC3339)
+// serveInspect mirrors the native receipt inspection: the oldest claim in claim
+// order with its payload and, on request, one receipt ("none" once deleted).
+func (f *supplementFixture) serveInspect(w http.ResponseWriter, r *http.Request) {
+	f.inspects++
+	if f.inspectStatus != 0 {
+		w.WriteHeader(f.inspectStatus)
+		return
 	}
-	switch f.mismatch {
-	case "workspace":
-		task.WorkspaceID = testID
-	case "runtime":
-		task.RuntimeID = testID
-	case "dispatch":
-		task.DispatchedAt = "2000-01-01T00:00:00Z"
-	case "issue":
-		task.IssueID = testID
-	case "agent":
-		task.AgentID = testID
+	if f.inspectBody != "" {
+		_, _ = w.Write([]byte(f.inspectBody))
+		return
 	}
-	view := supplementTaskView{Task: task, Status: f.status}
-	if !f.omitMetadata {
-		view.Capability = taskSupplementCapability
-		for _, row := range f.rows {
-			view.Comments = append(view.Comments, row.Message.CommentID)
+	view := map[string]any{"task_status": f.status}
+	var oldest *supplementRow
+	for i := range f.rows {
+		if f.rows[i].Status == "delivering" && (oldest == nil || f.rows[i].claimed < oldest.claimed) {
+			oldest = &f.rows[i]
 		}
 	}
-	writeSupplementJSON(w, []supplementTaskView{view})
+	if oldest != nil {
+		view["delivering"] = oldest.Message
+	}
+	if comment := r.URL.Query().Get("comment_id"); comment != "" {
+		receipt := map[string]any{"comment_id": comment, "status": "none"}
+		for _, row := range f.rows {
+			if row.Message.CommentID == comment {
+				receipt["status"], receipt["attempt_count"] = row.Status, 1
+				if row.Status == "failed" {
+					receipt["failure_reason"] = "turn_ended"
+				}
+			}
+		}
+		view["receipt"] = receipt
+	}
+	writeSupplementJSON(w, view)
 }
 
-func (f *supplementFixture) serveTimeline(w http.ResponseWriter) {
-	f.timelines++
-	if f.truncated {
-		w.Header().Set("X-Timeline-Truncated", "comment")
-	}
-	rows := []map[string]any{}
-	for _, row := range f.rows {
-		entry := map[string]any{"id": row.Message.CommentID, "type": "comment", "actor_type": row.Message.AuthorType, "actor_name": row.Message.AuthorName, "content": row.Message.Content}
-		if !f.omitReceipt {
-			entry["supplements"] = []map[string]string{{"task_id": f.task.ID, "status": row.Status}}
-		}
-		rows = append(rows, entry)
-	}
-	writeSupplementJSON(w, rows)
+func (f *supplementFixture) claim(i int) {
+	f.rows[i].Status, f.rows[i].claimed = "delivering", f.claims+f.inspects+f.acks+1
 }
 
 func (f *supplementFixture) serveClaim(w http.ResponseWriter) {
@@ -192,7 +196,7 @@ func (f *supplementFixture) serveClaim(w http.ResponseWriter) {
 		if f.rows[i].Status != "pending" {
 			continue
 		}
-		f.rows[i].Status = "delivering"
+		f.claim(i)
 		if f.lostClaim {
 			f.lostClaim = false
 			conn, _, _ := w.(http.Hijacker).Hijack()
@@ -206,6 +210,23 @@ func (f *supplementFixture) serveClaim(w http.ResponseWriter) {
 }
 
 func (f *supplementFixture) serveAck(w http.ResponseWriter, r *http.Request) {
+	var request struct{ Delivered bool }
+	_ = json.NewDecoder(r.Body).Decode(&request)
+	if !request.Delivered {
+		f.nacks++
+		if f.ackStatus != 0 {
+			w.WriteHeader(f.ackStatus)
+			return
+		}
+		for i := range f.rows {
+			if strings.Contains(r.URL.Path, f.rows[i].Message.CommentID) && f.rows[i].Status == "delivering" {
+				f.rows[i].Status = "rejected"
+				return
+			}
+		}
+		w.WriteHeader(409)
+		return
+	}
 	f.acks++
 	f.events = append(f.events, "ack")
 	if f.ackStatus != 0 {
@@ -221,12 +242,19 @@ func (f *supplementFixture) serveAck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for i := range f.rows {
-		if strings.Contains(r.URL.Path, f.rows[i].Message.CommentID) {
+		if strings.Contains(r.URL.Path, f.rows[i].Message.CommentID) && (f.rows[i].Status == "delivering" || f.rows[i].Status == "delivered") {
 			f.rows[i].Status = "delivered"
 			return
 		}
 	}
 	w.WriteHeader(409)
+}
+
+// remove deletes a receipt as native comment deletion does.
+func (f *supplementFixture) remove(comment string) {
+	f.set(func() {
+		f.rows = slices.DeleteFunc(f.rows, func(row supplementRow) bool { return row.Message.CommentID == comment })
+	})
 }
 
 func startSupplementFixture(t *testing.T, f *supplementFixture, c *Client) {
@@ -265,6 +293,13 @@ func TestSupplementsExplicitNegotiation(t *testing.T) {
 			}
 		})
 	}
+	for _, code := range []int{404, 405, 503} {
+		f, c, _ := newSupplementFixture(t)
+		f.inspectStatus = code
+		if err := c.Start(context.Background(), f.task); err != nil || f.isOffered() || c.SupplementsNegotiated(f.task) {
+			t.Fatalf("steering offered to a server without receipt inspection (%d): %v", code, err)
+		}
+	}
 	f, c, _ := newSupplementFixture(t)
 	c.supplements = nil
 	if err := c.Start(context.Background(), f.task); err != nil || f.isOffered() {
@@ -302,7 +337,7 @@ func TestSupplementJournalPrecedesClaimDeliveryAndAck(t *testing.T) {
 			t.Fatalf("delivery %d: %v", n, err)
 		}
 	}
-	if ids[0] == ids[1] || f.claimCount() != 2 || f.ackCount() != 2 || len(supplementPhase(t, c, f.task, dir).Done) != 2 {
+	if ids[0] == ids[1] || f.claimCount() != 2 || f.ackCount() != 2 || supplementPhase(t, c, f.task, dir).Phase != "idle" {
 		t.Fatal("input ordering, identity or acknowledgement lost")
 	}
 }
@@ -342,8 +377,8 @@ func TestSupplementStableIDAfterAmbiguousProviderReply(t *testing.T) {
 	}
 }
 
-func TestSupplementLostClaimRecoversBeforeNextClaim(t *testing.T) {
-	f, c, _ := newSupplementFixture(t)
+func TestSupplementLostClaimIsReadBackInOrder(t *testing.T) {
+	f, c, dir := newSupplementFixture(t)
 	startSupplementFixture(t, f, c)
 	f.lostClaim = true
 	texts := []string{}
@@ -351,32 +386,63 @@ func TestSupplementLostClaimRecoversBeforeNextClaim(t *testing.T) {
 	if _, err := c.ProcessSupplement(context.Background(), f.task, "ses_fixture", deliver); err == nil {
 		t.Fatal("lost claim response hidden")
 	}
-	if len(texts) != 0 || f.claimCount() != 1 {
-		t.Fatal("ambiguous claim delivered without reconstruction")
+	if len(texts) != 0 || f.claimCount() != 1 || supplementPhase(t, c, f.task, dir).Phase != "claiming" {
+		t.Fatal("ambiguous claim delivered without reading the receipt back")
 	}
+	if progress, err := c.ProcessSupplement(context.Background(), f.task, "ses_fixture", deliver); progress || err != nil || f.claimCount() != 1 {
+		t.Fatal("ambiguous claim ignored its persisted backoff", err)
+	}
+	c.supplements.now = func() time.Time { return time.Now().Add(time.Hour) }
 	for range 2 {
 		if _, err := c.ProcessSupplement(context.Background(), f.task, "ses_fixture", deliver); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if len(texts) != 2 || !strings.Contains(texts[0], "guidance 0") || !strings.Contains(texts[1], "guidance 1") || f.claimCount() != 2 {
-		t.Fatal("lost claim reordered inputs")
+		t.Fatalf("lost claim was claimed again or reordered: claims=%d texts=%d", f.claimCount(), len(texts))
 	}
 }
 
-func TestSupplementUncommittedAmbiguityNeverClaimsAgain(t *testing.T) {
-	f, c, _ := newSupplementFixture(t)
+func TestSupplementUncommittedAmbiguityClaimsAgainAfterBackoff(t *testing.T) {
+	f, c, dir := newSupplementFixture(t)
 	startSupplementFixture(t, f, c)
 	f.noCommit = true
-	deliver := func(context.Context, string, string) error { t.Error("uncertain guidance injected"); return nil }
-	_, _ = c.ProcessSupplement(context.Background(), f.task, "ses_fixture", deliver)
+	delivered := 0
+	deliver := func(context.Context, string, string) error { delivered++; return nil }
+	if _, err := c.ProcessSupplement(context.Background(), f.task, "ses_fixture", deliver); !statusIs(err, 503) {
+		t.Fatal("ambiguous claim outcome hidden", err)
+	}
 	for range 3 {
-		if _, err := c.ProcessSupplement(context.Background(), f.task, "ses_fixture", deliver); !errors.Is(err, ErrSupplementUncertain) {
-			t.Fatal("empty inspection incorrectly proved no commit", err)
+		if progress, err := c.ProcessSupplement(context.Background(), f.task, "ses_fixture", deliver); progress || err != nil {
+			t.Fatal("ambiguous claim retried inside its backoff", err)
 		}
 	}
-	if f.claimCount() != 1 {
-		t.Fatal("ambiguous claim was automatically retried")
+	if f.claimCount() != 1 || delivered != 0 || supplementPhase(t, c, f.task, dir).Phase != "claiming" {
+		t.Fatal("ambiguous claim spun or delivered")
+	}
+	f.set(func() { f.noCommit = false })
+	c.supplements.now = func() time.Time { return time.Now().Add(time.Hour) }
+	if progress, err := c.ProcessSupplement(context.Background(), f.task, "ses_fixture", deliver); !progress || err != nil || delivered != 1 || f.claimCount() != 2 {
+		t.Fatal("an uncommitted claim stalled delivery until the turn ended", err)
+	}
+}
+
+// A claim whose response was lost may commit after a later claim: the receipt
+// read adopts it instead of skipping or claiming over it.
+func TestSupplementLateCommittedClaimIsAdopted(t *testing.T) {
+	f, c, _ := newSupplementFixture(t)
+	startSupplementFixture(t, f, c)
+	texts := []string{}
+	deliver := func(_ context.Context, _, text string) error { texts = append(texts, text); return nil }
+	if _, err := c.ProcessSupplement(context.Background(), f.task, "ses_fixture", deliver); err != nil {
+		t.Fatal(err)
+	}
+	f.set(func() { f.claim(1) })
+	if progress, err := c.ProcessSupplement(context.Background(), f.task, "ses_fixture", deliver); !progress || err != nil {
+		t.Fatal(err)
+	}
+	if len(texts) != 2 || !strings.Contains(texts[1], "guidance 1") || f.claimCount() != 1 || f.ackCount() != 2 {
+		t.Fatal("late committed claim was not adopted exactly once")
 	}
 }
 

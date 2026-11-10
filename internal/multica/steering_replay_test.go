@@ -39,9 +39,7 @@ func TestSupplementConsumptionReplaysBeforeTerminalAfterRestart(t *testing.T) {
 	if err = restarted.outbox.save(pending{Version: 1, Terminal: Terminal{Task: f.task.ID}}); err != nil {
 		t.Fatal(err)
 	}
-	f.mu.Lock()
-	f.events = nil
-	f.mu.Unlock()
+	f.set(func() { f.events = nil })
 	if n, err := restarted.Replay(context.Background()); err != nil || n != 2 {
 		t.Fatalf("replay=%d, %v", n, err)
 	}
@@ -72,35 +70,6 @@ func TestSupplementRestartNeverInjectsUnconsumedGuidance(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, fileName(f.task.AttemptKey()))); !os.IsNotExist(err) {
 		t.Fatal("settled failed journal not collected")
-	}
-}
-
-func TestSupplementIncompleteInspectionRetainsClaimIntent(t *testing.T) {
-	f, c, dir := newSupplementFixture(t)
-	startSupplementFixture(t, f, c)
-	f.lostClaim = true
-	delivered := 0
-	deliver := func(context.Context, string, string) error { delivered++; return nil }
-	_, _ = c.ProcessSupplement(context.Background(), f.task, "ses_fixture", deliver)
-	for _, failure := range []string{"truncated", "metadata", "receipt", "workspace", "runtime", "dispatch", "issue", "agent"} {
-		t.Run(failure, func(t *testing.T) {
-			f.mu.Lock()
-			f.truncated, f.omitMetadata, f.omitReceipt = failure == "truncated", failure == "metadata", failure == "receipt"
-			f.mismatch = failure
-			f.mu.Unlock()
-			if _, err := c.ProcessSupplement(context.Background(), f.task, "ses_fixture", deliver); !errors.Is(err, ErrSupplementUncertain) {
-				t.Fatalf("incomplete inspection admitted delivery: %v", err)
-			}
-			if f.claimCount() != 1 || delivered != 0 || supplementPhase(t, c, f.task, dir).Phase != "claiming" {
-				t.Fatal("failed inspection advanced the queue")
-			}
-		})
-	}
-	f.mu.Lock()
-	f.truncated, f.omitMetadata, f.omitReceipt, f.mismatch = false, false, false, ""
-	f.mu.Unlock()
-	if progress, err := c.ProcessSupplement(context.Background(), f.task, "ses_fixture", deliver); err != nil || !progress || delivered != 1 || f.claimCount() != 1 {
-		t.Fatal("complete inspection did not recover the original claim", err)
 	}
 }
 
@@ -174,14 +143,12 @@ func TestSupplementFencedReplayChecksSubsecondGeneration(t *testing.T) {
 	stale := f.task
 	stale.DispatchedAt = "2026-11-10T00:00:00.654321Z"
 	c.supplements.negotiate(stale, true)
-	if _, err := c.ProcessSupplement(context.Background(), stale, "ses_fixture", func(context.Context, string, string) error {
-		t.Error("same-second stale claim injected input")
-		return nil
-	}); !errors.Is(err, ErrSupplementUncertain) || !Conflict(err) || f.claimCount() != 0 {
+	if _, err := c.ProcessSupplement(context.Background(), stale, "ses_fixture", nilDelivery(t)); !errors.Is(err, ErrSupplementUncertain) || !Conflict(err) {
 		t.Fatal("public second-precision history bypassed the native generation fence", err)
 	}
-	if progress, err := c.ProcessSupplement(context.Background(), f.task, "ses_fixture", func(context.Context, string, string) error { return nil }); err != nil || !progress || f.claimCount() != 1 {
-		t.Fatal("exact native generation was not admitted", err)
+	// The stale attempt's claim stays a native receipt; the exact generation adopts it.
+	if progress, err := c.ProcessSupplement(context.Background(), f.task, "ses_fixture", func(context.Context, string, string) error { return nil }); err != nil || !progress || f.claimCount() != 1 || f.ackCount() != 1 {
+		t.Fatal("exact native generation did not adopt the fenced claim", err)
 	}
 }
 

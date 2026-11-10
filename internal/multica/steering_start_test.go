@@ -45,10 +45,17 @@ func TestStartWithoutSteeringDoesNotReadResponse(t *testing.T) {
 	}
 }
 
+func receiptInspectionResponse() *http.Response {
+	return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"task_status":"dispatched"}`)), Header: http.Header{}}
+}
+
 func TestSteeringStartRequiresReadableNegotiation(t *testing.T) {
 	f, c, _ := newSupplementFixture(t)
 	body := &startResponseBody{}
 	c.http.Transport = startRoundTrip(func(r *http.Request) (*http.Response, error) {
+		if r.Method == http.MethodGet {
+			return receiptInspectionResponse(), nil
+		}
 		return &http.Response{StatusCode: 200, Body: body, Header: http.Header{}}, nil
 	})
 	original := retrySleep
@@ -82,7 +89,10 @@ func TestResponseBodyReadFailureClassificationIsOptIn(t *testing.T) {
 func TestSteeringStartRetriesLostBodyThenNegotiates(t *testing.T) {
 	f, c, _ := newSupplementFixture(t)
 	body, requests := &startResponseBody{}, 0
-	c.http.Transport = startRoundTrip(func(*http.Request) (*http.Response, error) {
+	c.http.Transport = startRoundTrip(func(r *http.Request) (*http.Response, error) {
+		if r.Method == http.MethodGet {
+			return receiptInspectionResponse(), nil
+		}
 		requests++
 		var response io.ReadCloser = body
 		if requests > 1 {

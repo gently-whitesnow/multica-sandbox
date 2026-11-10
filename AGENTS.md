@@ -5,7 +5,6 @@ Docker executor and fake lifecycle probe exist. Distinguish planned capabilities
 from verified behavior.
 
 ## Map
-
 - `README.md`: purpose, scope and contributor setup.
 - `adrs/`: architecture (0001), images/tools (0002), identity/MCP (0003),
   component reuse and security acceptance gates (0004), lifecycle probe (0005),
@@ -48,7 +47,9 @@ from verified behavior.
 - `examples/tool-bundle/`: example user-owned tool bundle (static `jq`).
 - `examples/acp-spike/`: `opencode acp` capability spike with fixtures (ADR 0023).
 - `examples/live-steering/`, `scripts/test-live-steering-native.sh`: opt-in native
-  supplement admission patch and disposable HTTP steering/recovery fixtures (ADR 0036).
+  admission, receipt-inspection and routing patches, HTTP steering/recovery
+  fixtures and the activation order (ADR 0036); `examples/identity-mcp/faultproxy`
+  loses, holds or refuses selected Multica requests for them.
 - `examples/sysbox-host/`: Lima/Linux Sysbox host recipe, attempt pool slice and engine test image (ADR 0019, 0020).
 - `internal/pool/`: attempt pool slice limits, PSI admission and attempt memory events (ADR 0020).
 - `internal/metrics/`: controller metrics on `/metrics` (ADR 0025).
@@ -66,7 +67,6 @@ from verified behavior.
 - `scripts/install-harness.sh`, `verify.sh`: setup/verification; `scripts/opencode-release.sh`: image admission (ADR 0023).
 
 ## Rules
-
 - Keep code and documentation concise.
 - Remove superseded prototype paths unless a deployed consumer requires compatibility.
 - Separate sandbox backends, agent adapters and inference configuration.
@@ -87,7 +87,6 @@ from verified behavior.
   configuration (ADR 0033).
 
 ## Verification
-
 Install Harness once with `./scripts/install-harness.sh`. Stage new files before
 running `./verify.sh`: Harness reads the Git index. Use `harness explain <id>`
 through the clone-local binary to investigate findings; fix their cause rather
@@ -102,9 +101,11 @@ Run `VERIFY_CONTAINERS=1 ./verify.sh` for backend changes and
 `VERIFY_SERVICE=1 ./verify.sh` for service/packaging changes. Never run test commands
 against production tasks. Keep fixture data generic.
 Run `VERIFY_IDENTITY=1 ./verify.sh` for identity/MCP fixture changes.
-For steering, run `VERIFY_SERVICE=1 VERIFY_OPENCODE=1 ./scripts/test-live-steering-native.sh` with the service/MCP filters in `examples/live-steering/README.md`. The wrapper sets
+For steering, run `VERIFY_SERVICE=1 VERIFY_OPENCODE=1 ./scripts/test-live-steering-native.sh` with the service/faults/MCP filters in `examples/live-steering/README.md`. The wrapper sets
 `VERIFY_STEERING_NATIVE_PATCH=1` only for a disposable pinned server clone; ordinary
 `./verify.sh` does not exercise real steering. Never patch an installed server.
+The upstream suite refuses to start below 4 GiB of free engine disk
+(`UPSTREAM_TEST_MIN_FREE_MB`): exhaustion fails far from its cause.
 Run `VERIFY_DYNAMIC_MCP=1 ./verify.sh` for public remote MCP selection/transport;
 the fixture verifies real OpenCode tools, secret isolation and retained changes.
 Run `VERIFY_INFERENCE=1 ./verify.sh` for native OpenCode/relay/LiteLLM workspace-key
@@ -119,7 +120,6 @@ Before starting an issue, inspect its ADRs and existing branches/PRs. Leave a co
 handoff with commit, verified result, next action and blocker when interrupted.
 
 ## Controller release
-
 You run inside this controller, so release it through `deploy.yml` (ADR 0031,
 vps-worker ADR-0024), never through vps-worker Ansible. It changes only the
 controller image; helper, CLI, agent image, secrets, policy and network changes

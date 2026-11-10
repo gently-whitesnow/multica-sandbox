@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"slices"
 )
 
 // ProcessSupplement advances one negotiated attempt serially. deliver must dedup
@@ -30,41 +29,16 @@ func (c *Client) ProcessSupplement(ctx context.Context, t Task, session string, 
 	}
 	defer s.end(key)
 	record, err := s.load(c, t, session)
-	if err != nil {
+	if err != nil || s.deferred(record) {
 		return false, err
-	}
-	if s.deferred(record) {
-		return false, nil
 	}
 	if record.Phase == "consumed" {
-		return c.ackSupplement(ctx, &record)
+		_, err = c.ackSupplement(ctx, &record)
+		return err == nil, err
 	}
-	status, err := c.Status(ctx, t.ID)
-	if err != nil {
-		if supplementGone(err) {
-			s.retire(t.ID)
-			err = errors.Join(err, s.remove(key))
-		}
-		return false, err
-	}
-	if status != "running" {
-		if terminalSupplementStatus(status) {
-			s.retire(t.ID)
-		} else {
-			return false, ErrSupplementUncertain
-		}
-		return false, ErrSupplementEnded
-	}
-	if record.Phase == "idle" || record.Phase == "claiming" {
-		if err = c.claimSupplement(ctx, t, &record); err != nil {
-			if err == ErrSupplementEnded {
-				s.retire(t.ID)
-			}
-			return false, err
-		}
-		if record.Current == nil {
-			return false, nil
-		}
+	progress, err := c.currentSupplement(ctx, &record)
+	if err != nil || record.Current == nil {
+		return progress, err
 	}
 	if err = ctx.Err(); err != nil {
 		return false, err
@@ -72,78 +46,95 @@ func (c *Client) ProcessSupplement(ctx context.Context, t Task, session string, 
 	if err = c.fenceSupplement(ctx, t); err != nil {
 		return false, err
 	}
-	if !slices.Contains(record.Done, record.Current.CommentID) {
-		id := supplementMessageID(record, record.Current.CommentID)
-		if err = deliver(ctx, id, formatSupplement(*record.Current)); err != nil {
-			return false, err
-		}
+	if err = deliver(ctx, supplementMessageID(record, record.Current.CommentID), formatSupplement(*record.Current)); err != nil {
+		return false, err
 	}
 	record.Phase = "consumed"
 	if err = s.save(record); err != nil {
 		return true, err
 	}
-	return c.ackSupplement(ctx, &record)
+	_, err = c.ackSupplement(ctx, &record)
+	return true, err
 }
 
-func (c *Client) claimSupplement(ctx context.Context, t Task, record *supplementRecord) error {
-	views, err := c.inspectSupplements(ctx, t, record.Done)
+// currentSupplement leaves record.Current as the native claim to deliver, or nil.
+// The native receipt is the authority: a claim response is only a hint, so a lost
+// response is read back instead of being claimed again.
+func (c *Client) currentSupplement(ctx context.Context, record *supplementRecord) (bool, error) {
+	view, err := c.runningSupplements(ctx, record, "")
 	if err != nil {
-		return err
+		return false, err
 	}
-	unknown := []taskSupplement{}
-	pending := false
-	for _, view := range views {
-		if view.Status == "delivering" && !slices.Contains(record.Done, view.Message.CommentID) {
-			unknown = append(unknown, view.Message)
+	if record.Phase == "claimed" {
+		if view.Delivering != nil && view.Delivering.CommentID == record.Current.CommentID {
+			return false, nil
 		}
-		pending = pending || view.Status == "pending"
+		if view, err = c.runningSupplements(ctx, record, record.Current.CommentID); err != nil {
+			return false, err
+		}
+		if view.Receipt.Status == "delivering" {
+			return false, nil
+		}
+		// The receipt left delivery before consumption, for example with its
+		// deleted comment: nothing was consumed and nothing is acknowledged.
+		record.Current, record.Phase = nil, "idle"
+		return true, c.supplements.save(*record)
 	}
-	if record.Phase == "claiming" {
-		// An empty inspection cannot prove the old HTTP request will not commit
-		// later. Never issue another claim while that outcome is ambiguous.
-		if len(unknown) != 1 {
-			return ErrSupplementUncertain
+	if view.Delivering == nil {
+		claimed, claimErr := c.claimSupplement(ctx, record)
+		if claimErr != nil || !claimed {
+			return false, claimErr
 		}
-		record.Current = &unknown[0]
-	} else {
-		if len(unknown) != 0 || len(record.Done) >= 4096 {
-			return ErrSupplementUncertain
+		if view, err = c.runningSupplements(ctx, record, ""); err != nil {
+			return false, err
 		}
-		if !pending {
-			return nil
-		}
-		record.Phase = "claiming"
-		if err = c.supplements.save(*record); err != nil {
-			return err
-		}
-		if err = ctx.Err(); err != nil {
+		if view.Delivering == nil {
 			record.Phase = "idle"
-			return errors.Join(err, c.supplements.save(*record))
+			return true, c.supplements.save(*record)
 		}
-		var message taskSupplement
-		err = c.call(ctx, http.MethodPost, "/api/daemon/tasks/"+t.ID+"/supplements/claim", map[string]any{"capabilities": []string{"task-supplement-author-v1"}}, &message)
-		if err != nil {
-			var rejection *HTTPError
-			if errors.As(err, &rejection) && rejection.Status >= 400 && rejection.Status < 500 && rejection.Status != http.StatusRequestTimeout {
-				record.Phase = "idle"
-				return c.supplements.delay(record, err)
-			}
-			return err
-		}
-		if message.CommentID == "" {
-			if message != (taskSupplement{}) {
-				return ErrSupplementUncertain
-			}
-			record.Phase = "idle"
-			return c.supplements.save(*record)
-		}
-		if !message.valid() {
-			return ErrSupplementUncertain
-		}
-		record.Current = &message
 	}
-	record.Phase = "claimed"
-	return c.supplements.save(*record)
+	if !view.Delivering.valid() {
+		// Keep a valid claim intent while rejecting an undeliverable payload;
+		// the payload itself cannot enter the validated delivery journal.
+		record.Current, record.Phase = nil, "claiming"
+		err = c.taskPost(ctx, record.Task, "supplements/"+view.Delivering.CommentID+"/ack", map[string]any{"delivered": false, "error": "provider_rejected"})
+		if err != nil && !Conflict(err) {
+			return false, c.supplements.delay(record, err)
+		}
+		record.Phase = "idle"
+		return true, c.supplements.save(*record)
+	}
+	record.Current, record.Phase = view.Delivering, "claimed"
+	record.Failures, record.RetryAfter = 0, 0
+	return false, c.supplements.save(*record)
+}
+
+// claimSupplement persists intent before the claim. An ambiguous outcome keeps
+// the claiming phase; the next round reads the native receipt before any claim.
+func (c *Client) claimSupplement(ctx context.Context, record *supplementRecord) (bool, error) {
+	record.Phase = "claiming"
+	if err := c.supplements.save(*record); err != nil {
+		return false, err
+	}
+	if err := ctx.Err(); err != nil {
+		record.Phase = "idle"
+		return false, errors.Join(err, c.supplements.save(*record))
+	}
+	var message taskSupplement
+	err := c.call(ctx, http.MethodPost, "/api/daemon/tasks/"+record.Task+"/supplements/claim", map[string]any{"capabilities": []string{"task-supplement-author-v1"}}, &message)
+	if err != nil {
+		var rejection *HTTPError
+		if errors.As(err, &rejection) && rejection.Status >= 400 && rejection.Status < 500 && rejection.Status != http.StatusRequestTimeout {
+			record.Phase = "idle"
+		}
+		return false, c.supplements.delay(record, err)
+	}
+	record.Failures, record.RetryAfter = 0, 0
+	if message == (taskSupplement{}) {
+		record.Phase = "idle"
+		return false, c.supplements.save(*record)
+	}
+	return true, nil
 }
 
 func supplementMessageID(record supplementRecord, comment string) string {
@@ -151,15 +142,15 @@ func supplementMessageID(record supplementRecord, comment string) string {
 	return "msg_" + hex.EncodeToString(sum[:16])
 }
 
+// ackSupplement reports whether native delivery was acknowledged. A nil error
+// without it means the receipt can no longer be acknowledged and was quarantined.
 func (c *Client) ackSupplement(ctx context.Context, record *supplementRecord) (bool, error) {
-	if c.supplements.deferred(*record) {
-		return false, nil
-	}
-	if err := c.taskPost(ctx, record.Task, "supplements/"+record.Current.CommentID+"/ack", map[string]any{"delivered": true}); err != nil {
-		return false, c.failedSupplementAck(ctx, record, err)
-	}
-	if !slices.Contains(record.Done, record.Current.CommentID) {
-		record.Done = append(record.Done, record.Current.CommentID)
+	err := c.taskPost(ctx, record.Task, "supplements/"+record.Current.CommentID+"/ack", map[string]any{"delivered": true})
+	if err != nil {
+		acked, err := c.failedSupplementAck(ctx, record, err)
+		if err != nil || !acked {
+			return false, err
+		}
 	}
 	record.Current, record.Phase, record.Failures, record.RetryAfter = nil, "idle", 0, 0
 	return true, c.supplements.save(*record)

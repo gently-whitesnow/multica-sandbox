@@ -61,7 +61,42 @@ func taskSupplements(t *testing.T, api *multica.Client) {
 	t.Run("terminal-settlement", func(t *testing.T) { supplementTerminal(t, api) })
 	t.Run("cancel-recovery", func(t *testing.T) { supplementRecovery(t, api) })
 	t.Run("ownership", func(t *testing.T) { supplementOwnership(t, api) })
-	t.Run("receipt-inspection", func(t *testing.T) { supplementInspection(t, api) })
+	t.Run("receipt-inspection-absent", func(t *testing.T) { supplementInspectionAbsent(t, api) })
+}
+
+// Native v0.7.2 has no bounded daemon receipt read. The sandbox then does not
+// offer steering at all, even for a provider the server would negotiate.
+func supplementInspectionAbsent(t *testing.T, api *multica.Client) {
+	if os.Getenv("VERIFY_STEERING_NATIVE_PATCH") == "1" {
+		t.Skip("the fixture patch adds receipt inspection")
+	}
+	rt, err := api.RegisterProvider(context.Background(), workspace, "d0000000-0000-4000-8000-000000000081", "opencode")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql(t, fmt.Sprintf("UPDATE agent_runtime SET provider='codex' WHERE id='%s';", rt.ID))
+	id := enqueue(t, rt, 81)
+	task, err := api.Claim(context.Background(), rt.ID)
+	if err != nil || task == nil || task.ID != id {
+		t.Fatalf("inspection fixture claim: %v", err)
+	}
+	nativeAuthorityRequest(t, context.Background(), os.Getenv("MULTICA_TEST_URL"), token(t), "GET", "/api/daemon/tasks/"+id+"/supplements", "", 404)
+	client, err := multica.New(os.Getenv("MULTICA_TEST_URL"), token(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = client.UseSupplements(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	if err = client.Start(context.Background(), *task); err != nil || client.SupplementsNegotiated(*task) {
+		t.Fatalf("steering negotiated without native receipt inspection: %v", err)
+	}
+	if got := sql(t, fmt.Sprintf("SELECT status||'|'||(SELECT count(*) FROM task_supplement_capability WHERE task_id='%s') FROM agent_task_queue WHERE id='%s';", id, id)); got != "running|0" {
+		t.Fatalf("unsupported server recorded a supplement capability: %s", got)
+	}
+	if err = api.AgentComplete(context.Background(), id, execution.Result{Output: "Fixture finished"}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func supplementFixture(t *testing.T, api *multica.Client, n int, provider string, offer bool) *supplements {

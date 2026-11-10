@@ -238,7 +238,11 @@ func (h *httpTurn) supplements(ctx context.Context) {
 				continue
 			}
 		}
-		timer := time.NewTimer(supplementIdleInterval)
+		delay := supplementIdleInterval
+		if retry, pending := h.r.adapter.Steering.SupplementRetryDelay(h.r.task, h.session); pending {
+			delay = min(delay, retry)
+		}
+		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
 			timer.Stop()

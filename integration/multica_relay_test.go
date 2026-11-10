@@ -54,8 +54,10 @@ grep -q 'url = https://git.fixture.test/sandbox/fixture.git' /proc/1/root/worksp
 # The Git relay is the HTTP proxy of the http://git.fixture.test/ remote alias.
 relay() { http_proxy=http://git-relay:8093 wget -q -O /dev/null --header "Authorization: Bearer $1" "http://git.fixture.test/sandbox/$2"; }
 relay "$git" "fixture.git/info/refs?service=git-upload-pack" || exit 24
-relay "$git" "other.git/info/refs?service=git-upload-pack" && exit 25
-relay "$git" "other.git/info/refs?service=git-receive-pack" && exit 26
+# As natively, any repository of a bound host is served (ADR 0015); other hosts are refused.
+relay "$git" "other.git/info/refs?service=git-upload-pack" || exit 25
+relay "$git" "other.git/info/refs?service=git-receive-pack" || exit 26
+http_proxy=http://git-relay:8093 wget -q -O /dev/null --header "Authorization: Bearer $git" "http://unbound.fixture.test/sandbox/fixture.git/info/refs?service=git-upload-pack" 2>&1 | grep -q ' 403 ' || exit 35
 relay "$git" "fixture.git/info/refs?service=git-receive-pack" || exit 29
 wget -q -O /dev/null --header "Authorization: Bearer $git" "http://git-relay:8093/git.fixture.test/sandbox/fixture.git/info/refs?service=git-upload-pack" && exit 34
 [ "$(value GH_ENTERPRISE_TOKEN)" = "$git" ] && [ "$(value GH_HOST)" = git.fixture.test ] || exit 30

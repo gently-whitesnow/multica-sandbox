@@ -1,0 +1,40 @@
+Multica v0.7.2 f05a525ac8e82f5e9169ad078e44f166fad6d5c8
+Fixture-only durable member steering choice; apply after native-receipts.patch.
+Apply with git apply --unidiff-zero against that exact revision.
+
+diff --git a/server/pkg/db/generated/supplement.sql.go b/server/pkg/db/generated/supplement.sql.go
+index c3c8cba..1ea589a 100644
+--- a/server/pkg/db/generated/supplement.sql.go
++++ b/server/pkg/db/generated/supplement.sql.go
+@@ -229,0 +230,10 @@ WITH next AS MATERIALIZED (
++), routed AS (
++    -- A member explicitly chose this running turn, regardless of delivery.
++    -- Keep that routing choice even if repair removes the receipt later.
++    UPDATE comment c
++    SET suppressed_agent_ids = array_append(COALESCE(c.suppressed_agent_ids, '{}'::uuid[]), t.agent_id)
++    FROM claimed s
++    JOIN agent_task_queue t ON t.id = s.task_id
++    WHERE c.id = s.comment_id AND c.author_type = 'member'
++      AND NOT COALESCE(t.agent_id = ANY(c.suppressed_agent_ids), false)
++    RETURNING c.id
+@@ -237,0 +248 @@ LEFT JOIN agent a ON a.id = claimed.author_id AND c.author_type = 'agent'
++WHERE (SELECT count(*) FROM routed) >= 0
+diff --git a/server/pkg/db/queries/supplement.sql b/server/pkg/db/queries/supplement.sql
+index 2cc0353..8ac71d9 100644
+--- a/server/pkg/db/queries/supplement.sql
++++ b/server/pkg/db/queries/supplement.sql
+@@ -248,0 +249,10 @@ WITH next AS MATERIALIZED (
++), routed AS (
++    -- A member explicitly chose this running turn, regardless of delivery.
++    -- Keep that routing choice even if repair removes the receipt later.
++    UPDATE comment c
++    SET suppressed_agent_ids = array_append(COALESCE(c.suppressed_agent_ids, '{}'::uuid[]), t.agent_id)
++    FROM claimed s
++    JOIN agent_task_queue t ON t.id = s.task_id
++    WHERE c.id = s.comment_id AND c.author_type = 'member'
++      AND NOT COALESCE(t.agent_id = ANY(c.suppressed_agent_ids), false)
++    RETURNING c.id
+@@ -256 +266,2 @@ LEFT JOIN "user" u ON u.id = claimed.author_id AND c.author_type = 'member'
+-LEFT JOIN agent a ON a.id = claimed.author_id AND c.author_type = 'agent';
++LEFT JOIN agent a ON a.id = claimed.author_id AND c.author_type = 'agent'
++WHERE (SELECT count(*) FROM routed) >= 0;

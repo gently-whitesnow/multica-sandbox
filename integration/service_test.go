@@ -47,7 +47,7 @@ func prepareService(t *testing.T) serviceFixture {
 	c := service.Config{Server: "http://127.0.0.1:8080", Daemon: daemon, Image: image, Command: []string{"/bin/sh", "-c", "sleep 3"}, Timeout: "30s"}
 	return prepareServiceConfig(t, c)
 }
-func prepareServiceConfig(t *testing.T, c service.Config) serviceFixture {
+func prepareServiceConfig(t *testing.T, c service.Config, setup ...func(map[string]any)) serviceFixture {
 	t.Helper()
 	dir := t.TempDir()
 	f := serviceFixture{fmt.Sprintf("sandbox-service-%d", time.Now().UnixNano()), filepath.Join(dir, "compose.json"), t}
@@ -55,11 +55,16 @@ func prepareServiceConfig(t *testing.T, c service.Config) serviceFixture {
 	if err := os.WriteFile(filepath.Join(dir, "token"), []byte(token(t)), 0600); err != nil {
 		t.Fatal(err)
 	}
+	controller := map[string]any{
+		"network_mode": "container:" + os.Getenv("MULTICA_TEST_SERVER_CONTAINER"),
+		"volumes":      []map[string]any{{"type": "bind", "source": filepath.Join(dir, "config.json"), "target": "/etc/multica-sandbox/controller.json", "read_only": true}},
+	}
+	for _, configure := range setup {
+		configure(controller)
+	}
 	writeJSON(t, f.override, map[string]any{
-		"services": map[string]any{"controller": map[string]any{
-			"network_mode": "container:" + os.Getenv("MULTICA_TEST_SERVER_CONTAINER"),
-			"volumes":      []map[string]any{{"type": "bind", "source": filepath.Join(dir, "config.json"), "target": "/etc/multica-sandbox/controller.json", "read_only": true}},
-		}}, "secrets": map[string]any{"multica_token": map[string]string{"file": filepath.Join(dir, "token")}},
+		"services": map[string]any{"controller": controller},
+		"secrets":  map[string]any{"multica_token": map[string]string{"file": filepath.Join(dir, "token")}},
 	})
 	t.Cleanup(func() {
 		f.compose("down", "-v")
@@ -81,9 +86,26 @@ func writeJSON(t *testing.T, path string, value any) {
 		t.Fatal(err)
 	}
 }
+
+// controllerDiagnostics logs a failed test's controller state and log tail before teardown.
+func controllerDiagnostics(t *testing.T, cid string) {
+	t.Cleanup(func() {
+		if !t.Failed() {
+			return
+		}
+		state, _ := exec.Command("docker", "inspect", "--format", "{{json .State}} restarts={{.RestartCount}}", cid).CombinedOutput()
+		logs, _ := exec.Command("docker", "logs", "--timestamps", "--tail", "120", cid).CombinedOutput()
+		t.Logf("controller state: %s\ncontroller log tail:\n%s", state, logs)
+	})
+}
 func eventually(t *testing.T, description string, condition func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(30 * time.Second)
+	eventuallyWithin(t, description, 30*time.Second, condition)
+}
+
+func eventuallyWithin(t *testing.T, description string, budget time.Duration, condition func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(budget)
 	for time.Now().Before(deadline) {
 		if condition() {
 			return

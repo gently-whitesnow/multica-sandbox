@@ -205,3 +205,80 @@ func httpRuntimeHeartbeat(t *testing.T, ctx context.Context, lines <-chan string
 		}
 	}
 }
+
+// A stopped owner leaves an admission unanswered; the request is cut at its
+// deadline and the resumed owner still admits it. Resending under the same
+// stable ID through the same code path must not create a second input.
+func TestHTTPRuntimeLostAdmissionResponseIsDeduplicated(t *testing.T) {
+	container := httpRuntimeContainer(t, "mkdir -p /workspace/work; sleep 180")
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	owner := exec.CommandContext(ctx, "docker", "exec", "-i", "--env", "OPENCODE_PASSWORD=fixture-password", container, "opencode", "serve", "--stdio", "--hostname", "127.0.0.1", "--port", "4096")
+	stdin, _ := owner.StdinPipe()
+	stdout, _ := owner.StdoutPipe()
+	if err := owner.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = stdin.Close(); _ = owner.Process.Kill() }()
+	remaining, err := nativeHTTPReady(ctx, stdout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go drainHTTPOutput(ctx, remaining)
+	r, _, _ := nativeHTTPFixture()
+	r.nativePassword = "fixture-password"
+	r.workload = &runtimeHTTPWorkload{container: container}
+	session, err := r.httpSession(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shell := func(script string) string {
+		return strings.TrimSpace(string(httpRuntimeDocker(t, "exec", container, "/bin/sh", "-c", script)))
+	}
+	signal := func(name string) {
+		shell(`for d in /proc/[0-9]*; do tr '\0' ' ' < "$d/cmdline" 2>/dev/null | grep -q '^opencode serve' && kill -` + name + ` "${d#/proc/}"; done; true`)
+	}
+	inbox := func() []httpInboxItem {
+		var response struct {
+			Data []httpInboxItem `json:"data"`
+		}
+		if err := r.httpAPI(ctx, "GET", "/api/session/"+session+"/inbox", nil, &response); err != nil {
+			t.Fatal(err)
+		}
+		return response.Data
+	}
+	input := "msg_runtimelostadmission"
+	body := map[string]any{"id": input, "text": "generic pending guidance", "delivery": "steer", "resume": false}
+	// A cold owner drops an admission whose client leaves during its first lazy
+	// load. Attempts steer a session that already took its prompt, so warm it.
+	warm := map[string]any{"id": "msg_runtimewarmup", "text": "generic earlier input", "delivery": "steer", "resume": false}
+	if err = r.httpAPI(ctx, "POST", "/api/session/"+session+"/prompt", warm, nil); err != nil || len(inbox()) != 1 {
+		t.Fatalf("warm-up admission: %v", err)
+	}
+	signal("STOP")
+	failed := make(chan error, 1)
+	go func() { failed <- r.httpAPI(ctx, "POST", "/api/session/"+session+"/prompt", body, nil) }()
+	// The request sits unanswered in the stopped owner's socket; one second lets
+	// it arrive, then the client is killed. (A client that times out by itself
+	// is not admitted later; either way the resend below is safe.)
+	cut := shell(`i=0; while [ "$i" -lt 100 ]; do pid=$(pgrep -x wget) && { sleep 1; kill -KILL $pid; echo cut; exit 0; }; i=$((i+1)); sleep 0.1; done; echo missing`)
+	err = <-failed
+	signal("CONT")
+	if cut != "cut" || err == nil {
+		t.Fatalf("admission was not cut while unanswered: %s %v", cut, err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for len(inbox()) != 2 {
+		if time.Now().After(deadline) {
+			t.Fatalf("resumed owner did not admit the request whose response was lost: stderr=%s ps=%s", r.stderr.String(), shell("ps -o pid,stat,args; ls -la /tmp"))
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if err = r.httpAPI(ctx, "POST", "/api/session/"+session+"/prompt", body, nil); err != nil {
+		t.Fatalf("resend under the stable ID: %v", err)
+	}
+	if items := inbox(); len(items) != 2 || items[0].ID == items[1].ID || items[0].ID != input && items[1].ID != input {
+		t.Fatalf("stable ID did not deduplicate the resent admission: %d inputs", len(items))
+	}
+	t.Log("real OpenCode admitted an unanswered request once; the resend under the same ID added nothing")
+}

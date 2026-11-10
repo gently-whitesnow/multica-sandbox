@@ -20,10 +20,11 @@ func (c *Client) ReplaySupplementAcks(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	c.collectSupplementEvidence()
 	delivered := 0
 	var errs error
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+		if !entry.Type().IsRegular() || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
 		}
 		record, err := s.read(c.base, entry.Name())
@@ -56,10 +57,14 @@ func (c *Client) replaySupplement(ctx context.Context, name string) (int, error)
 	}
 	delivered := 0
 	if record.Phase == "consumed" {
-		if _, err := c.ackSupplement(resent(ctx), &record); err != nil {
+		acked, err := c.ackSupplement(resent(ctx), &record)
+		if err != nil {
 			return 0, err
 		}
-		delivered++
+		c.WakeSupplement(record.Runtime, record.Task)
+		if acked {
+			delivered++
+		}
 	}
 	status, err := c.Status(ctx, record.Task)
 	if err != nil {

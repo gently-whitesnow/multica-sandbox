@@ -42,9 +42,19 @@ git -C "$UPSTREAM" diff --quiet HEAD --
 printf 'Upstream %s from %s\n' "$REV" "${SOURCE:-$REPO}"
 if [ "${VERIFY_STEERING_NATIVE_PATCH:-0}" = 1 ]; then
  [ "$REV" = f05a525ac8e82f5e9169ad078e44f166fad6d5c8 ] || { printf '%s\n' 'Native admission fixture requires pinned Multica v0.7.2' >&2; exit 2; }
- git -C "$UPSTREAM" apply --check "$ROOT/examples/live-steering/native-admission.patch"
- git -C "$UPSTREAM" apply "$ROOT/examples/live-steering/native-admission.patch"
- printf '%s\n' 'FIXTURE ONLY: applied OpenCode server admission patch to the disposable upstream clone'
+ for patch in native-admission native-receipts native-routing; do
+  git -C "$UPSTREAM" apply --unidiff-zero --check "$ROOT/examples/live-steering/$patch.patch"
+  git -C "$UPSTREAM" apply --unidiff-zero "$ROOT/examples/live-steering/$patch.patch"
+ done
+ printf '%s\n' 'FIXTURE ONLY: applied OpenCode admission, receipt inspection and routing patches to the disposable upstream clone'
+fi
+# The suite builds images and runs databases on the engine's disk. Exhaustion surfaces
+# far from its cause, as PostgreSQL errors or a controller that cannot restart.
+FREE=$(docker run --rm alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc df -Pm / | awk 'NR==2 {print $4}')
+NEED=${UPSTREAM_TEST_MIN_FREE_MB:-4096}
+if [ "${FREE:-0}" -lt "$NEED" ]; then
+ printf 'Docker engine has %s MiB free; the upstream suite needs %s (free space in your own test resources before retrying)\n' "${FREE:-0}" "$NEED" >&2
+ exit 2
 fi
 ARCH=$(docker info --format '{{.Architecture}}')
 case "$ARCH" in aarch64|arm64) ARCH=arm64 ;; x86_64|amd64) ARCH=amd64 ;; *) exit 1 ;; esac

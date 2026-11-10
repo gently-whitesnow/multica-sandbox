@@ -34,7 +34,7 @@ func liveSteeringCrash(t *testing.T, api *multica.Client, s *supplements, f serv
 		return sql(t, fmt.Sprintf("SELECT status FROM task_supplement WHERE task_id='%s' AND comment_id='%s';", id, comment)) == "delivering"
 	})
 	status(t, api, id, "running")
-	steeringCrashController(t, f, cid)
+	steeringCrashController(t, f, cid, func() {})
 	waitTask(t, api, id, "failed")
 	if reason := sql(t, fmt.Sprintf("SELECT failure_reason FROM agent_task_queue WHERE id='%s';", id)); reason != "runtime_recovery" {
 		t.Fatalf("controller crash did not use native recovery: %s", reason)
@@ -52,7 +52,7 @@ func liveSteeringCrash(t *testing.T, api *multica.Client, s *supplements, f serv
 	crashed.receipt(comment, "failed|turn_ended|1")
 }
 
-func steeringCrashController(t *testing.T, f serviceFixture, cid string) {
+func steeringCrashController(t *testing.T, f serviceFixture, cid string, whileDown func()) {
 	t.Helper()
 	if f.compose("ps", "-q", "controller") != cid {
 		t.Fatal("controller container no longer belongs to crash fixture")
@@ -60,6 +60,7 @@ func steeringCrashController(t *testing.T, f serviceFixture, cid string) {
 	started := dockerTest(t, "inspect", "--format", "{{.State.StartedAt}}", cid)
 	ready := strings.Count(dockerTest(t, "logs", cid), readyEvent)
 	dockerTest(t, "kill", "--signal", "KILL", cid)
+	whileDown()
 	// A manual Docker kill may suppress restart policy; preserve this container
 	// and its controller state volume while explicitly starting it again.
 	f.compose("up", "-d", "--no-build", "controller")

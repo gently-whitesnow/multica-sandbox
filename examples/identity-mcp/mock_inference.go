@@ -10,6 +10,7 @@ import (
 )
 
 var issuePattern = regexp.MustCompile(`Your assigned issue ID is: ([0-9a-f-]{36})`)
+var echoPattern = regexp.MustCompile(`live-steering-echo-([a-z0-9]{1,16})`)
 var titlePattern = regexp.MustCompile(`"title":\s*"([A-Za-z0-9 ]{1,64})"`)
 var parentPattern = regexp.MustCompile(`--parent ([0-9a-f-]{36})`)
 var warmHints = []*regexp.Regexp{
@@ -25,6 +26,30 @@ func mockProvider() error {
 	mux.HandleFunc("/v1/chat/completions", mockInference)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(204) })
 	return serve(":8080", mux)
+}
+
+func messageText(content any) string {
+	if text, ok := content.(string); ok {
+		return text
+	}
+	data, _ := json.Marshal(content)
+	return string(data)
+}
+
+// echoGuidance returns the echo token of the latest prompt, if any. Echo guidance
+// appends its token and holds the turn open until released; the final reply lists
+// the tokens in consumption order, with a marker when any input appears twice.
+func echoGuidance(users []string) ([]string, string) {
+	seen, repeated := map[string]int{}, ""
+	var latest []string
+	for _, text := range users {
+		if latest = echoPattern.FindStringSubmatch(text); latest != nil {
+			if seen[latest[1]]++; seen[latest[1]] > 1 {
+				repeated = " DUPLICATE-INPUT"
+			}
+		}
+	}
+	return latest, repeated
 }
 
 // No provider or account is contacted: deterministic tool turns test the MCP adapter.
@@ -50,15 +75,13 @@ func mockInference(w http.ResponseWriter, r *http.Request) {
 	ws := "10000000-0000-4000-8000-000000000001"
 	issue, result := "", ""
 	steeringInitial := false
+	var users []string
 	for _, message := range body.Messages {
-		text, ok := message.Content.(string)
-		if !ok {
-			data, _ := json.Marshal(message.Content)
-			text = string(data)
-		}
+		text := messageText(message.Content)
 		if message.Role == "user" {
 			prompts++
 			count, result, latest = 0, "", text
+			users = append(users, text)
 		}
 		if message.Role == "tool" {
 			count++
@@ -73,6 +96,7 @@ func mockInference(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	chat := strings.Contains(latest, "You are running as a chat assistant for a Multica workspace.")
+	echo, repeated := echoGuidance(users)
 	// OpenCode 2.x names the shell tool "shell"; 1.x calls it "bash".
 	name, shell := "", ""
 	for _, tool := range body.Tools {
@@ -99,6 +123,10 @@ func mockInference(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case strings.Contains(latest, "live-steering-guidance-never"):
 		delta = map[string]any{"content": "STALE-GUIDANCE-WAS-REPLAYED"}
+	case echo != nil && count == 0:
+		call(shell, map[string]string{"command": "printf '%s\\n' " + echo[1] + " >> echo.txt; touch /workspace/.steering-echo-" + echo[1] + "; while [ ! -f /workspace/.steering-echo-release-" + echo[1] + " ]; do sleep 0.1; done; cat echo.txt", "description": "Apply steering guidance " + echo[1]})
+	case echo != nil:
+		delta = map[string]any{"content": "ECHO-ORDER " + strings.Join(strings.Fields(result), " ") + repeated}
 	case strings.Contains(latest, "live-steering-cancel-check"):
 		call(shell, map[string]string{"command": "touch /workspace/.steering-cancel-active; sleep 120", "description": "Await task cancellation"})
 	case strings.Contains(latest, "live-steering-resume-check") && count == 0:
@@ -152,6 +180,10 @@ func mockInference(w http.ResponseWriter, r *http.Request) {
 		call(shell, map[string]string{"command": "multica issue get " + issue + " --output json", "description": "Read the assigned issue"})
 	case bash && issue != "" && count == 1:
 		if title := titlePattern.FindStringSubmatch(result); title != nil {
+			if title[1] == "Steering fault fixture" {
+				call(shell, map[string]string{"command": "touch /workspace/.steering-hold-active; while [ ! -f /workspace/.steering-hold-release ]; do sleep 0.1; done; echo hold-finished", "description": "Await mid-turn steering"})
+				break
+			}
 			if title[1] == "Live steering fixture" {
 				call(shell, map[string]string{"command": "touch /workspace/.steering-initial-active; while [ ! -f /workspace/.steering-release ]; do sleep 0.1; done; echo initial-tool-finished", "description": "Await mid-turn steering"})
 				break

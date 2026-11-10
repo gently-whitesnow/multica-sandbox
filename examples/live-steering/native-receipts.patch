@@ -1,0 +1,122 @@
+Multica v0.7.2 f05a525ac8e82f5e9169ad078e44f166fad6d5c8
+Fixture-only daemon receipt inspection; applies after native-admission.patch.
+Apply with git apply --unidiff-zero against that exact revision.
+
+diff --git a/server/cmd/server/router.go b/server/cmd/server/router.go
+index 8b9bd78..27974e2 100644
+--- a/server/cmd/server/router.go
++++ b/server/cmd/server/router.go
+@@ -1603,0 +1604 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
++		r.Get("/tasks/{taskId}/supplements", h.InspectTaskSupplements)
+diff --git a/server/internal/handler/task_supplement.go b/server/internal/handler/task_supplement.go
+index b578802..71bdf89 100644
+--- a/server/internal/handler/task_supplement.go
++++ b/server/internal/handler/task_supplement.go
+@@ -497,0 +498,45 @@ func (h *Handler) ClaimTaskSupplement(w http.ResponseWriter, r *http.Request) {
++// InspectTaskSupplements is the claiming daemon's bounded read of its own
++// delivery state: the run's status, its oldest unacknowledged claim with the
++// claim payload, and with ?comment_id= that one receipt. It resolves a lost
++// claim or acknowledgement response without a second claim or a timeline read.
++func (h *Handler) InspectTaskSupplements(w http.ResponseWriter, r *http.Request) {
++	task, workspaceID, ok := h.requireDaemonTaskAccessWithWorkspace(w, r, chi.URLParam(r, "taskId"))
++	if !ok {
++		return
++	}
++	resp := map[string]any{"task_status": task.Status}
++	if raw := r.URL.Query().Get("comment_id"); raw != "" {
++		commentID, ok := parseUUIDOrBadRequest(w, raw, "comment id")
++		if !ok {
++			return
++		}
++		receipt, err := h.Queries.GetTaskSupplementForRun(r.Context(), db.GetTaskSupplementForRunParams{
++			CommentID: commentID, TaskID: task.ID, WorkspaceID: parseUUID(workspaceID),
++		})
++		switch {
++		case errors.Is(err, pgx.ErrNoRows):
++			resp["receipt"] = map[string]any{"comment_id": uuidToString(commentID), "status": "none"}
++		case err != nil:
++			writeError(w, http.StatusInternalServerError, "failed to inspect additional message")
++			return
++		default:
++			resp["receipt"] = map[string]any{
++				"comment_id": uuidToString(receipt.CommentID), "status": receipt.Status,
++				"failure_reason": receipt.FailureReason.String, "attempt_count": receipt.AttemptCount,
++			}
++		}
++	}
++	row, err := h.Queries.GetDeliveringTaskSupplement(r.Context(), task.ID)
++	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
++		writeError(w, http.StatusInternalServerError, "failed to inspect additional messages")
++		return
++	}
++	if err == nil {
++		resp["delivering"] = map[string]any{
++			"comment_id": uuidToString(row.CommentID), "author_type": row.AuthorType, "author_name": row.AuthorName,
++			"content": row.Content,
++		}
++	}
++	writeJSON(w, http.StatusOK, resp)
++}
++
+diff --git a/server/pkg/db/generated/supplement.sql.go b/server/pkg/db/generated/supplement.sql.go
+index 845e5f9..c3c8cba 100644
+--- a/server/pkg/db/generated/supplement.sql.go
++++ b/server/pkg/db/generated/supplement.sql.go
+@@ -451,0 +452,37 @@ func (q *Queries) DeleteUndeliveredTaskSupplementForRun(ctx context.Context, arg
++const getDeliveringTaskSupplement = `-- name: GetDeliveringTaskSupplement :one
++SELECT s.comment_id, s.attempt_count, c.content, c.author_type,
++       COALESCE(NULLIF(btrim(COALESCE(u.name, a.name)), ''),
++                CASE WHEN c.author_type = 'agent' THEN 'an agent' ELSE 'a user' END)::text AS author_name
++FROM task_supplement s
++JOIN comment c ON c.id = s.comment_id
++LEFT JOIN "user" u ON u.id = s.author_id AND c.author_type = 'member'
++LEFT JOIN agent a ON a.id = s.author_id AND c.author_type = 'agent'
++WHERE s.task_id = $1
++  AND s.status = 'delivering'
++ORDER BY s.updated_at, s.created_at, s.comment_id
++LIMIT 1
++`
++
++type GetDeliveringTaskSupplementRow struct {
++	CommentID    pgtype.UUID `json:"comment_id"`
++	AttemptCount int32       `json:"attempt_count"`
++	Content      string      `json:"content"`
++	AuthorType   string      `json:"author_type"`
++	AuthorName   string      `json:"author_name"`
++}
++
++// The oldest claim this run has not acknowledged, with the claim's payload. A
++// daemon that lost a claim response reads it here instead of claiming again.
++func (q *Queries) GetDeliveringTaskSupplement(ctx context.Context, taskID pgtype.UUID) (GetDeliveringTaskSupplementRow, error) {
++	row := q.db.QueryRow(ctx, getDeliveringTaskSupplement, taskID)
++	var i GetDeliveringTaskSupplementRow
++	err := row.Scan(
++		&i.CommentID,
++		&i.AttemptCount,
++		&i.Content,
++		&i.AuthorType,
++		&i.AuthorName,
++	)
++	return i, err
++}
++
+diff --git a/server/pkg/db/queries/supplement.sql b/server/pkg/db/queries/supplement.sql
+index fe31cfd..2cc0353 100644
+--- a/server/pkg/db/queries/supplement.sql
++++ b/server/pkg/db/queries/supplement.sql
+@@ -257,0 +258,15 @@ LEFT JOIN agent a ON a.id = claimed.author_id AND c.author_type = 'agent';
++-- name: GetDeliveringTaskSupplement :one
++-- The oldest claim this run has not acknowledged, with the claim's payload. A
++-- daemon that lost a claim response reads it here instead of claiming again.
++SELECT s.comment_id, s.attempt_count, c.content, c.author_type,
++       COALESCE(NULLIF(btrim(COALESCE(u.name, a.name)), ''),
++                CASE WHEN c.author_type = 'agent' THEN 'an agent' ELSE 'a user' END)::text AS author_name
++FROM task_supplement s
++JOIN comment c ON c.id = s.comment_id
++LEFT JOIN "user" u ON u.id = s.author_id AND c.author_type = 'member'
++LEFT JOIN agent a ON a.id = s.author_id AND c.author_type = 'agent'
++WHERE s.task_id = @task_id
++  AND s.status = 'delivering'
++ORDER BY s.updated_at, s.created_at, s.comment_id
++LIMIT 1;
++

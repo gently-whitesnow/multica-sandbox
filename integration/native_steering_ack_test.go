@@ -34,16 +34,15 @@ func nativeSupplementAckQuarantine(t *testing.T, api *multica.Client) {
 		s.finish()
 		return nil
 	})
-	if !multica.Conflict(err) || client.SupplementsNegotiated(s.task) {
-		t.Fatal("native terminal409 was hidden or kept active", err)
+	if err != nil || client.SupplementsNegotiated(s.task) {
+		t.Fatal("native terminal 409 was not settled", err)
 	}
-	entries, err := os.ReadDir(dir)
-	if err != nil || len(entries) != 1 || !strings.HasSuffix(entries[0].Name(), ".quarantine") {
-		t.Fatal("native refusal did not preserve quarantined evidence", err)
+	if active := steeringJournals(t, dir); len(active) != 0 {
+		t.Fatalf("refused consumption stayed in the replay set: %v", active)
 	}
-	data, err := os.ReadFile(filepath.Join(dir, entries[0].Name()))
-	if err != nil || !strings.Contains(string(data), `"phase":"consumed"`) || !strings.Contains(string(data), comment) || strings.Contains(string(data), token(t)) {
-		t.Fatal("quarantine lost evidence or persisted credentials", err)
+	data := steeringEvidence(t, dir, 1)
+	if !strings.Contains(data, `"phase":"consumed"`) || !strings.Contains(data, `"reason":"receipt_none"`) || !strings.Contains(data, comment) || strings.Contains(data, token(t)) {
+		t.Fatal("quarantine lost evidence or persisted credentials")
 	}
 	restarted, err := multica.New(os.Getenv("MULTICA_TEST_URL"), token(t))
 	if err != nil {
@@ -58,4 +57,41 @@ func nativeSupplementAckQuarantine(t *testing.T, api *multica.Client) {
 	if got := sql(t, fmt.Sprintf("SELECT count(*) FROM agent_task_queue WHERE issue_id='%s';", s.task.IssueID)); got != "1" {
 		t.Fatal("ack refusal spawned another native task")
 	}
+}
+
+// steeringJournals lists the active (replayable) journal files of a client.
+func steeringJournals(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := []string{}
+	for _, entry := range entries {
+		if entry.Type().IsRegular() {
+			names = append(names, entry.Name())
+		}
+	}
+	return names
+}
+
+// steeringEvidence returns the concatenated quarantined evidence after checking its count.
+func steeringEvidence(t *testing.T, dir string, want int) string {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Join(dir, "quarantine"))
+	if err != nil && !(os.IsNotExist(err) && want == 0) {
+		t.Fatal(err)
+	}
+	if len(entries) != want {
+		t.Fatalf("quarantined evidence entries=%d, want %d", len(entries), want)
+	}
+	var all strings.Builder
+	for _, entry := range entries {
+		data, err := os.ReadFile(filepath.Join(dir, "quarantine", entry.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		all.Write(data)
+	}
+	return all.String()
 }

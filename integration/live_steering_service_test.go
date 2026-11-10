@@ -20,31 +20,14 @@ func liveSteeringService(t *testing.T, api *multica.Client) {
 	if os.Getenv("VERIFY_STEERING_NATIVE_PATCH") != "1" || os.Getenv("VERIFY_OPENCODE") != "1" || os.Getenv("VERIFY_SERVICE") != "1" {
 		t.Skip("requires opt-in native admission patch and real service/OpenCode fixtures")
 	}
-	dir, stamp := t.TempDir(), time.Now().UnixNano()
-	project := fmt.Sprintf("sandbox-steering-%d", stamp)
-	network := strings.TrimSuffix(os.Getenv("MULTICA_TEST_SERVER_CONTAINER"), "-server")
-	override := filepath.Join(dir, "fixture.json")
-	writeJSON(t, override, map[string]any{"services": map[string]any{"seed": map[string]any{"environment": map[string]string{"ROTATION_FIXTURE": "1"}}, "provider": providerService()}, "networks": map[string]any{"fixture": map[string]any{"external": true, "name": network, "internal": nil}, "execution": map[string]any{"internal": true}}})
-	startFixture(t, project, override, []string{"gateway", "provider"})
-	f := serviceFixture{fmt.Sprintf("sandbox-steering-controller-%d", stamp), filepath.Join(dir, "controller.json"), t}
-	controller := fmt.Sprintf("d1000000-0000-4000-8000-%012x", uint64(stamp)&0xffffffffffff)
-	t.Cleanup(func() { cleanupSteeringSessions(t, controller) })
-	command := `OPENCODE_CONFIG_CONTENT='{"model":"fixture/fixture","enabled_providers":["fixture"],"provider":{"fixture":{"npm":"@ai-sdk/openai-compatible","name":"Fixture","options":{"baseURL":"http://provider:8080/v1"},"models":{"fixture":{"name":"Fixture","limit":{"context":64000,"output":4096}}}}}}' exec opencode serve --stdio --hostname 127.0.0.1 --port 4096`
-	c := service.Config{Server: "http://" + os.Getenv("MULTICA_TEST_SERVER_CONTAINER") + ":8080", AllowHTTP: true, Daemon: controller, Image: officialImage,
-		Command: []string{"/bin/sh", "-c", command}, Timeout: "180s", OpenCode: &service.OpenCodeConfig{LiveSteering: true, Network: project + "_execution", Peers: []string{project + "-provider-1", f.project + "-controller-1"},
-			MulticaRelay: &service.RelayConfig{Listen: ":8091", URL: "http://multica-relay:8091"}, MulticaCLI: os.Getenv("MULTICA_TEST_CLI_IMAGE"), Helper: os.Getenv("MULTICA_TEST_HELPER_IMAGE"), Sessions: &service.SessionsConfig{TTL: "1h", Max: 8}}}
-	writeJSON(t, filepath.Join(dir, "identity.json"), map[string]any{})
-	rt, err := api.RegisterProvider(context.Background(), workspace, controller, "opencode")
-	if err != nil {
-		t.Fatal(err)
-	}
-	id := enqueue(t, rt, 791)
-	sql(t, fmt.Sprintf(`UPDATE issue SET title='Live steering fixture' WHERE id='40000000-0000-4000-8000-000000000791';
+	var id string
+	e := startSteering(t, api, false, func(rt multica.Runtime) {
+		id = enqueue(t, rt, 791)
+		sql(t, fmt.Sprintf(`UPDATE issue SET title='Live steering fixture' WHERE id='40000000-0000-4000-8000-000000000791';
 INSERT INTO comment(id,issue_id,workspace_id,author_type,author_id,content,type) VALUES('d3000000-0000-4000-8000-000000000001','40000000-0000-4000-8000-000000000791','%s','member','%s','LIVE-STEERING-INITIAL','comment');
 UPDATE agent_task_queue SET trigger_comment_id='d3000000-0000-4000-8000-000000000001' WHERE id='%s';`, workspace, user, id))
-	prepareManagedService(t, f, dir, c, project, network)
-	controllerContainer := f.compose("ps", "-q", "controller")
-	eventually(t, "steering runtime registration", func() bool { return strings.Contains(dockerTest(t, "logs", controllerContainer), readyEvent) })
+	})
+	f, dir, controller, command, c, controllerContainer := e.f, e.dir, e.controller, e.command, e.c, e.container
 	t.Cleanup(func() {
 		if t.Failed() {
 			t.Logf("fixture task state: %s", sql(t, fmt.Sprintf("SELECT status||'|'||coalesce(error,'') FROM agent_task_queue WHERE id='%s';", id)))
@@ -166,10 +149,19 @@ func steeringScope(t *testing.T, s *supplements) *supplements {
 }
 
 func liveSteeringMarker(t *testing.T, controller, marker string) string {
+	return liveSteeringTaskMarker(t, controller, marker, "")
+}
+
+func liveSteeringTaskMarker(t *testing.T, controller, marker, task string) string {
 	t.Helper()
 	containers := dockerTest(t, "ps", "--filter", "label=io.multica-sandbox.owner="+controller, "--format", "{{.ID}}")
 	for _, container := range strings.Fields(containers) {
-		if _, err := execOutput(container, "test -f \"/proc/1/root$1\"", marker); err == nil {
+		if _, err := execOutput(container, `test -f "/proc/1/root$1" || exit 1
+[ -z "$2" ] && exit 0
+for d in /proc/[0-9]*; do
+ if tr '\0' '\n' < "$d/environ" 2>/dev/null | grep -qFx "MULTICA_TASK_ID=$2"; then exit 0; fi
+done
+exit 1`, marker, task); err == nil {
 			return container
 		}
 	}
@@ -201,4 +193,56 @@ func liveSteeringResult(t *testing.T, id, session string) {
 	if ordered != "t" {
 		t.Fatal("steering transcript sequence has gaps or duplicates")
 	}
+}
+
+// steeringEnv is a real controller with the owned OpenCode HTTP transport against
+// the patched disposable server, optionally behind the fault proxy.
+type steeringEnv struct {
+	f                                   serviceFixture
+	c                                   service.Config
+	dir, controller, command, container string
+	// proxy is the fault proxy's control address on the host, empty without faults.
+	proxy string
+	rt    multica.Runtime
+}
+
+func startSteering(t *testing.T, api *multica.Client, withFaults bool, prepare func(multica.Runtime)) *steeringEnv {
+	t.Helper()
+	dir, stamp := t.TempDir(), time.Now().UnixNano()
+	project := fmt.Sprintf("sandbox-steering-%d", stamp)
+	server := os.Getenv("MULTICA_TEST_SERVER_CONTAINER")
+	network := strings.TrimSuffix(server, "-server")
+	override := filepath.Join(dir, "fixture.json")
+	services := map[string]any{"seed": map[string]any{"environment": map[string]string{"ROTATION_FIXTURE": "1"}}, "provider": providerService()}
+	targets, origin := []string{"gateway", "provider"}, "http://"+server+":8080"
+	if withFaults {
+		proxy := providerService()
+		proxy["command"], proxy["networks"], proxy["ports"] = []string{"fault-proxy"}, []string{"fixture"}, []string{"127.0.0.1::8080"}
+		proxy["environment"] = map[string]string{"UPSTREAM": origin}
+		services["faults"], targets, origin = proxy, append(targets, "faults"), "http://"+project+"-faults-1:8080"
+	}
+	writeJSON(t, override, map[string]any{"services": services, "networks": map[string]any{"fixture": map[string]any{"external": true, "name": network, "internal": nil}, "execution": map[string]any{"internal": true}}})
+	startFixture(t, project, override, targets)
+	e := &steeringEnv{f: serviceFixture{fmt.Sprintf("sandbox-steering-controller-%d", stamp), filepath.Join(dir, "controller.json"), t}, dir: dir}
+	if withFaults {
+		e.proxy = "http://127.0.0.1:" + strings.TrimSpace(strings.SplitN(dockerTest(t, "port", project+"-faults-1", "8080/tcp"), ":", 2)[1])
+	}
+	e.controller = fmt.Sprintf("d1000000-0000-4000-8000-%012x", uint64(stamp)&0xffffffffffff)
+	t.Cleanup(func() { cleanupSteeringSessions(t, e.controller) })
+	e.command = `OPENCODE_CONFIG_CONTENT='{"model":"fixture/fixture","enabled_providers":["fixture"],"provider":{"fixture":{"npm":"@ai-sdk/openai-compatible","name":"Fixture","options":{"baseURL":"http://provider:8080/v1"},"models":{"fixture":{"name":"Fixture","limit":{"context":64000,"output":4096}}}}}}' exec opencode serve --stdio --hostname 127.0.0.1 --port 4096`
+	e.c = service.Config{Server: origin, AllowHTTP: true, Daemon: e.controller, Image: officialImage,
+		Command: []string{"/bin/sh", "-c", e.command}, Timeout: "180s", OpenCode: &service.OpenCodeConfig{LiveSteering: true, Network: project + "_execution", Peers: []string{project + "-provider-1", e.f.project + "-controller-1"},
+			MulticaRelay: &service.RelayConfig{Listen: ":8091", URL: "http://multica-relay:8091"}, MulticaCLI: os.Getenv("MULTICA_TEST_CLI_IMAGE"), Helper: os.Getenv("MULTICA_TEST_HELPER_IMAGE"), Sessions: &service.SessionsConfig{TTL: "1h", Max: 8}}}
+	writeJSON(t, filepath.Join(dir, "identity.json"), map[string]any{})
+	rt, err := api.RegisterProvider(context.Background(), workspace, e.controller, "opencode")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.rt = rt
+	prepare(rt)
+	prepareManagedService(t, e.f, dir, e.c, project, network)
+	e.container = e.f.compose("ps", "-q", "controller")
+	controllerDiagnostics(t, e.container)
+	eventually(t, "steering runtime registration", func() bool { return strings.Contains(dockerTest(t, "logs", e.container), readyEvent) })
+	return e
 }

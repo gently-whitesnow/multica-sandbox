@@ -14,6 +14,8 @@ const supplementJournalLimit = 1 << 20
 
 type supplementStore struct {
 	dir        string
+	collected  time.Time
+	evidence   sync.Mutex
 	mu         sync.Mutex
 	negotiated map[string]string
 	flight     map[string]bool
@@ -33,7 +35,6 @@ type supplementRecord struct {
 	Session    string          `json:"session_id"`
 	Phase      string          `json:"phase"`
 	Current    *taskSupplement `json:"current,omitempty"`
-	Done       []string        `json:"done,omitempty"`
 	Failures   int             `json:"failures,omitempty"`
 	RetryAfter int64           `json:"retry_after,omitempty"`
 }
@@ -47,7 +48,7 @@ func (c *Client) UseSupplements(dir string) error {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
-	file, err := os.CreateTemp(dir, ".probe-*")
+	file, err := os.CreateTemp(dir, supplementTemp+"*")
 	if err != nil {
 		return err
 	}
@@ -56,6 +57,8 @@ func (c *Client) UseSupplements(dir string) error {
 		return err
 	}
 	c.supplements = &supplementStore{dir: dir, negotiated: map[string]string{}, flight: map[string]bool{}, wake: map[string]chan struct{}{}, now: time.Now}
+	// Cold start collects before any delivery; replay repeats it periodically.
+	c.collectSupplementEvidence()
 	return nil
 }
 
@@ -118,13 +121,8 @@ func (s *supplementStore) load(c *Client, t Task, session string) (supplementRec
 
 func (r supplementRecord) valid(server string) bool {
 	_, err := time.Parse(time.RFC3339Nano, r.Dispatched)
-	if r.Version != 1 || r.Server != server || !validID(r.Workspace) || !validID(r.Runtime) || !validID(r.Task) || !validID(r.Issue) || err != nil || !supplementSession.MatchString(r.Session) || len(r.Done) > 4096 || r.Failures < 0 || r.Failures > 8 || r.RetryAfter < 0 {
+	if r.Version != 1 || r.Server != server || !validID(r.Workspace) || !validID(r.Runtime) || !validID(r.Task) || !validID(r.Issue) || err != nil || !supplementSession.MatchString(r.Session) || r.Failures < 0 || r.Failures > 8 || r.RetryAfter < 0 {
 		return false
-	}
-	for _, id := range r.Done {
-		if !validID(id) {
-			return false
-		}
 	}
 	switch r.Phase {
 	case "idle", "claiming":
@@ -136,11 +134,20 @@ func (r supplementRecord) valid(server string) bool {
 }
 
 func (s *supplementStore) save(r supplementRecord) error {
+	// Collection must never remove an in-flight temporary journal, even if
+	// a stalled fsync outlasts the stale-temp retention window.
+	s.evidence.Lock()
+	defer s.evidence.Unlock()
 	data, err := json.Marshal(r)
 	if err != nil || len(data) > supplementJournalLimit {
 		return fmt.Errorf("supplement journal exceeds its bound")
 	}
-	file, err := os.CreateTemp(s.dir, ".supplement-*")
+	return writeSupplementFile(s.dir, fileName(r.key()), data)
+}
+
+// writeSupplementFile replaces name atomically and syncs the file and directory.
+func writeSupplementFile(dir, name string, data []byte) error {
+	file, err := os.CreateTemp(dir, supplementTemp+"*")
 	if err != nil {
 		return err
 	}
@@ -152,10 +159,10 @@ func (s *supplementStore) save(r supplementRecord) error {
 	if err != nil {
 		return err
 	}
-	if err = os.Rename(file.Name(), s.path(r.key())); err != nil {
+	if err = os.Rename(file.Name(), filepath.Join(dir, name)); err != nil {
 		return err
 	}
-	return syncSupplementDir(s.dir)
+	return syncSupplementDir(dir)
 }
 
 func (s *supplementStore) path(key string) string { return filepath.Join(s.dir, fileName(key)) }

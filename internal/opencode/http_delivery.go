@@ -47,6 +47,9 @@ func (h *httpTurn) deliver(ctx context.Context, id, text string) error {
 			return h.withdraw(ctx, id, generation)
 		}
 		if admissionErr != nil && time.Now().After(retryAfter) {
+			if h.r.adapter.Log != nil {
+				h.r.adapter.Log.Info("additional input admission unanswered; resending under the same id", "task", h.r.task.ID, "attempt", h.r.task.AttemptKey(), "input", id)
+			}
 			admissionErr = h.r.httpAPI(ctx, "POST", path+"/prompt", body, nil)
 			retryAfter = time.Now().Add(supplementPollInterval)
 		}

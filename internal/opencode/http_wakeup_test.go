@@ -19,9 +19,13 @@ func TestHTTPSupplementHintWakesOwningAttemptBeforePollingFallback(t *testing.T)
 			_, _ = io.WriteString(w, `{"supplement_capability":"task-supplement-v1"}`)
 			return
 		}
-		if strings.HasSuffix(r.URL.Path, "/status") {
+		if strings.HasSuffix(r.URL.Path, "/supplements") {
 			status <- struct{}{}
-			_, _ = io.WriteString(w, `{"status":"queued"}`)
+			_, _ = io.WriteString(w, `{"task_status":"running"}`)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/claim") {
+			_, _ = io.WriteString(w, `{}`)
 			return
 		}
 		w.WriteHeader(404)
@@ -39,6 +43,11 @@ func TestHTTPSupplementHintWakesOwningAttemptBeforePollingFallback(t *testing.T)
 	if err := client.Start(context.Background(), r.task); err != nil {
 		t.Fatal(err)
 	}
+	if !client.SupplementsNegotiated(r.task) {
+		t.Fatal("fixture did not negotiate supplements")
+	}
+	// Start probes the receipt endpoint before offering the capability.
+	<-status
 	r.adapter.Steering = client
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

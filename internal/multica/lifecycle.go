@@ -156,7 +156,8 @@ func (c *Client) Start(ctx context.Context, t Task) error {
 	if !validID(t.ID) {
 		return fmt.Errorf("invalid task ID")
 	}
-	offer := c.supplements != nil && t.ValidAttempt() && validID(t.IssueID)
+	// Offered only where the server can also resolve lost responses (ADR 0036).
+	offer := c.supplements != nil && t.ValidAttempt() && validID(t.IssueID) && c.supplementReceipts(ctx, t)
 	negotiated, err := c.startTask(ctx, t, offer)
 	if c.supplements != nil {
 		c.supplements.negotiate(t, err == nil && negotiated)
