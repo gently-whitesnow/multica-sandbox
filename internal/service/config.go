@@ -102,6 +102,7 @@ func ReadConfig(path string) (Config, error) {
 }
 
 type OpenCodeConfig struct {
+	LiveSteering bool         `json:"live_steering,omitempty"`
 	IdentityFile string       `json:"identity_file,omitempty"`
 	MCPRelay     *RelayConfig `json:"mcp_relay,omitempty"`
 	// MCPPublicProxy enables arbitrary selected public MCP endpoints through trusted egress.

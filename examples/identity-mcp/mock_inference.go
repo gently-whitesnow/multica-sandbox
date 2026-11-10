@@ -49,6 +49,7 @@ func mockInference(w http.ResponseWriter, r *http.Request) {
 	count, prompts, latest := 0, 0, ""
 	ws := "10000000-0000-4000-8000-000000000001"
 	issue, result := "", ""
+	steeringInitial := false
 	for _, message := range body.Messages {
 		text, ok := message.Content.(string)
 		if !ok {
@@ -66,6 +67,7 @@ func mockInference(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(text, "workspace-two") {
 			ws = "10000000-0000-4000-8000-000000000002"
 		}
+		steeringInitial = steeringInitial || strings.Contains(text, "LIVE-STEERING-INITIAL")
 		if match := issuePattern.FindStringSubmatch(text); match != nil {
 			issue = match[1]
 		}
@@ -95,6 +97,26 @@ func mockInference(w http.ResponseWriter, r *http.Request) {
 		finish = "tool_calls"
 	}
 	switch {
+	case strings.Contains(latest, "live-steering-guidance-never"):
+		delta = map[string]any{"content": "STALE-GUIDANCE-WAS-REPLAYED"}
+	case strings.Contains(latest, "live-steering-cancel-check"):
+		call(shell, map[string]string{"command": "touch /workspace/.steering-cancel-active; sleep 120", "description": "Await task cancellation"})
+	case strings.Contains(latest, "live-steering-resume-check") && count == 0:
+		call(shell, map[string]string{"command": "cat notes.txt", "description": "Read retained steering guidance"})
+	case strings.Contains(latest, "live-steering-resume-check"):
+		prefix := "Resumed"
+		if strings.Contains(latest, "## Session Continuity Notice") {
+			prefix = "Fresh after interrupted owner"
+		}
+		delta = map[string]any{"content": prefix + " steering guidance one two"}
+	case strings.Contains(latest, "live-steering-guidance-one") && count == 0:
+		call(shell, map[string]string{"command": "printf 'one\\n' >> notes.txt; touch /workspace/.steering-first-active; while [ ! -f /workspace/.steering-release-two ]; do sleep 0.1; done; echo first-guidance-finished", "description": "Apply first steering guidance"})
+	case strings.Contains(latest, "live-steering-guidance-two") && count == 0:
+		call(shell, map[string]string{"command": "printf 'two\\n' >> notes.txt; cat notes.txt", "description": "Apply second steering guidance"})
+	case strings.Contains(latest, "live-steering-guidance-two"):
+		delta = map[string]any{"content": "STEERING-ORDER one two"}
+	case steeringInitial && count == 0:
+		call(shell, map[string]string{"command": "touch /workspace/.steering-initial-active; while [ ! -f /workspace/.steering-release ]; do sleep 0.1; done; echo initial-tool-finished", "description": "Await mid-turn steering"})
 	case bash && chat && count == 0:
 		// Chat runs read the stored transcript and leave a note; a resumed chat reads the note.
 		command := "multica chat history --output json | grep -q 'code word violet' && printf violet > chat-note.txt && echo 'history read'"
@@ -130,6 +152,10 @@ func mockInference(w http.ResponseWriter, r *http.Request) {
 		call(shell, map[string]string{"command": "multica issue get " + issue + " --output json", "description": "Read the assigned issue"})
 	case bash && issue != "" && count == 1:
 		if title := titlePattern.FindStringSubmatch(result); title != nil {
+			if title[1] == "Live steering fixture" {
+				call(shell, map[string]string{"command": "touch /workspace/.steering-initial-active; while [ ! -f /workspace/.steering-release ]; do sleep 0.1; done; echo initial-tool-finished", "description": "Await mid-turn steering"})
+				break
+			}
 			// Relay fixture tasks hold up to 40 s until the test probe marks the live attempt.
 			hold, checkout := "", ""
 			if title[1] == "Relay fixture issue" || title[1] == "Repository fixture issue" {

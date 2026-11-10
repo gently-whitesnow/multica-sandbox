@@ -23,10 +23,11 @@ const UpstreamRevision = "f05a525ac8e82f5e9169ad078e44f166fad6d5c8"
 const ProbeProvider = "sandbox-probe"
 
 type Client struct {
-	base   string
-	token  string
-	http   *http.Client
-	outbox *Outbox
+	base        string
+	token       string
+	http        *http.Client
+	outbox      *Outbox
+	supplements *supplementStore
 	// metrics and log, when set, record each request (Instrument).
 	metrics *metrics.Metrics
 	log     *slog.Logger
@@ -86,6 +87,10 @@ func (c *Client) callLimit(ctx context.Context, method, path string, body, out a
 
 // send returns a response body of at most read bytes; 0 discards it.
 func (c *Client) send(ctx context.Context, method, path string, body any, read int) (data []byte, err error) {
+	return c.sendHeaders(ctx, method, path, body, read, nil)
+}
+
+func (c *Client) sendHeaders(ctx context.Context, method, path string, body any, read int, headers http.Header) (data []byte, err error) {
 	start, route := time.Now(), Route(path)
 	if ctx.Value(resentKey{}) != nil {
 		c.metrics.Retry(Target, method, route)
@@ -132,6 +137,11 @@ func (c *Client) send(ctx context.Context, method, path string, body any, read i
 		return nil, errTransport
 	}
 	status = resp.StatusCode
+	for key, values := range resp.Header {
+		if headers != nil {
+			headers[key] = append([]string(nil), values...)
+		}
+	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, &HTTPError{resp.StatusCode}
@@ -141,7 +151,7 @@ func (c *Client) send(ctx context.Context, method, path string, body any, read i
 	}
 	data, err = io.ReadAll(io.LimitReader(resp.Body, int64(read)+1))
 	if err != nil {
-		return nil, fmt.Errorf("read Multica response")
+		return nil, errTransport
 	}
 	if len(data) > read {
 		return nil, fmt.Errorf("Multica response exceeds limit")
@@ -237,6 +247,7 @@ func (c *Client) Instrument(m *metrics.Metrics, log *slog.Logger) { c.metrics, c
 // routeWords are the literal segments of controller requests; any other segment is an
 // identifier and becomes {id}, so the path label stays bounded.
 var routeWords = map[string]bool{"api": true, "daemon": true, "workspaces": true, "repos": true, "tasks": true, "claim": true,
+	"supplements": true, "ack": true, "task-runs": true, "timeline": true,
 	"issues": true, "gc-check": true, "runtimes": true, "status": true, "register": true, "heartbeat": true, "env": true,
 	"recover-orphans": true, "prepare-lease": true, "start": true, "messages": true, "cancel-ack": true, "complete": true,
 	"fail": true, "usage": true, "session": true, "models": true, "update": true, "local-skills": true, "import": true, "result": true}

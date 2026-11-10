@@ -39,7 +39,7 @@ func (g *registry) attempts(secret []byte) http.Handler {
 		case "renew":
 			recipient := request.URL
 			existing, exists := g.grants[request.TokenHash]
-			if g.ended[request.Attempt] || recipient != "http://gateway:8080/mcp" || len(request.TokenHash) != 64 || request.Agent != "20000000-0000-4000-8000-000000000001" || request.Attempt == "" || request.Task == "" || request.ExpiresAt <= time.Now().Unix() || request.ExpiresAt > time.Now().Add(15*time.Second).Unix() || (exists && (existing.Attempt != request.Attempt || existing.URL != recipient)) {
+			if g.ended[request.Attempt] || recipient != "http://gateway:8080/mcp" || len(request.TokenHash) != 64 || !allowedFixtureAttemptAgent(request.Agent) || request.Attempt == "" || request.Task == "" || request.ExpiresAt <= time.Now().Unix() || request.ExpiresAt > time.Now().Add(15*time.Second).Unix() || (exists && (existing.Attempt != request.Attempt || existing.URL != recipient)) {
 				w.WriteHeader(403)
 				return
 			}
@@ -50,6 +50,10 @@ func (g *registry) attempts(secret []byte) http.Handler {
 		}
 		w.WriteHeader(204)
 	})
+}
+
+func allowedFixtureAttemptAgent(id string) bool {
+	return id == "20000000-0000-4000-8000-000000000001" || id == "d2000000-0000-4000-8000-000000000001"
 }
 
 func (g *registry) evidence(secret []byte) http.Handler {

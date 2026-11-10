@@ -61,9 +61,14 @@ func taskSupplements(t *testing.T, api *multica.Client) {
 	t.Run("terminal-settlement", func(t *testing.T) { supplementTerminal(t, api) })
 	t.Run("cancel-recovery", func(t *testing.T) { supplementRecovery(t, api) })
 	t.Run("ownership", func(t *testing.T) { supplementOwnership(t, api) })
+	t.Run("receipt-inspection", func(t *testing.T) { supplementInspection(t, api) })
 }
 
 func supplementFixture(t *testing.T, api *multica.Client, n int, provider string, offer bool) *supplements {
+	return supplementAdmissionFixture(t, api, n, provider, offer, offer && provider == "codex")
+}
+
+func supplementAdmissionFixture(t *testing.T, api *multica.Client, n int, provider string, offer, negotiated bool) *supplements {
 	t.Helper()
 	rt, err := api.RegisterProvider(context.Background(), workspace, fmt.Sprintf("d0000000-0000-4000-8000-%012d", n), "opencode")
 	if err != nil {
@@ -88,7 +93,7 @@ func supplementFixture(t *testing.T, api *multica.Client, n int, provider string
 	var start struct {
 		SupplementCapability string `json:"supplement_capability"`
 	}
-	if json.Unmarshal([]byte(response), &start) != nil || (start.SupplementCapability == supplementCapability) != (offer && provider == "codex") {
+	if json.Unmarshal([]byte(response), &start) != nil || (start.SupplementCapability == supplementCapability) != negotiated {
 		t.Fatalf("native supplement negotiation provider=%s offered=%v: %s", provider, offer, response)
 	}
 	return s

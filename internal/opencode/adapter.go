@@ -2,6 +2,7 @@ package opencode
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -52,7 +53,7 @@ type Adapter struct {
 	Authority          Authority
 	Workloads          Workloads
 	Status             Status
-	// Command replaces the `opencode acp` argv; it must speak ACP on stdio.
+	// Command replaces ACP argv; steering mode expects native serve readiness on stdio.
 	Command  []string
 	Reporter Reporter
 	// Log records reports Multica never received and configuration attempts left out;
@@ -80,6 +81,9 @@ type Adapter struct {
 	ToolWatchdog time.Duration
 	// CompactionMaxTokens caps the native auto-compaction trigger; zero keeps native policy.
 	CompactionMaxTokens int
+	// Steering uses the explicitly owned native HTTP transport and durable native supplements.
+	Steering   *multica.Client
+	OwnerState string
 }
 
 type running struct {
@@ -125,9 +129,11 @@ type running struct {
 	// retired the prior session a failed resume abandoned (ADR 0015).
 	workDir, resume, retired string
 	// skills are the claim's skill files under SkillsDir, upstream tasks only (ADR 0017).
-	skills map[string][]byte
-	stderr stderrTail
-	spent  spentUsage
+	skills         map[string][]byte
+	stderr         stderrTail
+	spent          spentUsage
+	nativePassword string
+	nativeClean    bool
 }
 
 // attemptLease bounds an authority lease and how long renewal rides out transient
@@ -191,6 +197,9 @@ func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, 
 		return nil, &execution.RejectedError{Err: err}
 	}
 	r := &running{adapter: a, task: task, connections: connections, anonymous: anonymous, public: public, tokens: map[string]identity.AccessToken{}, leases: map[string]lease{}, done: make(chan error, 1), exited: make(chan struct{}), skills: skills}
+	if a.Steering != nil {
+		r.nativePassword = rand.Text()
+	}
 	if err := r.configureHTTP(); err != nil {
 		return nil, &execution.RejectedError{Err: err}
 	}
@@ -251,6 +260,11 @@ func (a *Adapter) Start(ctx context.Context, task multica.Task) (execution.Run, 
 	if reused && r.workDir == task.PriorWorkDir && sessionID.MatchString(task.PriorSessionID) {
 		r.resume, continuity = task.PriorSessionID, Resumed
 	}
+	if lost, err := r.prepareNativeState(runCtx); err != nil {
+		return nil, r.reject(err)
+	} else if lost {
+		continuity = Lost
+	}
 	var brief []byte
 	r.prompt, brief, err = Prompt(task, a.Relay != nil, a.Checkout != nil, continuity)
 	if err != nil {
@@ -305,6 +319,12 @@ func (r *running) initialize(ctx context.Context, brief, project []byte) error {
 	config, err = r.configureInference(ctx, config)
 	if err != nil {
 		return err
+	}
+	if r.adapter.Steering != nil {
+		config, err = r.configureNativeHTTP(config)
+		if err != nil {
+			return err
+		}
 	}
 	files := map[string][]byte{"/workspace/opencode.json": config}
 	if brief != nil {
@@ -418,13 +438,20 @@ func (r *running) refresh(ctx context.Context) error {
 func (r *running) loop(ctx context.Context) {
 	defer close(r.exited)
 	command := r.adapter.Command
+	converse := r.converse
 	if len(command) == 0 {
 		command = []string{"opencode", "acp"}
+	}
+	if r.adapter.Steering != nil {
+		converse = r.converseHTTP
+		if len(r.adapter.Command) == 0 {
+			command = []string{"opencode", "serve", "--stdio", "--hostname", "127.0.0.1", "--port", "4096"}
+		}
 	}
 	agent := make(chan error, 1)
 	go func() {
 		agent <- r.streamAgent(ctx, command, func(stdin io.Writer, stdout io.Reader) error {
-			return r.converse(ctx, stdin, stdout)
+			return converse(ctx, stdin, stdout)
 		})
 	}()
 	ticker := time.NewTicker(time.Second)
@@ -458,6 +485,9 @@ loop:
 		case <-settings:
 			r.adapter.Checkout.Refresh(ctx, r.task.AttemptKey())
 		}
+	}
+	if err == nil {
+		err = r.cleanNativeState(ctx)
 	}
 	r.cancel()
 	// Wait for the Docker exec client to exit before allowing container cleanup.

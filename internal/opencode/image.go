@@ -58,6 +58,8 @@ echo "cli $(command -v multica)"
 echo "cli-version $(multica version 2>/dev/null | head -n 1)"
 echo "git $(command -v git)"
 echo "tar $(command -v tar)"
+echo "wget $(command -v wget)"
+echo "sync $(command -v sync)"
 for b in dockerd containerd runc iptables; do echo "engine $b $(command -v $b)"; done
 echo "engine-version $(dockerd --version 2>/dev/null | head -n 1)"`}
 

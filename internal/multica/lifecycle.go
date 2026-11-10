@@ -153,9 +153,38 @@ func (c *Client) RenewPreparation(ctx context.Context, t Task) error {
 
 // Start is fenced by dispatched_at, so the upstream daemon replays it on transient failure.
 func (c *Client) Start(ctx context.Context, t Task) error {
-	return retry(ctx, startRetry, func(ctx context.Context) error {
-		return c.taskPost(ctx, t.ID, "start", map[string]any{"runtime_id": t.RuntimeID, "dispatched_at": t.DispatchedAt, "capabilities": []string{}})
+	if !validID(t.ID) {
+		return fmt.Errorf("invalid task ID")
+	}
+	offer := c.supplements != nil && t.ValidAttempt() && validID(t.IssueID)
+	negotiated, err := c.startTask(ctx, t, offer)
+	if c.supplements != nil {
+		c.supplements.negotiate(t, err == nil && negotiated)
+	}
+	return err
+}
+
+func (c *Client) startTask(ctx context.Context, t Task, offer bool) (bool, error) {
+	caps := []string{}
+	if offer {
+		caps = append(caps, taskSupplementCapability)
+	}
+	negotiated := false
+	err := retry(ctx, startRetry, func(ctx context.Context) error {
+		data, err := c.send(ctx, http.MethodPost, "/api/daemon/tasks/"+t.ID+"/start", map[string]any{"runtime_id": t.RuntimeID, "dispatched_at": t.DispatchedAt, "capabilities": caps}, responseLimit)
+		if err != nil {
+			return err
+		}
+		var response struct {
+			Capability string `json:"supplement_capability"`
+		}
+		if len(data) != 0 && json.Unmarshal(data, &response) != nil {
+			return fmt.Errorf("invalid Multica start response")
+		}
+		negotiated = offer && response.Capability == taskSupplementCapability
+		return nil
 	})
+	return negotiated, err
 }
 func (c *Client) Status(ctx context.Context, id string) (string, error) {
 	if !validID(id) {
@@ -182,7 +211,11 @@ func (c *Client) Fail(ctx context.Context, id string, cause error, _ execution.R
 	return c.Deliver(ctx, t)
 }
 func (c *Client) CancelAck(ctx context.Context, id string) error {
-	return retry(ctx, terminalRetry, func(ctx context.Context) error { return c.taskPost(ctx, id, "cancel-ack", map[string]any{}) })
+	err := retry(ctx, terminalRetry, func(ctx context.Context) error { return c.taskPost(ctx, id, "cancel-ack", map[string]any{}) })
+	if err == nil && c.supplements != nil {
+		c.supplements.retire(id)
+	}
+	return err
 }
 func (c *Client) runtimePost(ctx context.Context, id, suffix string, out any) error {
 	if !validID(id) {

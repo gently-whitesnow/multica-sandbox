@@ -40,6 +40,12 @@ git -C "$UPSTREAM" -c advice.detachedHead=false checkout -q --detach "$REV"
 [ "$(git -C "$UPSTREAM" rev-parse HEAD)" = "$REV" ]
 git -C "$UPSTREAM" diff --quiet HEAD --
 printf 'Upstream %s from %s\n' "$REV" "${SOURCE:-$REPO}"
+if [ "${VERIFY_STEERING_NATIVE_PATCH:-0}" = 1 ]; then
+ [ "$REV" = f05a525ac8e82f5e9169ad078e44f166fad6d5c8 ] || { printf '%s\n' 'Native admission fixture requires pinned Multica v0.7.2' >&2; exit 2; }
+ git -C "$UPSTREAM" apply --check "$ROOT/examples/live-steering/native-admission.patch"
+ git -C "$UPSTREAM" apply "$ROOT/examples/live-steering/native-admission.patch"
+ printf '%s\n' 'FIXTURE ONLY: applied OpenCode server admission patch to the disposable upstream clone'
+fi
 ARCH=$(docker info --format '{{.Architecture}}')
 case "$ARCH" in aarch64|arm64) ARCH=arm64 ;; x86_64|amd64) ARCH=amd64 ;; *) exit 1 ;; esac
 (cd "$UPSTREAM/server" && go build -o "$TMP/migrate" ./cmd/migrate && CGO_ENABLED=0 GOOS=linux GOARCH="$ARCH" go build -o "$TMP/server" ./cmd/server)
@@ -85,5 +91,7 @@ if [ "${VERIFY_SERVICE:-0}" = 1 ] && [ "${VERIFY_OPENCODE:-0}" = 1 ]; then
  MULTICA_TEST_HELPER_IMAGE=$(docker image inspect "$NAME-helper:local" --format '{{index .RepoDigests 0}}')
  export MULTICA_TEST_AGENT_IMAGE MULTICA_TEST_CLI_IMAGE MULTICA_TEST_TOOL_IMAGE MULTICA_TEST_HELPER_IMAGE
 fi
-MULTICA_TEST_SERVER_CONTAINER="$SERVER" MULTICA_TEST_DB_CONTAINER="$DB" go test -tags=upstream -run "${UPSTREAM_TEST_FILTER:-.}" -count=1 -v ./integration
-printf 'Verified upstream %s\n' "$REV"
+set -- -tags=upstream -run "${UPSTREAM_TEST_FILTER:-.}" -count=1 -v ./integration
+if [ "${UPSTREAM_TEST_RACE:-0}" = 1 ]; then set -- -race "$@"; fi
+MULTICA_TEST_SERVER_CONTAINER="$SERVER" MULTICA_TEST_DB_CONTAINER="$DB" go test "$@"
+printf 'Verified upstream %s (native admission fixture patch=%s)\n' "$REV" "${VERIFY_STEERING_NATIVE_PATCH:-0}"

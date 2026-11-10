@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"encoding/base64"
 	"errors"
 	"io"
 	"maps"
@@ -95,6 +96,9 @@ func redact(text string, secrets []string) string {
 // credentials, the task token, issued tokens and the agent's custom env.
 func (r *running) secrets() []string {
 	secrets := []string{r.relayToken, r.mcpToken, r.inferenceToken}
+	if r.nativePassword != "" {
+		secrets = append(secrets, r.nativePassword, base64.StdEncoding.EncodeToString([]byte("opencode:"+r.nativePassword)))
+	}
 	if token, err := r.task.TaskToken(); err == nil {
 		secrets = append(secrets, token)
 	}

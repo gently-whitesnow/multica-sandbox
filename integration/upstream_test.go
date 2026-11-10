@@ -216,4 +216,7 @@ func TestUpstreamLifecycle(t *testing.T) {
 		t.Run("multica-relay-official-"+opencode.Supported[i], func(t *testing.T) { multicaRelayService(t, api, image, 15+i, false) })
 	}
 	t.Run("controller-service", func(t *testing.T) { containerService(t, api, rt) })
+	t.Run("native-steering-admission", func(t *testing.T) { nativeSteeringAdmission(t, api) })
+	t.Run("live-steering-service", func(t *testing.T) { liveSteeringService(t, api) })
+	t.Run("live-steering-mcp", func(t *testing.T) { managedMCPServiceMode(t, api, true) })
 }

@@ -12,6 +12,8 @@ go run ./examples/acp-spike                   # newest verified image in images.
 go run ./examples/acp-spike -version 1.18.35  # another verified release
 go run ./examples/acp-spike -image IMAGE@sha256:DIGEST -acp-mcp -debug
 go run ./examples/acp-spike -steering-probe -version 2.2.5
+go run ./examples/acp-spike -http-steering-probe -version 2.2.5
+go run ./examples/acp-spike -plugin-steering-probe -version 2.2.5
 ```
 
 Requires Docker and loopback fixtures reachable as `host.docker.internal`
@@ -34,6 +36,15 @@ ACP path; they do not advertise live delivery. See
 [ADR 0036](../../adrs/0036-live-steering-contract-gates.md) for the independent
 Multica provider gate, native settlement/retry semantics and the candidate REST
 transport that still needs implementation and conformance.
+
+`-http-steering-probe` creates one native HTTP owner, starts an attached CLI
+turn, admits a stable-ID input with `delivery: steer, resume: false` during a
+blocked tool, and requires model consumption plus successful completion of the
+original CLI. This passed on pinned 2.2.5 and candidate 2.2.7 on 2026-11-10.
+`-plugin-steering-probe` proves the supported plugin SDK can deliver inside the
+same active ACP owner on 2.2.5. The production opt-in path uses full HTTP APIs
+for inbox inspection and withdrawal; the plugin probe does not establish those
+race/recovery guarantees. Version admission remains a separate conformance gate.
 
 The container mirrors the attempt: UID 65532, read-only rootfs, tmpfs workspace,
 no capabilities, `no-new-privileges`, the adapter's deny-by-default permissions, a

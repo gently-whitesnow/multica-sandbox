@@ -16,5 +16,5 @@ RUN tar -xzf /opencode.tar.gz -C /usr/local/bin opencode
 FROM base
 # OpenCode searches with ripgrep and would otherwise try to download it at run time;
 # git and gh work on repositories through the controller relays (ADR 0015).
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates gh git ripgrep && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates gh git ripgrep wget && rm -rf /var/lib/apt/lists/*
 COPY --from=opencode /usr/local/bin/opencode /usr/local/bin/opencode

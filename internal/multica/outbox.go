@@ -101,16 +101,17 @@ func (c *Client) Deliver(ctx context.Context, t Terminal) error {
 
 // Replay retries due queued callbacks once each; it runs before workspace recovery.
 func (c *Client) Replay(ctx context.Context) (int, error) {
+	acked, ackErr := c.ReplaySupplementAcks(ctx)
 	o := c.outbox
 	if o == nil {
-		return 0, nil
+		return acked, ackErr
 	}
 	entries, err := os.ReadDir(o.dir)
 	if err != nil {
-		return 0, err
+		return acked, errors.Join(ackErr, err)
 	}
-	delivered := 0
-	var errs error
+	delivered := acked
+	var errs error = ackErr
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
@@ -166,7 +167,11 @@ func (c *Client) sendTerminal(ctx context.Context, t Terminal) error {
 	if t.Disposable {
 		body["session_rollout_missing"] = true
 	}
-	return c.taskPost(ctx, t.Task, action, body)
+	err := c.taskPost(ctx, t.Task, action, body)
+	if err == nil && c.supplements != nil {
+		c.supplements.retire(t.Task)
+	}
+	return err
 }
 
 // settle schedules the next replay; only repeated explicit rejections over time quarantine a report.

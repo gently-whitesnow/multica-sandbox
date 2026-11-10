@@ -230,6 +230,16 @@ func newOpenCodeAdapter(ctx context.Context, c Config, stateDir string, api *mul
 		return nil, nil, err
 	}
 	adapter := &opencode.Adapter{Server: strings.TrimRight(c.Server, "/"), Controller: c.Daemon, Issuer: issuer, Authority: authority, Status: api, Reporter: api, Workloads: workloads, Command: c.Command, IdleWatchdog: watchdog, ToolWatchdog: toolWatchdog, MCPPublicProxy: publicProxy, CompactionMaxTokens: c.OpenCode.CompactionMaxTokens, Log: log}
+	if c.OpenCode.LiveSteering {
+		if err := opencode.CheckSteeringImage(report); err != nil {
+			return nil, nil, err
+		}
+		if err := api.UseSupplements(filepath.Join(stateDir, "supplements")); err != nil {
+			return nil, nil, err
+		}
+		adapter.Steering = api
+		adapter.OwnerState = filepath.Join(stateDir, "http-owners")
+	}
 	if issuer != nil || publicProxy != nil {
 		adapter.MCPRelay = opencode.NewMCPRelay()
 		policy := relay.Policy{Allow: opencode.MCPRelayPath, Reserved: opencode.MCPReservedHeaders, HeaderTimeout: opencode.MCPHeaderTimeout}

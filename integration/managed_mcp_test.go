@@ -24,6 +24,10 @@ import (
 var officialImage = opencode.Images[len(opencode.Images)-1]
 
 func managedMCPService(t *testing.T, api *multica.Client) {
+	managedMCPServiceMode(t, api, false)
+}
+
+func managedMCPServiceMode(t *testing.T, api *multica.Client, steering bool) {
 	if os.Getenv("VERIFY_OPENCODE") != "1" || os.Getenv("VERIFY_SERVICE") != "1" {
 		t.Skip("set VERIFY_SERVICE=1 VERIFY_OPENCODE=1 for real controller/MCP tasks")
 	}
@@ -43,17 +47,34 @@ func managedMCPService(t *testing.T, api *multica.Client) {
 	agent := "20000000-0000-4000-8000-000000000001"
 	id := "70000000-0000-4000-8000-000000000001"
 	issue := "80000000-0000-4000-8000-000000000001"
+	agentName := "MCP fixture"
+	if steering {
+		controller, agent, id, issue = "d2000000-0000-4000-8000-000000000029", "d2000000-0000-4000-8000-000000000001", "d2000000-0000-4000-8000-000000000002", "d2000000-0000-4000-8000-000000000003"
+		agentName = "HTTP MCP fixture"
+	}
 	issuer := "http://keycloak:8080/realms/sandbox-example"
 	binding := identity.Config{Version: 1, AllowHTTP: true, Issuer: identity.IssuerConfig{URL: issuer, TokenURL: issuer + "/protocol/openid-connect/token", JWKSURL: issuer + "/protocol/openid-connect/certs", MaxTTLSeconds: 30}, AgentEnv: true}
 	writeJSON(t, filepath.Join(dir, "identity.json"), binding)
 	// This credential-free mock model is trusted fixture configuration, outside claim data.
 	command := `test "$USER_SETTING" = native-env-delivered && test -z "${IAM_CLIENT_ID+x}" && test -z "${IAM_CLIENT_SECRET+x}" || exit 91; OPENCODE_CONFIG_CONTENT='{"model":"fixture/fixture","enabled_providers":["fixture"],"provider":{"fixture":{"npm":"@ai-sdk/openai-compatible","name":"Fixture","options":{"baseURL":"http://provider:8080/v1"},"models":{"fixture":{"name":"Fixture","limit":{"context":64000,"output":4096}}}}}}' exec opencode acp`
+	if steering {
+		command = strings.TrimSuffix(command, "opencode acp") + "opencode serve --stdio --hostname 127.0.0.1 --port 4096"
+	}
 	f := serviceFixture{fmt.Sprintf("sandbox-agent-service-%d", time.Now().UnixNano()), filepath.Join(dir, "controller.json"), t}
 	// Attempts reach the mock model on the provider and MCP only through the controller relay.
 	mcpRelay := &service.RelayConfig{Listen: ":8095", URL: "http://mcp-relay:8095"}
 	c := service.Config{Server: "http://" + os.Getenv("MULTICA_TEST_SERVER_CONTAINER") + ":8080", AllowHTTP: true, Daemon: controller, Image: officialImage, Command: []string{"/bin/sh", "-c", command}, Timeout: "180s", OpenCode: &service.OpenCodeConfig{IdentityFile: "/etc/multica-sandbox/identity.json", MCPRelay: mcpRelay, Authority: attempt.Config{URL: "http://gateway:8080/attempts", BearerFile: "/identity-secrets/admin", AllowHTTP: true}, Network: project + "_execution", Peers: []string{project + "-provider-1", f.project + "-controller-1"}}}
+	c.OpenCode.LiveSteering = steering
 	prepareManagedService(t, f, dir, c, project, network)
 	cid := f.compose("ps", "-q", "controller")
+	if steering {
+		t.Cleanup(func() {
+			if t.Failed() {
+				t.Logf("HTTP MCP task: %s", sql(t, fmt.Sprintf("SELECT status||'|'||coalesce(error,'') FROM agent_task_queue WHERE id='%s';", id)))
+				t.Logf("HTTP MCP controller: %s", dockerTest(t, "logs", "--tail", "30", cid))
+			}
+		})
+	}
 	eventually(t, "OpenCode runtime registration", func() bool { return strings.Contains(dockerTest(t, "logs", cid), readyEvent) })
 	runtime := sql(t, fmt.Sprintf("SELECT id FROM agent_runtime WHERE daemon_id='%s' AND workspace_id='%s' AND provider='opencode';", controller, workspace))
 	if runtime == "" {
@@ -64,9 +85,13 @@ func managedMCPService(t *testing.T, api *multica.Client) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sql(t, fmt.Sprintf(`INSERT INTO agent(id,workspace_id,name,runtime_mode,runtime_id,owner_id,status,instructions,mcp_config,custom_env) VALUES('%s','%s','MCP fixture','local','%s','%s','idle','Read document repeatedly using fixture MCP. workspace-two','{"mcpServers":{"fixture":{"url":"http://gateway:8080/mcp","headers":{"Authorization":"Bearer {iam:access_token}"}}}}','%s');
- INSERT INTO issue(id,workspace_id,title,status,creator_type,creator_id,number,assignee_type,assignee_id) VALUES('%s','%s','Managed MCP fixture','in_progress','member','%s',99999,'agent','%s');
- INSERT INTO agent_task_queue(id,agent_id,runtime_id,issue_id,status,max_attempts,originator_user_id,accountable_user_id) VALUES('%s','%s','%s','%s','queued',1,'%s','%s');`, agent, workspace, runtime, user, strings.ReplaceAll(string(environment), "'", "''"), issue, workspace, user, agent, id, agent, runtime, issue, user, user))
+	number := 99999
+	if steering {
+		number = 99998
+	}
+	sql(t, fmt.Sprintf(`INSERT INTO agent(id,workspace_id,name,runtime_mode,runtime_id,owner_id,status,instructions,mcp_config,custom_env) VALUES('%s','%s','%s','local','%s','%s','idle','Read document repeatedly using fixture MCP. workspace-two','{"mcpServers":{"fixture":{"url":"http://gateway:8080/mcp","headers":{"Authorization":"Bearer {iam:access_token}"}}}}','%s');
+ INSERT INTO issue(id,workspace_id,title,status,creator_type,creator_id,number,assignee_type,assignee_id) VALUES('%s','%s','Managed MCP fixture','in_progress','member','%s',%d,'agent','%s');
+ INSERT INTO agent_task_queue(id,agent_id,runtime_id,issue_id,status,max_attempts,originator_user_id,accountable_user_id) VALUES('%s','%s','%s','%s','queued',1,'%s','%s');`, agent, workspace, agentName, runtime, user, strings.ReplaceAll(string(environment), "'", "''"), issue, workspace, user, number, agent, id, agent, runtime, issue, user, user))
 	started := dockerTest(t, "inspect", "--format", "{{.State.StartedAt}}", cid)
 	observedSession := ""
 	deadline := time.Now().Add(150 * time.Second)
@@ -131,7 +156,11 @@ func prepareManagedService(t *testing.T, f serviceFixture, dir string, c service
 		t.Fatal(err)
 	}
 	networks := map[string]any{"control": map[string]any{"external": true, "name": control}, "execution": map[string]any{"external": true, "name": project + "_execution"}}
-	controller := map[string]any{"networks": map[string]any{"control": map[string]any{}, "execution": map[string]any{"aliases": []string{"mcp-relay"}}}, "volumes": managedVolumes(dir, c)}
+	aliases := []string{"mcp-relay"}
+	if c.OpenCode.MulticaRelay != nil {
+		aliases = append(aliases, "multica-relay")
+	}
+	controller := map[string]any{"networks": map[string]any{"control": map[string]any{}, "execution": map[string]any{"aliases": aliases}}, "volumes": managedVolumes(dir, c)}
 	writeJSON(t, f.override, map[string]any{"services": map[string]any{"controller": controller}, "networks": networks, "volumes": map[string]any{"identity-secrets": map[string]any{"external": true, "name": project + "_credentials"}}, "secrets": map[string]any{"multica_token": map[string]string{"file": filepath.Join(dir, "token")}}})
 	t.Cleanup(func() {
 		f.compose("down", "-v")

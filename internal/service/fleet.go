@@ -131,7 +131,7 @@ func (f *fleet) serve(ctx context.Context, execute func(context.Context, multica
 			}
 		}
 	}()
-	// Queued terminal reports go first, so recovery cannot rerun finished attempts.
+	// Durable delivery acknowledgements and terminal reports precede recovery.
 	f.replay(ctx)
 	if err := f.tolerate("sync", f.sync(ctx)); err != nil {
 		return err
@@ -312,7 +312,7 @@ const replayInterval = 5 * time.Second
 func (f *fleet) replay(ctx context.Context) {
 	delivered, err := f.api.Replay(ctx)
 	if delivered > 0 {
-		f.log.Info("terminal reports replayed", "reports", delivered)
+		f.log.Info("durable reports replayed", "reports", delivered)
 	}
 	if err != nil && ctx.Err() == nil {
 		f.log.Warn("terminal report replay failed", "error", err.Error())

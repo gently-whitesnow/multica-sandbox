@@ -11,8 +11,8 @@ for running AI coding agents in your infrastructure.
 identity rotation; a separate subscription-backed lab exists.
 Docker runc/Sysbox tested; Kubernetes planned. Independent runtime, no Multica fork.
 
-Live steering into active OpenCode turns remains unsupported; ordinary comments retain native follow-up handling.
-See [ADR 0036](adrs/0036-live-steering-contract-gates.md) for native/ACP blockers, evidence and required changes.
+Opt-in live steering uses an owned OpenCode 2.2.5 HTTP service and native supplements; unmodified Multica v0.7.2 keeps native follow-up handling.
+See [ADR 0036](adrs/0036-live-steering-contract-gates.md) for the delivery contract and verification.
 
 ## Design
 

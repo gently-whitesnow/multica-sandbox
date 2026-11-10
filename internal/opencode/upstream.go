@@ -37,6 +37,7 @@ func (r *running) environment() map[string]string {
 		}
 	}
 	r.httpEnvironment(env)
+	r.nativeHTTPEnvironment(env)
 	if r.relayToken == "" {
 		return env
 	}

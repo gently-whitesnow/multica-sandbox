@@ -15,11 +15,12 @@ import (
 
 // Scenario markers in the prompt select deterministic model turns; no provider is contacted.
 const (
-	markTool   = "SPIKE-TOOL"
-	markRotate = "SPIKE-ROTATE"
-	markResume = "SPIKE-RESUME"
-	markCancel = "SPIKE-CANCEL"
-	markDenied = "SPIKE-DENIED"
+	markTool        = "SPIKE-TOOL"
+	markRotate      = "SPIKE-ROTATE"
+	markResume      = "SPIKE-RESUME"
+	markCancel      = "SPIKE-CANCEL"
+	markDenied      = "SPIKE-DENIED"
+	markPluginSteer = "SPIKE-PLUGIN-STEER"
 )
 
 // deniedTool is offered by 2.x although the projected permissions do not allow it.
@@ -91,6 +92,10 @@ func inference(w http.ResponseWriter, r *http.Request) {
 		finish = "tool_calls"
 	}
 	switch {
+	case strings.Contains(latest, markPluginSteer) && count == 0:
+		call(shell, map[string]string{"command": "while [ ! -f /workspace/steering-release ]; do sleep 0.1; done; echo original-tool-completed", "description": "Await steering fixture"})
+	case strings.Contains(latest, steeringSentinel):
+		delta = map[string]any{"content": "STEERING-CONSUMED-IN-ORIGINAL-TURN"}
 	case strings.Contains(latest, markTool) && count == 0 && probe != "":
 		call(probe, map[string]string{})
 	case strings.Contains(latest, markTool) && count <= 1:
