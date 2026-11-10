@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -28,6 +29,11 @@ const deniedTool = "opencode_worktree_remove"
 const buildSeconds = 6
 
 var debug = false
+
+// steeringObserved distinguishes a JSON-RPC refusal from input reaching inference.
+var steeringObserved atomic.Bool
+
+const steeringSentinel = "ADDITIONAL-INPUT-SENTINEL"
 
 func inference(w http.ResponseWriter, r *http.Request) {
 	var body struct {
@@ -52,6 +58,9 @@ func inference(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			data, _ := json.Marshal(message.Content)
 			text = string(data)
+		}
+		if message.Role == "user" && strings.Contains(text, steeringSentinel) {
+			steeringObserved.Store(true)
 		}
 		switch message.Role {
 		case "user":

@@ -11,12 +11,29 @@ gate that admits the release to `images.txt`.
 go run ./examples/acp-spike                   # newest verified image in images.txt
 go run ./examples/acp-spike -version 1.18.35  # another verified release
 go run ./examples/acp-spike -image IMAGE@sha256:DIGEST -acp-mcp -debug
+go run ./examples/acp-spike -steering-probe -version 2.2.5
 ```
 
 Requires Docker and loopback fixtures reachable as `host.docker.internal`
 (Docker Desktop, or `--add-host` on Linux). No provider or account is contacted:
 a deterministic OpenAI-compatible fixture scripts the model turns and a local MCP
 fixture records the bearer of every request.
+
+`-steering-probe` runs only the active-input negative conformance check and exits
+nonzero on an unexpected result. It starts a 120-second tool, sends a second ACP
+prompt to the same session, requires a JSON-RPC error while the original prompt
+remains active, then cancels and requires the original `cancelled` response.
+It also checks that fixture inference saw no additional-input sentinel before
+cancellation. This check does not establish absence from the session database.
+
+On 2026-11-10 all four pinned images passed on Docker Desktop arm64: 2.2.2 and
+2.2.5 report an active-prompt service error; 1.18.34 and 1.18.35 report a generic
+JSON-RPC deadline error. A local timeout is inconclusive and fails the probe.
+These observations establish no usable steering acknowledgement on the current
+ACP path; they do not advertise live delivery. See
+[ADR 0036](../../adrs/0036-live-steering-contract-gates.md) for the independent
+Multica provider gate, native settlement/retry semantics and the candidate REST
+transport that still needs implementation and conformance.
 
 The container mirrors the attempt: UID 65532, read-only rootfs, tmpfs workspace,
 no capabilities, `no-new-privileges`, the adapter's deny-by-default permissions, a

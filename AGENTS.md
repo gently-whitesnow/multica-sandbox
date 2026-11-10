@@ -36,6 +36,8 @@ from verified behavior.
   and the optional byte budget of retained session volumes.
 - `adrs/0035-reference-mirrors.md`: per-workspace read-only reference mirrors for new
   checkouts, their refresh through the Git relay and collection.
+- `adrs/0036-live-steering-contract-gates.md`: native supplement contracts and
+  the Multica/OpenCode gates blocking live steering.
 - `examples/end-to-end/`: opt-in real Multica/OpenCode/inference lab.
 - `examples/identity-mcp/`: disposable identity and MCP contract fixture.
 - `internal/inference/`: workspace gateway bindings, relay policy and advisory model catalogs.

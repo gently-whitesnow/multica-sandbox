@@ -35,6 +35,7 @@ func main() {
 	image := flag.String("image", "", "OpenCode image, such as an unlisted candidate; overrides -version")
 	host := flag.String("host", "host.docker.internal", "host name the container uses to reach the fixtures")
 	keep := flag.Bool("keep", false, "keep the container for inspection")
+	steering := flag.Bool("steering-probe", false, "only probe concurrent input during an active prompt; fail unless rejected without ending the original")
 	flag.BoolVar(&debug, "debug", false, "log fixture requests")
 	flag.BoolVar(&acpMCP, "acp-mcp", false, "also pass the MCP fixture through session/new with a static header")
 	flag.Parse()
@@ -49,7 +50,7 @@ func main() {
 			*image = opencode.Images[i]
 		}
 	}
-	if err := run(*image, *host, *keep); err != nil {
+	if err := run(*image, *host, *keep, *steering); err != nil {
 		fmt.Fprintln(os.Stderr, "acp-spike:", err)
 		os.Exit(1)
 	}
@@ -84,7 +85,7 @@ func (s *spike) sessionMCP() []acp.McpServer {
 	return []acp.McpServer{{Http: &acp.McpServerHttpInline{Type: "http", Name: "viaacp", Url: s.mcpURL, Headers: []acp.HttpHeader{{Name: "Authorization", Value: "Bearer acp-header"}}}}}
 }
 
-func run(image, host string, keep bool) error {
+func run(image, host string, keep, steering bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -111,6 +112,10 @@ func run(image, host string, keep bool) error {
 	a, id, err := s.handshake(ctx)
 	if err != nil {
 		return err
+	}
+	if steering {
+		defer a.stop()
+		return s.steeringTurn(ctx, a, id)
 	}
 	if err := s.toolTurn(ctx, a, id); err != nil {
 		return err

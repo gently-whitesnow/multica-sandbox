@@ -46,13 +46,16 @@ func sql(t *testing.T, query string) string {
 	return strings.TrimSpace(string(out))
 }
 func token(t *testing.T) string {
+	return userToken(t, user)
+}
+func userToken(t *testing.T, subject string) string {
 	t.Helper()
 	secret := os.Getenv("JWT_SECRET")
 	if secret == "" {
 		t.Fatal("fixture JWT secret required")
 	}
 	encode := base64.RawURLEncoding.EncodeToString
-	claims, _ := json.Marshal(map[string]any{"sub": user, "exp": time.Now().Add(time.Hour).Unix(), "iat": time.Now().Unix()})
+	claims, _ := json.Marshal(map[string]any{"sub": subject, "exp": time.Now().Add(time.Hour).Unix(), "iat": time.Now().Unix()})
 	data := encode([]byte(`{"alg":"HS256","typ":"JWT"}`)) + "." + encode(claims)
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte(data))
@@ -166,6 +169,7 @@ func TestUpstreamLifecycle(t *testing.T) {
 	})
 	t.Run("project-resources", func(t *testing.T) { projectClaim(t, ctx, api, rt) })
 	t.Run("mcp-library", func(t *testing.T) { mcpLibrary(t, api, rt) })
+	t.Run("task-supplements", func(t *testing.T) { taskSupplements(t, api) })
 	t.Run("restart-reconciliation", func(t *testing.T) {
 		for n, want := range []string{"dispatched", "running"} {
 			id := enqueue(t, rt, 5+n)

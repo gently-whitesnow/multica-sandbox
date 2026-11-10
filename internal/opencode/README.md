@@ -83,8 +83,7 @@ Complete/fail follow cleanup and use a durable at-least-once queue. Each reporte
 
 ## Conformance
 
-Supported means this path only: persistent controller, Docker projected backend,
-native OpenCode. Evidence is fixture-based for the pinned stack, not production
+Supported means this path only: persistent controller, Docker projected backend, native OpenCode. Evidence is fixture-based for the pinned stack, not production
 certification. Pins: Multica v0.7.2 `f05a525ac8e82f5e9169ad078e44f166fad6d5c8`
 (unmodified); OpenCode 1.18.34 (`aec0b9a6`), 1.18.35 (`53d1eabb`), 2.2.2 (`098aa7fd`) and 2.2.5, official images in `images.txt`; ACP Go SDK 0.13.5; LiteLLM v1.104.0 with
 Postgres virtual keys; Keycloak 26.8.0; MCP Go SDK 1.8.0; go-oidc 3.21.0; Docker
@@ -99,6 +98,7 @@ Engine 29.2.1 (runc, cgroup v2, `linux/arm64`; `amd64` is unverified). Reproduce
 | ACP turn: tool visible with input while running, joined text, child sessions, `stopReason` outcomes, stream cut, withheld errors, `session/cancel`, `session/load` replay ignored, refused load fresh once, no client filesystem/terminal, permission requests rejected, usage per version and once on every path, redacted stderr tail logged on failure only | `acp_test.go`, `events_test.go`, `stderr_test.go`, `adapter_test.go`; `projected_test.go` (CONTAINERS); `examples/acp-spike`; `integration/adapter_reporting_test.go` |
 | Quiet startup on issue/chat, fresh/resumed/lost sessions and repeated attempts; session pinning without transcript rows, actual output preserved, sequence 1 and keyed replay | `startup_test.go`, `internal/service/startup_test.go`; `integration/quiet_start_test.go` (UPSTREAM) |
 | Upstream failure reasons, durable reports, replay before recovery | `internal/multica/outbox_test.go`; `integration/retry_test.go` (UPSTREAM) |
+| Live steering remains unsupported: native v0.7.2 refuses OpenCode negotiation; absent capability keeps native follow-ups. Supported reference-provider fixtures check ordered claims, lost HTTP claim/ack replies, dedup, explicit retry, completion/cancel/recovery settlement and task/runtime ownership | `integration/task_supplements_test.go` (UPSTREAM); [ADR 0036](../../adrs/0036-live-steering-contract-gates.md) |
 | Cancellation revokes and cleans up before the terminal callback | `adapter_test.go`; `integration/upstream_test.go`; fixture `cancelled` (OPENCODE) |
 | Native task API: admin updates workspace, member is refused; member creates project/repository and workflow; native human-only credential checks, actor attribution, workspace isolation and revoked grant hold | `integration/task_authority_test.go` (UPSTREAM); `internal/multica/relay_test.go` |
 | Dynamic remote MCP via public proxy: anonymous/static/agent ENV, fixed query, no JWT/secret projection, next-claim library edits/toggles and retained-session updates/removal | `public_mcp_test.go`, `mcp_selection_test.go`; `integration/mcp_library_test.go` (UPSTREAM); `scripts/test-dynamic-mcp.sh` (DYNAMIC_MCP, OpenCode 2.2.5) |

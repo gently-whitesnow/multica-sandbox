@@ -11,6 +11,9 @@ for running AI coding agents in your infrastructure.
 identity rotation; a separate subscription-backed lab exists.
 Docker runc/Sysbox tested; Kubernetes planned. Independent runtime, no Multica fork.
 
+Live steering into active OpenCode turns remains unsupported; ordinary comments retain native follow-up handling.
+See [ADR 0036](adrs/0036-live-steering-contract-gates.md) for native/ACP blockers, evidence and required changes.
+
 ## Design
 
 - Connect directly to Multica's Daemon API; no custom runtime profiles.
@@ -31,9 +34,7 @@ the runner executes one task through a supported agent adapter.
 Execution backends, agent adapters and inference connections are separate.
 Multica selects the runtime and model; trusted workspace bindings select the gateway
 and key, which stay outside the sandbox with provider credentials. The picker shows
-the workspace's advisory catalog; the gateway enforces the key's grants. See the OpenCode [conformance report](internal/opencode/README.md#conformance).
-
-Containers share the host kernel; isolation depends on policy and granted credentials.
+the workspace's advisory catalog; the gateway enforces the key's grants. See the OpenCode [conformance report](internal/opencode/README.md#conformance). Containers share the host kernel; isolation depends on policy and granted credentials.
 
 Architecture: [ADR 0001](adrs/0001-isolated-task-runtime.md). Images/tools:
 [ADR 0002](adrs/0002-custom-images-and-tools.md). Access boundaries: [ADR 0003](adrs/0003-identity-and-mcp-access.md); component selection and acceptance
