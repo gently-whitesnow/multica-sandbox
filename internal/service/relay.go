@@ -33,7 +33,7 @@ func (config Config) serveRelay(ctx context.Context, name string, auth relay.Aut
 	if p.Limit == 0 {
 		p.Limit = relayBodyLimit
 	}
-	refusals := newRefusalLog(config.logger())
+	refusals := newRefusalLog(config.logger(), strings.ToLower(name))
 	go refusals.run(ctx, relayLogWindow)
 	p.Record = config.relayRecord(strings.ToLower(name), refusals)
 	proxy, err := relay.New(auth, p)
@@ -69,7 +69,7 @@ func (c Config) relayRecord(name string, refusals *refusalLog) func(*http.Reques
 		}
 		c.metrics.Relay(name, status, errorType, elapsed)
 		if errorType != "" || status >= 400 {
-			refusals.record(name, r, attempt, status, errorType, elapsed)
+			refusals.record(r, attempt, status, errorType, elapsed)
 		}
 	}
 }
