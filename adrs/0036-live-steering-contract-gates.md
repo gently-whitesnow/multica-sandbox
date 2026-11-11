@@ -18,8 +18,10 @@ close them, without migration:
   authorized as claim/ack, returns the run status, the oldest unacknowledged claim
   with its claim payload and one receipt's status (`none` once deleted).
 
-- `native-routing.patch`: persist a claimed member’s routing choice in existing
-  `comment.suppressed_agent_ids`; receipt deletion cannot create a follow-up.
+- `native-routing.patch`: persist member routing in `comment.suppressed_agent_ids`
+  at create/bind, before claim. Claim no longer locks supplement then comment,
+  opposite to deletion's order. A new bind cannot expose its uncommitted receipt
+  to deletion; create inserts routing with the new comment.
 
 They run only in disposable clones; deployment requires separate review.
 
@@ -27,8 +29,7 @@ They run only in disposable clones; deployment requires separate review.
 
 Keep ACP default. `opencode.live_steering` selects one owned OpenCode 2.2.5 HTTP
 service/session per attempt, on container loopback with an ephemeral password.
-`wget`, `sync` and `timeout` are additional image gates. Existing MCP grants,
-model/effort, permissions, skills, workdirs and reporting remain configured. Offer `task-supplement-v1` only for
+`wget`, `sync` and `timeout` are additional image gates. Offer `task-supplement-v1` only for
 eligible issue claims, after the server answers receipt inspection for the
 dispatched task, and require its `/start` echo. Other servers keep native
 queued/deferred handling and return 412 for direct supplements. Steering never
@@ -38,27 +39,22 @@ substitutes a run or cancels/restarts execution.
 
 | Path | Evidence and choice |
 | --- | --- |
-| Concurrent ACP prompt | 1.18.34/1.18.35 return RPC deadlines; 2.2.2/2.2.5 reject the active prompt. No processing receipt. |
-| Native HTTP | Positive same-session mid-turn probes on 2.2.5/2.2.7; inbox inspection/cancellation. Only 2.2.5 is admitted. |
-| Server plugin SDK | Positive 2.2.5 comparison inside the ACP owner, but no public inbox cancellation. Prototype removed. |
-| Legacy `prompt_async` | Inspected 1.18.35: 204 forks processing. Neither processing receipt nor conditional active-turn admission. |
+| Concurrent ACP prompt | ACP deadlines/rejections; no processing receipt. |
+| Native HTTP | Same-session probes and inbox cancellation; only 2.2.5 admitted. |
+| Server plugin SDK | No public inbox cancellation; prototype removed. |
 | Timeline receipt inspection | Complete issue history cannot support bounded restart recovery. Replaced. |
-
-HTTP mode owns its service from initial input onward.
 
 ### Delivery and recovery
 
-The controller journal binds server, workspace, runtime, task, exact dispatch and
-session. Atomic replacement plus file/directory fsync persist intent before claim,
-content/stable ID before admission, consumption before ack. Records contain private
-guidance (0600), no credentials. Recovery assumes one claimant per run, under the
-single-controller identity rule.
+The journal binds server/workspace/runtime/task/dispatch/session. Atomic
+replacement and file/directory fsync persist intent before claim, stable input
+before admission, consumption before ack. Records are private (0600), without
+credentials. Recovery requires one claimant per run.
 
 The native receipt is the authority; a claim response is a hint. Each round delivers the oldest unacknowledged claim, claiming only when none
 exists and reading the result back. A lost claim response is adopted, never
 claimed again; an uncommitted one is retried after backoff. Issue size and receipt
-count do not matter. Native idempotent `/start` replay fences the exact dispatch
-before delivery.
+count do not matter. Idempotent `/start` fences the dispatch.
 
 Native `daemon:task_supplement_available` hints wake only the matching negotiated
 runtime/task (ADR 0021); 30-second polling remains the fallback. Claims drain
@@ -103,11 +99,17 @@ volume, within the retained byte budget; workdir files/native comments remain.
 
 ## Consequences
 
+Routing writes affect all admitted providers' member steering, even with the
+sandbox flag off. Rollback leaves that per-agent suppression in place; content
+edits after receipt removal recompute it from the edit request. If a receipt
+vanishes before consumption, the member input can be silently lost: no delivery,
+follow-up or visible receipt. Suppression preserves the explicit current-turn
+choice; the server cannot reconstruct consumption.
+
 Native claims have neither leases nor request tokens. Delivery follows native
 claim order; a lost-response claim that commits after a later claim is delivered
-after it. No exactly-once or unconditional eventual delivery is promised: an
-unclean restart loses session continuity and its unconsumed claims settle
-`turn_ended`. SSE disconnects fail closed.
+after it. No exactly-once or eventual delivery is promised. An unclean restart loses
+continuity; unconsumed claims settle `turn_ended`. SSE disconnects fail closed.
 
 The loopback password is readable by agent processes. The agent can access its
 own service, alter its DB or forge predictable IDs; processing receipts assume a

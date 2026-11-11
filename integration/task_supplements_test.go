@@ -103,7 +103,7 @@ func supplementFixture(t *testing.T, api *multica.Client, n int, provider string
 	return supplementAdmissionFixture(t, api, n, provider, offer, offer && provider == "codex")
 }
 
-func supplementAdmissionFixture(t *testing.T, api *multica.Client, n int, provider string, offer, negotiated bool) *supplements {
+func supplementAdmissionFixture(t *testing.T, api *multica.Client, n int, provider string, offer, negotiated bool, setup ...func(string)) *supplements {
 	t.Helper()
 	rt, err := api.RegisterProvider(context.Background(), workspace, fmt.Sprintf("d0000000-0000-4000-8000-%012d", n), "opencode")
 	if err != nil {
@@ -111,6 +111,9 @@ func supplementAdmissionFixture(t *testing.T, api *multica.Client, n int, provid
 	}
 	sql(t, fmt.Sprintf("UPDATE agent_runtime SET provider='%s' WHERE id='%s';", provider, rt.ID))
 	id := enqueue(t, rt, n)
+	for _, beforeClaim := range setup {
+		beforeClaim(id)
+	}
 	task, err := api.Claim(context.Background(), rt.ID)
 	if err != nil || task == nil || task.ID != id {
 		t.Fatalf("supplement fixture claim: %v", err)

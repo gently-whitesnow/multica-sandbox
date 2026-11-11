@@ -12,7 +12,7 @@ delivery receipts. Three patches against the pinned revision close exactly that:
 | --- | --- |
 | `native-admission.patch` | Three provider checks in source SQL and their generated Go query strings. |
 | `native-receipts.patch` | `GET /api/daemon/tasks/{id}/supplements[?comment_id=]`: one read-only query, its sqlc counterpart, one handler and one route. Apply after admission with `git apply --unidiff-zero`. |
-| `native-routing.patch` | Preserve the member’s current-run routing choice in `comment.suppressed_agent_ids` when claimed, so a deleted receipt cannot become an automatic follow-up. Apply last. |
+| `native-routing.patch` | Preserve the member’s current-run routing choice in `comment.suppressed_agent_ids` at create/bind, so a deleted receipt cannot become an automatic follow-up. Apply last. |
 
 None migrates a database, implements a native Multica daemon adapter or
 modifies a deployment. `scripts/test-upstream.sh` applies them only with
@@ -24,7 +24,8 @@ no steering even when `live_steering` is set.
 ## Verification
 
 Docker is required; nothing uses an inference account. Native negotiation,
-receipt inspection, a 5000-comment history, vanished receipts, lost claim and
+receipt inspection, a two-transaction delete/claim lock regression, a 5000-comment
+history, vanished receipts, lost claim and
 acknowledgement responses, late acknowledgement and cancellation, with the real
 client against the patched server:
 
@@ -61,14 +62,16 @@ Ordinary `./verify.sh` runs none of these real paths.
 
 The controller side and all three patches are tested against disposable servers.
 This PR deploys neither: `live_steering` is off by default. Enabling it is a server change followed by a
-controller configuration change, each reversible on its own:
+controller configuration change. Their code/configuration can be rolled back
+separately; persisted routing choices remain.
 
 1. Review and merge all three patches into the Multica build the deployment runs
    (v0.7.2 at the pinned revision, or re-derive them for a newer one and rerun the
    commands above against it). Regenerate `supplement.sql.go` with the server's
-   `make sqlc` and compare it with the patch. Deploy the server. Until step 3
-   nothing changes: OpenCode runtimes are admitted only when a daemon offers the
-   capability.
+   `make sqlc` and compare it with the patch. Deploy the server. Routing writes
+   start immediately for member steering across all admitted providers, including
+   codex/claude/grok/cursor/kiro, regardless of the sandbox flag. OpenCode steering
+   still requires a daemon to offer the capability.
 2. Confirm the agent image passes the steering image gate (`wget`, `sync`,
    `timeout`, OpenCode 2.2.5) and that no custom `command` replaces native
    `opencode serve` readiness.
@@ -81,6 +84,10 @@ controller configuration change, each reversible on its own:
    `supplements/quarantine` in its state volume, which should stay empty.
 
 Roll back in reverse: unset `live_steering` and restart (HTTP-owned sessions are
-retired before ACP boots), then revert the server patches. Patches without the
-flag change nothing; the flag without the patches only switches the transport to
-the owned HTTP service, without steering.
+retired before ACP boots), then revert the server patches. Rollback leaves existing
+`comment.suppressed_agent_ids` values in place: they suppress replay only for the
+agent whose turn the member explicitly chose. No data cleanup is required.
+Editing the comment's content after its receipt is gone recomputes that field
+from the edit request. A vanished receipt before consumption can leave the member
+input with no delivery, follow-up or visible receipt; the server cannot reconstruct
+consumption. The flag without server patches selects the HTTP owner without steering.

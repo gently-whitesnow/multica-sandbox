@@ -208,7 +208,13 @@ func nativeSteeringLargeHistory(t *testing.T, api *multica.Client) {
 // nativeSteeringVanishedReceipt removes a claimed receipt outside the comment
 // API, which refuses that while it is in flight: cascades and repairs still can.
 func nativeSteeringVanishedReceipt(t *testing.T, api *multica.Client) {
-	s := supplementAdmissionFixture(t, api, 86, "opencode", true, true)
+	s := supplementAdmissionFixture(t, api, 86, "opencode", true, true, func(task string) {
+		// Plan a real source thread before claim, as the controller fixture does.
+		trigger := "b8600000-0000-4000-8000-000000000001"
+		sql(t, fmt.Sprintf(`INSERT INTO comment(id,issue_id,workspace_id,author_type,author_id,content,type)
+SELECT '%s',issue_id,'%s','member','%s','Original fixture input','comment' FROM agent_task_queue WHERE id='%s';
+UPDATE agent_task_queue SET trigger_comment_id='%s' WHERE id='%s';`, trigger, workspace, user, task, trigger, task))
+	})
 	dir := t.TempDir()
 	client := steeringClient(t, os.Getenv("MULTICA_TEST_URL"), dir)
 	if err := client.Start(context.Background(), s.task); err != nil {
@@ -235,6 +241,8 @@ func nativeSteeringVanishedReceipt(t *testing.T, api *multica.Client) {
 		t.Fatal("fixture delivery failure hidden")
 	}
 	vanish(unconsumed)
+	pending := s.create(4, "bound but never claimed", 201)
+	vanish(pending)
 	later := s.create(3, "normal input after both", 201)
 	texts := []string{}
 	for range 3 {
@@ -251,6 +259,12 @@ func nativeSteeringVanishedReceipt(t *testing.T, api *multica.Client) {
 	s.receipt(later, "delivered||1")
 	steeringEvidence(t, dir, 1)
 	s.finish()
+	if got := sql(t, fmt.Sprintf("SELECT count(*) FROM agent_task_queue WHERE issue_id='%s';", s.task.IssueID)); got != "1" {
+		t.Fatalf("missing consumed/unconsumed receipts created a follow-up: %s", got)
+	}
+	if got := sql(t, fmt.Sprintf("SELECT count(*) FROM task_supplement WHERE comment_id='%s';", unconsumed)); got != "0" {
+		t.Fatal("vanished unconsumed input unexpectedly has a visible receipt")
+	}
 }
 
 // nativeSteeringLostResponses loses real HTTP responses of committed native

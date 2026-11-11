@@ -5,6 +5,6 @@ ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)
 export VERIFY_STEERING_NATIVE_PATCH=1
 UPSTREAM_TEST_RACE=${UPSTREAM_TEST_RACE:-1}
 export UPSTREAM_TEST_RACE
-UPSTREAM_TEST_FILTER=${UPSTREAM_TEST_FILTER:-'^TestUpstreamLifecycle$/^native-steering-admission$'}
+UPSTREAM_TEST_FILTER=${UPSTREAM_TEST_FILTER:-'^TestUpstreamLifecycle$/^native-steering-(admission|routing-locks)$'}
 export UPSTREAM_TEST_FILTER
 exec "$ROOT/scripts/test-upstream.sh"

@@ -29,6 +29,8 @@ if [ -z "$SOURCE" ] && [ -e "$SIBLING/.git" ] && git -C "$SIBLING" cat-file -e "
  SOURCE=$SIBLING
 fi
 UPSTREAM=$TMP/upstream
+MULTICA_TEST_UPSTREAM=$UPSTREAM
+export MULTICA_TEST_UPSTREAM
 if [ -n "$SOURCE" ]; then
  git -C "$SOURCE" cat-file -e "$REV^{commit}" 2>/dev/null || { printf '%s lacks %s; fetch it or unset MULTICA_SOURCE\n' "$SOURCE" "$REV" >&2; exit 2; }
  git clone -q --shared --no-checkout -- "$SOURCE" "$UPSTREAM"

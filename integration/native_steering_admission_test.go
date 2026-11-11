@@ -33,6 +33,9 @@ func nativeSteeringAdmission(t *testing.T, api *multica.Client) {
 	if got := sql(t, fmt.Sprintf("SELECT count(*) FROM agent_task_queue WHERE trigger_comment_id='%s';", comment.ID)); got != "0" {
 		t.Fatal("steered comment created a follow-up task")
 	}
+	if got := sql(t, fmt.Sprintf("SELECT count(*) FROM comment WHERE id IN ('%s','%s') AND '%s'::uuid = ANY(suppressed_agent_ids);", direct, comment.ID, s.task.AgentID)); got != "2" {
+		t.Fatal("create/bind did not preserve routing before claim")
+	}
 	for _, id := range []string{direct, comment.ID} {
 		if got := s.claim(); got != id {
 			t.Fatalf("native ordered claim=%s, want %s", got, id)
