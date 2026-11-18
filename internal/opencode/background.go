@@ -30,7 +30,7 @@ var (
 )
 
 // errFollow is the sandbox's failure, not the agent's: the retry resumes the session.
-var errFollow = &execution.HostFailure{Message: "Sandbox could not read the OpenCode session while background shells ran; Multica retries the task"}
+var errFollow = &execution.HostFailure{SessionUnreadable: true, Message: "Sandbox could not read the OpenCode session while background shells ran; Multica retries the task"}
 
 // shellMetadata marks a shell call OpenCode moved to the background: status running.
 type shellMetadata struct {

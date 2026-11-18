@@ -48,11 +48,11 @@ Label values:
 - `status`: `success`, `failed` or `timeout` (the controller deadline).
 - `reason`, failures only: `idle`, `memory_stall` (ADR 0032), `rejected`,
   `rejected_transient` (a host failure Multica retries, ADR 0006), `oom`,
-  `inference`, `agent` or `internal`. An `inference` failure adds the provider's HTTP `status_code`.
+  `host`, `session_unreadable`, `inference`, `agent` or `internal`. An `inference` failure adds the provider's HTTP `status_code`.
 - `continuity`: `fresh`, `resumed`, or `lost` when a prior session could not be
   continued.
 - Paused `reason`, the last refusal before the calm cooldown: `pressure`,
-  `working_set`, `disk`, `headroom` or `unreadable`; `restart` while the controller
+  `working_set`, `disk`, `inodes`, `headroom` or `unreadable`; `restart` while the controller
   waits for running attempts before exiting on a fatal attempt error (ADR 0006). The cold-start warmup paces
   starts and never pauses claims (ADR 0028).
 - `version`: the release from `VERSION` (ADR 0033) and `revision` the source commit,
@@ -70,44 +70,36 @@ Label values:
   replaced by `{id}`.
 
 Task, workspace, agent and session IDs, models, credentials, prompts and output never
-become labels. Both histograms are recorded when the attempt reports, because the
-continuity of a run is known only then.
+become labels. Attempt and preparation durations are recorded when the attempt reports.
 
-**Logs.** JSON lines on stdout carry `time`, `level`, `msg` and snake_case fields.
-`attempt finished` carries
-identity, `status`, `reason`, Multica's `failure_reason`, timings in seconds,
-continuity, model, tokens, peak memory, session and the safe failure text Multica
-also receives. Failures and degradations are `WARN`. `"debug": true` enables `DEBUG`
-events: failed Multica requests (route template, status or `error_type`) and
-the existing identity and inference diagnostics. Debug events never include headers,
-query strings, bodies or credentials.
+Additional metrics record admission pause starts (`sandbox_claims_pauses_total`) and
+completed pause duration (`sandbox_claims_pause_duration_seconds`) by initial reason,
+including separate disk and inode causes. Warmup still paces starts independently.
+`sandbox_attempt_start_delay_seconds` records queue creation to workload start by
+kind, when Multica supplies a valid timestamp. `sandbox_attempt_failures_total`
+counts reported failures by stage (`prepare` or `run`) and reason.
 
-Relay logging distinguishes upstream responses (`err == nil`) from local refusals
-and transport failures, regardless of HTTP status:
+**Logs.** JSON stdout uses `time`, `level`, `msg` and snake_case fields.
+Admission transitions include their reason, active attempts, memory readings when
+available, and pause duration on resume. Attempt summaries include the dispatch
+timestamp, outcome, failure stage and reason, duration, continuity, model, tokens,
+peak memory and session. Retry starts link to the previous task when Multica supplies
+it. Failed attempts include the safe failure text Multica also receives.
 
-- Upstream 4xx except 429: `DEBUG`, `relay upstream response`. Protocol and discovery
-  responses need not mean sandbox failure; neither endpoint exceptions nor attempt
-  success determine this level. Investigate metrics and attempt outcomes together.
-- Upstream 429/5xx: `WARN`, `relay upstream error`. Rate limiting signals reduced
-  upstream capacity even if the caller later recovers.
-- Local policy/credential refusals, capacity limits and transport failures: `WARN`,
-  `relay request refused`, with `error_type`. Attempt failures remain `WARN`.
-- Upstream responses below 400: metrics only.
+Successful relay responses emit metrics. Rate limits and upstream 5xx are warnings.
+Local refusals and transport failures are warnings with `error_type`. Authorized MCP
+401/403 and forge 404 emit info diagnostics with a route template. Other upstream
+4xx are debug. Relay details identify the relay, method, route, duration, status or
+error type and, for known grants, task, workspace and dispatch timestamp. MCP relay
+logs carry the authorized connection name. Other paths redact credential-like
+segments and replace identifiers in the sampling route. Headers, query strings and
+bodies stay out of all events.
 
-Details carry relay, method, path, `route`, status or `error_type`, and a known
-grant's `task` and `workspace`. Credential-like path segments become `{redacted}`;
-`route` also turns identifiers into `{id}`. Queries, headers, bodies and credentials
-are never logged. HTTP behavior, authorization and retries are unchanged.
-
-Per relay, outcome and route, log the first event per minute; summarize subsequent
-events as `relay events suppressed` with `count` and source `event`, at the original
-level. Keep 256 detailed keys and three fixed overflow counters (route `*`), separate
-for ordinary responses, degraded upstreams and local/transport errors. Overflow
-summaries omit status/error type rather than attributing mixed outcomes to one code.
-DEBUG shares the detailed budget with WARN: a diverse 4xx flood can exhaust it,
-leaving each WARN class one overflow detail and aggregated counts until the next window.
-Disabled levels retain no sampling state or summaries; metrics count every observation.
-State and window swaps are locked.
+Each relay samples per outcome, route and configured connection: the first event per
+minute is logged, later events are summarized at the same level. There are 256
+detailed keys and one overflow bucket per event class. Overflow summaries omit
+status and error type. Disabled levels keep no sampling state. Metrics count all
+observations.
 
 ## Consequences
 

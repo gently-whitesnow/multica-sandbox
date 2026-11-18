@@ -82,14 +82,17 @@ func (m *MCPRelay) Authorize(req *http.Request) (relay.Lease, bool) {
 		}
 		lease.Origin, lease.Path, lease.Credential = origin, path, bearer
 		name := strings.SplitN(strings.TrimPrefix(req.URL.Path, "/http/"), "/", 2)[0]
+		lease.Connection = name
 		lease.Header = r.httpServices[name].Header()
 		lease.WithholdErrors = r.httpServices[name].PathCredential != nil
 	} else {
-		target, err := r.mcpUpstream(strings.TrimPrefix(req.URL.Path, "/"))
+		name := strings.TrimPrefix(req.URL.Path, "/")
+		target, err := r.mcpUpstream(name)
 		if err != nil {
 			lease.Release()
 			return relay.Lease{Attempt: lease.Attempt, Refused: err}, false
 		}
+		lease.Connection = name
 		lease.Origin, lease.Path, lease.Credential = target.origin, target.path, target.bearer
 		lease.Header, lease.ProxyURL, lease.WithholdErrors = target.header, target.proxy, target.withhold
 	}

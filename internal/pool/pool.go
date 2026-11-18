@@ -76,6 +76,7 @@ const (
 	RefusalWorkingSet = "working_set"
 	RefusalUnreadable = "unreadable"
 	RefusalDisk       = "disk"
+	RefusalInodes     = "inodes"
 	RefusalWarmup     = "warmup"
 	RefusalHeadroom   = "headroom"
 )

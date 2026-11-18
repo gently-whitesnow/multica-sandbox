@@ -23,7 +23,9 @@ import (
 type Lease struct {
 	// Attempt names the grant's attempt for authorizers that add per-request policy.
 	Attempt string
-	Origin  *url.URL
+	// Connection is the configured name of an authorized MCP endpoint, for logs.
+	Connection string
+	Origin     *url.URL
 	// ProxyURL is a trusted deployment egress; nil keeps direct transport.
 	ProxyURL   *url.URL
 	Credential string
@@ -81,6 +83,13 @@ type Relay struct {
 }
 
 type exchangeKey struct{}
+type connectionKey struct{}
+
+// Connection returns the configured connection name attached to a recorded request.
+func Connection(r *http.Request) string {
+	name, _ := r.Context().Value(connectionKey{}).(string)
+	return name
+}
 
 type exchange struct {
 	lease Lease
@@ -211,6 +220,9 @@ func (r *Relay) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	if lease.Origin == nil || (lease.Path != "" && !strings.HasPrefix(lease.Path, "/")) {
 		r.refuse(w, req, lease.Attempt, http.StatusForbidden, ErrPolicy, start)
 		return
+	}
+	if lease.Connection != "" {
+		req = req.WithContext(context.WithValue(req.Context(), connectionKey{}, lease.Connection))
 	}
 	ctx, cancel := context.WithCancel(context.WithValue(req.Context(), exchangeKey{}, exchange{lease, req, start}))
 	defer cancel()

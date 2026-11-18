@@ -60,6 +60,8 @@ var methods = []string{http.MethodGet, http.MethodPost, http.MethodPut, http.Met
 type Metrics struct {
 	handler                         http.Handler
 	attempt, prepare, relay, client metric.Float64Histogram
+	start, pauseDuration            metric.Float64Histogram
+	pauses, failures                metric.Int64Counter
 	active                          metric.Int64UpDownCounter
 	events, retries                 metric.Int64Counter
 	removed, pruned                 metric.Int64Counter
@@ -94,6 +96,12 @@ func New() (*Metrics, error) {
 	}
 	m.attempt = histogram("sandbox.attempt.duration", "Attempt time from claim to terminal report, by outcome.", attemptBuckets)
 	m.prepare = histogram("sandbox.attempt.prepare.duration", "Attempt time from claim to agent start, by session continuity.", prepareBuckets)
+	m.start = histogram("sandbox.attempt.start.delay", "Time from creation in the Multica queue to sandbox workload start.", attemptBuckets)
+	m.pauseDuration = histogram("sandbox.claims.pause.duration", "Duration of a completed admission pause including cooldown, by initial reason.", prepareBuckets)
+	m.pauses, err = meter.Int64Counter("sandbox.claims.pauses", metric.WithDescription("Admission pauses started, by initial reason."))
+	errs = append(errs, err)
+	m.failures, err = meter.Int64Counter("sandbox.attempt.failures", metric.WithDescription("Reported attempt failures by stage and cause."))
+	errs = append(errs, err)
 	m.relay = histogram("sandbox.relay.request.duration", "Relay request time to response headers, by upstream status or refusal.", relayBuckets)
 	m.client = histogram("http.client.request.duration", "Controller requests to Multica.", clientBuckets)
 	m.active, err = meter.Int64UpDownCounter("sandbox.attempt.active", metric.WithUnit("{attempt}"), metric.WithDescription("Attempts in progress."))
@@ -206,6 +214,30 @@ func (m *Metrics) Prepare(kind, continuity string, d time.Duration) {
 	m.prepare.Record(context.Background(), d.Seconds(), metric.WithAttributes(attribute.String("kind", kind), attribute.String("continuity", continuity)))
 }
 
+func (m *Metrics) StartDelay(kind string, d time.Duration) {
+	if m != nil {
+		m.start.Record(context.Background(), d.Seconds(), metric.WithAttributes(attribute.String("kind", kind)))
+	}
+}
+
+func (m *Metrics) Failure(stage, reason string) {
+	if m != nil {
+		m.failures.Add(context.Background(), 1, metric.WithAttributes(attribute.String("stage", stage), attribute.String("reason", reason)))
+	}
+}
+
+func (m *Metrics) PauseStarted(reason string) {
+	if m != nil {
+		m.pauses.Add(context.Background(), 1, metric.WithAttributes(attribute.String("reason", reason)))
+	}
+}
+
+func (m *Metrics) PauseEnded(reason string, d time.Duration) {
+	if m != nil {
+		m.pauseDuration.Record(context.Background(), d.Seconds(), metric.WithAttributes(attribute.String("reason", reason)))
+	}
+}
+
 func (m *Metrics) Active(delta int64) {
 	if m == nil {
 		return
@@ -272,6 +304,14 @@ func (m *Metrics) Pool(r PoolReading) {
 		return
 	}
 	m.pool.Store(&r)
+}
+
+// PoolSnapshot returns the last sample read by the admission gate.
+func (m *Metrics) PoolSnapshot() *PoolReading {
+	if m == nil {
+		return nil
+	}
+	return m.pool.Load()
 }
 
 // Paused records whether claims wait for the attempt pool or a restart; reason is the

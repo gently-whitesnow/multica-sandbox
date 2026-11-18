@@ -123,8 +123,8 @@ func TestAutoAdmissionDiskHysteresisAndReadErrors(t *testing.T) {
 		t.Fatal(reason)
 	}
 	d.FilesFree = 40
-	if ok, _, _ := a.Admit(0, now); ok {
-		t.Fatal("inode exhaustion admitted")
+	if ok, refusal, _ := a.Admit(0, now); ok || refusal != RefusalInodes {
+		t.Fatalf("inode exhaustion: admitted=%t reason=%q", ok, refusal)
 	}
 	d.FilesFree = 70
 	if ok, _, _ := a.Admit(0, now); ok {

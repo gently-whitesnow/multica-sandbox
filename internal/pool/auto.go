@@ -58,7 +58,10 @@ type AutoAdmission struct {
 	AttemptMax        int64
 	lastStart, peakAt time.Time
 	peak              int64
-	diskPaused        bool
+	diskRefusal       string
+	// Headroom and Estimate are the byte values from the most recent headroom check.
+	// Estimate is zero when the check was skipped.
+	Headroom, Estimate int64
 }
 
 // Observe samples on every claim poll, also while admission refuses, so busy periods
@@ -96,6 +99,7 @@ func (a *AutoAdmission) Started(now time.Time) { a.lastStart = now }
 // Admit reports whether a new attempt may start, the bounded refusal reason (empty when
 // admitted) and a detail for logs.
 func (a *AutoAdmission) Admit(active int, now time.Time) (bool, string, string) {
+	a.Headroom, a.Estimate = 0, 0
 	read := a.ReadDisk
 	if read == nil {
 		read = ReadDisk
@@ -104,14 +108,16 @@ func (a *AutoAdmission) Admit(active int, now time.Time) (bool, string, string) 
 	if err != nil || d.Total == 0 {
 		return false, RefusalUnreadable, "host Docker filesystem unreadable"
 	}
-	if DiskLow(d) {
-		a.diskPaused = true
+	switch {
+	case d.Available < max(uint64(2<<30), d.Total/10):
+		a.diskRefusal = RefusalDisk
+	case d.Files > 0 && d.FilesFree < d.Files/20:
+		a.diskRefusal = RefusalInodes
+	case DiskRecovered(d):
+		a.diskRefusal = ""
 	}
-	if a.diskPaused && DiskRecovered(d) {
-		a.diskPaused = false
-	}
-	if a.diskPaused {
-		return false, RefusalDisk, fmt.Sprintf("host Docker filesystem low: free=%d bytes, free_inodes=%d", d.Available, d.FilesFree)
+	if a.diskRefusal != "" {
+		return false, a.diskRefusal, fmt.Sprintf("host Docker filesystem low: free=%d bytes, free_inodes=%d", d.Available, d.FilesFree)
 	}
 	if active == 0 {
 		return true, "", "auto admission: first attempt"
@@ -127,7 +133,9 @@ func (a *AutoAdmission) Admit(active int, now time.Time) (bool, string, string) 
 	// This prevents empty cgroups admitting a cold burst.
 	estimate := max(a.floor(s.High), a.observed(now))
 	estimate = int64(math.Ceil(float64(estimate) * 1.25))
-	if float64(s.High)*a.Pool.MaxWorkingSet-float64(s.WorkingSet) < float64(estimate) {
+	headroom := float64(s.High)*a.Pool.MaxWorkingSet - float64(s.WorkingSet)
+	a.Headroom, a.Estimate = int64(headroom), estimate
+	if headroom < float64(estimate) {
 		return false, RefusalHeadroom, fmt.Sprintf("auto admission: build headroom below estimate %s", Size(estimate))
 	}
 	return true, "", "auto admission: warm pool with build headroom"

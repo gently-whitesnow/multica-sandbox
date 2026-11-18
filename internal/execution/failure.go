@@ -24,7 +24,10 @@ func (e *AgentFailure) Error() string {
 
 // HostFailure is the sandbox's own failure while the agent ran, not the agent's: Multica
 // retries it as runtime_recovery, and the retry resumes the retained session.
-type HostFailure struct{ Message string }
+type HostFailure struct {
+	Message           string
+	SessionUnreadable bool
+}
 
 func (e *HostFailure) Error() string { return e.Message }
 

@@ -56,7 +56,7 @@ func (f *fleet) sync(ctx context.Context) error {
 			return err
 		}
 		f.ready[ws.ID] = rt.ID
-		f.log.Info("workspace registered", "workspace", ws.ID, "runtime", rt.ID, "orphaned", recovered.Orphaned)
+		f.log.Info("workspace registered", "workspace", ws.ID, "runtime", rt.ID, "orphaned", recovered.Orphaned, "retried", recovered.Retried)
 	}
 	return nil
 }

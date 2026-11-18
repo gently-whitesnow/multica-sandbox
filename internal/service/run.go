@@ -80,7 +80,7 @@ func Run(ctx context.Context, c Config, stateDir, tokenPath string, out io.Write
 	if err != nil || duration <= 0 {
 		return fmt.Errorf("positive timeout required")
 	}
-	p := controller.Probe{API: api, Backend: backend, Duration: duration, Interval: time.Second, Observe: c.attemptEvent, Finished: c.finished}
+	p := controller.Probe{API: api, Backend: backend, Duration: duration, Interval: time.Second, Observe: c.attemptEvent, Finished: c.finished, Started: c.started}
 	// Reconcile before validation so a missing image cannot strand old executions.
 	if err = backend.Reconcile(ctx); err != nil {
 		return err
