@@ -21,7 +21,8 @@ import (
 func TestFinishedEventSummarizesAttempts(t *testing.T) {
 	c, log, m := observed(t, false)
 	claimed := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
-	task := multica.Task{ID: "task-1", WorkspaceID: "ws-1", AgentID: "agent-1", IssueID: "issue-1", TriggerCommentContent: "prompt text"}
+	task := multica.Task{ID: "task-1", ParentTaskID: "10000000-0000-4000-8000-000000000001", CreatedAt: claimed.Add(-time.Minute).Format(time.RFC3339Nano), WorkspaceID: "ws-1", AgentID: "agent-1", IssueID: "issue-1", TriggerCommentContent: "prompt text"}
+	c.started(task, claimed)
 	c.finished(controller.Finish{Task: task, Claimed: claimed, Started: claimed.Add(4800 * time.Millisecond), Ended: claimed.Add(15 * time.Second),
 		Result: execution.Result{Output: "agent output", SessionID: "ses_1", Telemetry: execution.Telemetry{Model: "inference-codex/gpt-demo", Effort: "high", Continuity: "resumed",
 			InputTokens: 1200, OutputTokens: 80, CachedTokens: 900, PeakMemory: 512 << 20}}})
@@ -31,16 +32,17 @@ func TestFinishedEventSummarizesAttempts(t *testing.T) {
 		Failure: &execution.AgentFailure{Status: 429}})
 
 	events := lines(t, log)
-	if len(events) != 3 {
+	if len(events) != 4 {
 		t.Fatalf("%d events: %s", len(events), log)
 	}
 	want := []map[string]any{
+		{"msg": "retry attempt started", "task": "task-1", "parent_task": task.ParentTaskID},
 		{"level": "INFO", "msg": "attempt finished", "task": "task-1", "workspace": "ws-1", "agent": "agent-1", "kind": "issue", "status": "success",
 			"prepare_seconds": 4.8, "run_seconds": 10.2, "continuity": "resumed", "total_seconds": 15.0, "model": "inference-codex/gpt-demo", "effort": "high",
 			"tokens_in": 1200.0, "tokens_out": 80.0, "tokens_cached": 900.0, "peak_memory_bytes": float64(512 << 20), "session": "ses_1"},
-		{"level": "WARN", "msg": "attempt finished", "kind": "chat", "status": "failed", "reason": "rejected", "failure_reason": "environment_prepare_failed",
+		{"level": "WARN", "msg": "attempt finished", "kind": "chat", "status": "failed", "reason": "rejected", "stage": "prepare", "failure_reason": "environment_prepare_failed",
 			"total_seconds": 1.0, "report_deferred": true, "error": "Sandbox rejected the task before OpenCode started"},
-		{"level": "WARN", "kind": "chat", "status": "failed", "reason": "inference", "status_code": 429.0, "error": "Agent inference request failed (HTTP 429)"},
+		{"level": "WARN", "kind": "chat", "status": "failed", "reason": "inference", "stage": "run", "status_code": 429.0, "error": "Agent inference request failed (HTTP 429)"},
 	}
 	for i, fields := range want {
 		for key, value := range fields {
@@ -52,6 +54,8 @@ func TestFinishedEventSummarizesAttempts(t *testing.T) {
 	text := exposition(m)
 	for _, line := range []string{
 		`sandbox_attempt_duration_seconds_count{kind="issue",status="success"} 1`,
+		`sandbox_attempt_start_delay_seconds_sum{kind="issue"} 60`,
+		`sandbox_attempt_failures_total{reason="rejected",stage="prepare"} 1`,
 		`sandbox_attempt_duration_seconds_count{kind="chat",reason="rejected",status="failed"} 1`,
 		`sandbox_attempt_duration_seconds_count{kind="chat",reason="inference",status="failed",status_code="429"} 1`,
 		`sandbox_attempt_prepare_duration_seconds_count{continuity="resumed",kind="issue"} 1`,

@@ -49,12 +49,13 @@ type fleet struct {
 	// admit, when set, defers claims while the attempt pool is under memory pressure;
 	// paused records the state so changes are logged once, refused the last refusal
 	// and reason its bounded cause.
-	admit         func() (bool, string, string)
-	paused        bool
-	refused       time.Time
-	reason        string
-	clock         func() time.Time
-	autoAdmission *pool.AutoAdmission
+	admit                 func() (bool, string, string)
+	paused                bool
+	refused, pauseStarted time.Time
+	pauseReason           string
+	reason                string
+	clock                 func() time.Time
+	autoAdmission         *pool.AutoAdmission
 	// wake carries daemon WebSocket hints and connection changes from listen; runtimes
 	// hands it the ready set, published the last set handed over.
 	wake      chan wakeEvent
@@ -286,13 +287,28 @@ func (f *fleet) admitted() bool {
 	calm := now.Sub(f.refused) >= admissionCooldown
 	switch {
 	case calm && f.paused:
-		f.log.Info("claims resumed", "pool", status)
+		duration := now.Sub(f.pauseStarted)
+		f.metrics.PauseEnded(f.pauseReason, duration)
+		f.log.Info("claims resumed", "pool", status, "reason", f.pauseReason, "pause_seconds", duration.Seconds(), "active", len(f.active))
 	case !calm && !f.paused:
-		f.log.Warn("claims paused", "pool", status)
+		f.startPause(now, reason, status)
 	}
 	f.paused = !calm
 	f.metrics.Paused(f.paused, f.reason)
 	return ok && calm
+}
+
+func (f *fleet) startPause(now time.Time, reason, status string) {
+	f.pauseStarted, f.pauseReason = now, reason
+	f.metrics.PauseStarted(reason)
+	attrs := []any{"pool", status, "reason", reason, "active", len(f.active)}
+	if reading := f.metrics.PoolSnapshot(); reading != nil && reason != pool.RefusalUnreadable {
+		attrs = append(attrs, "working_set_bytes", reading.Usage, "memory_high_bytes", reading.Limit, "memory_pressure_ratio", reading.Pressure)
+	}
+	if reason == pool.RefusalHeadroom && f.autoAdmission != nil {
+		attrs = append(attrs, "headroom_bytes", f.autoAdmission.Headroom, "estimate_bytes", f.autoAdmission.Estimate)
+	}
+	f.log.Warn("claims paused", attrs...)
 }
 
 // finish forgets a completed attempt.

@@ -42,6 +42,8 @@ type Task struct {
 	ID                     string            `json:"id"`
 	RuntimeID              string            `json:"runtime_id"`
 	DispatchedAt           string            `json:"dispatched_at"`
+	CreatedAt              string            `json:"created_at"`
+	ParentTaskID           string            `json:"parent_task_id"`
 	StartClaimSupported    bool              `json:"start_claim_supported"`
 
 	// Resume deltas and coalesced comments feed the upstream per-turn hints.

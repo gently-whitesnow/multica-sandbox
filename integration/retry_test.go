@@ -35,6 +35,12 @@ func serverRetry(t *testing.T, api *multica.Client, rt multica.Runtime) {
 		t.Fatal("server did not create a fresh attempt")
 	}
 	p := controller.Probe{API: api, Duration: time.Millisecond, Interval: 10 * time.Millisecond}
+	p.Started = func(task multica.Task, started time.Time) {
+		created, err := time.Parse(time.RFC3339Nano, task.CreatedAt)
+		if task.ID != retryID || task.ParentTaskID != id || err != nil || created.After(started) {
+			t.Errorf("invalid retry telemetry: task=%q parent=%q created=%q", task.ID, task.ParentTaskID, task.CreatedAt)
+		}
+	}
 	if err := p.Run(ctx, rt.ID); err != nil {
 		t.Fatal(err)
 	}

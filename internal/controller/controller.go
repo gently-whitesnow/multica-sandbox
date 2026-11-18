@@ -35,6 +35,7 @@ type Probe struct {
 	// Finished, when set, receives every attempt whose terminal report Multica accepted
 	// or queued.
 	Finished func(Finish)
+	Started  func(multica.Task, time.Time)
 	Launch   func(context.Context, multica.Task) (execution.Run, error)
 }
 
@@ -123,6 +124,9 @@ func (p *Probe) execute(ctx context.Context, t multica.Task, ticks <-chan time.T
 	}()
 	p.observe("started", t.ID)
 	f.Started = time.Now()
+	if p.Started != nil {
+		p.Started(t, f.Started)
+	}
 	timer := time.NewTimer(p.Duration)
 	defer timer.Stop()
 	for {

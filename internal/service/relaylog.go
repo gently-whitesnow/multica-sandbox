@@ -5,9 +5,12 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/gently-whitesnow/multica-sandbox/internal/relay"
 )
 
 const (
@@ -25,24 +28,28 @@ const (
 	relayUpstreamResponse relayEvent = iota
 	relayUpstreamError
 	relayRequestRefused
+	relayUpstreamDiagnostic
 	relayEventClasses
 )
 
 func (e relayEvent) level() slog.Level {
-	if e == relayUpstreamResponse {
+	switch e {
+	case relayUpstreamResponse:
 		return slog.LevelDebug
+	case relayUpstreamDiagnostic:
+		return slog.LevelInfo
 	}
 	return slog.LevelWarn
 }
 
 func (e relayEvent) message() string {
-	return [...]string{"relay upstream response", "relay upstream error", "relay request refused"}[e]
+	return [...]string{"relay upstream response", "relay upstream error", "relay request refused", "relay upstream diagnostic"}[e]
 }
 
 type refusalKey struct {
-	errorType, route string
-	status           int
-	event            relayEvent
+	errorType, route, connection string
+	status                       int
+	event                        relayEvent
 }
 
 // refusalLog samples one relay's events, preserving their source and severity even
@@ -75,18 +82,26 @@ func (l *refusalLog) run(ctx context.Context, interval time.Duration) {
 }
 
 func (l *refusalLog) record(r *http.Request, attempt string, status int, errorType string, elapsed time.Duration) {
+	connection := relay.Connection(r)
 	event := relayUpstreamResponse
 	switch {
 	case errorType != "":
 		event = relayRequestRefused
 	case status == http.StatusTooManyRequests || status >= 500:
 		event = relayUpstreamError
+	case l.relay == "mcp" && connection != "" && (status == 401 || status == 403),
+		l.relay == "forge" && attempt != "" && status == 404:
+		event = relayUpstreamDiagnostic
 	}
 	if !l.log.Enabled(r.Context(), event.level()) {
 		return
 	}
 	path, route := redactPath(r.URL.Path)
-	key := refusalKey{errorType, route, status, event}
+	if event == relayUpstreamDiagnostic || connection != "" {
+		path = ""
+		route = diagnosticRoute(l.relay, r.URL.Path)
+	}
+	key := refusalKey{errorType: errorType, route: route, connection: connection, status: status, event: event}
 	l.mu.Lock()
 	n, seen := l.suppressed[key]
 	switch {
@@ -103,7 +118,13 @@ func (l *refusalLog) record(r *http.Request, attempt string, status int, errorTy
 	if seen {
 		return
 	}
-	attrs := []any{"relay", l.relay, "method", r.Method, "path", path, "route", route}
+	attrs := []any{"relay", l.relay, "method", r.Method, "route", route}
+	if path != "" {
+		attrs = append(attrs, "path", path)
+	}
+	if connection != "" {
+		attrs = append(attrs, "connection", connection)
+	}
 	if status != 0 {
 		attrs = append(attrs, "status", status)
 	}
@@ -112,7 +133,7 @@ func (l *refusalLog) record(r *http.Request, attempt string, status int, errorTy
 	}
 	// Attempt keys are workspace:runtime:task:dispatched_at.
 	if parts := strings.SplitN(attempt, ":", 4); len(parts) == 4 {
-		attrs = append(attrs, "workspace", parts[0], "task", parts[2])
+		attrs = append(attrs, "workspace", parts[0], "task", parts[2], "dispatched_at", parts[3])
 	}
 	attrs = append(attrs, "seconds", elapsed.Seconds())
 	l.log.Log(r.Context(), event.level(), event.message(), attrs...)
@@ -136,6 +157,9 @@ func (l *refusalLog) flush() {
 			continue
 		}
 		attrs := []any{"relay", l.relay, "route", key.route, "event", key.event.message()}
+		if key.connection != "" {
+			attrs = append(attrs, "connection", key.connection)
+		}
 		if key.status != 0 {
 			attrs = append(attrs, "status", key.status)
 		}
@@ -144,6 +168,26 @@ func (l *refusalLog) flush() {
 		}
 		l.log.Log(context.Background(), key.event.level(), "relay events suppressed", append(attrs, "count", n)...)
 	}
+}
+
+// Diagnostic logs are enabled by default. Keep only API vocabulary from
+// paths, and use the trusted lease name for MCP connection identity.
+func diagnosticRoute(relayType, p string) string {
+	if relayType == "mcp" {
+		if strings.HasPrefix(p, "/http/") {
+			return "/http/{connection}/{resource}"
+		}
+		return "/{connection}"
+	}
+	segments := strings.Split(strings.TrimPrefix(p, "/"), "/")
+	words := []string{"api", "v4", "repos", "projects", "groups", "issues", "pulls", "merge_requests", "pipelines", "jobs",
+		"repository", "commits", "branches", "tree", "files", "compare", "tags", "statuses", "notes", "actions", "runs", "artifacts"}
+	for i, segment := range segments {
+		if !slices.Contains(words, segment) {
+			segments[i] = "{id}"
+		}
+	}
+	return "/" + strings.Join(segments, "/")
 }
 
 var (

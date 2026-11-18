@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/gently-whitesnow/multica-sandbox/internal/controller"
 	"github.com/gently-whitesnow/multica-sandbox/internal/execution"
@@ -24,6 +25,17 @@ func (c Config) attemptEvent(event, id string) {
 	}
 }
 
+func (c Config) started(task multica.Task, now time.Time) {
+	created, err := time.Parse(time.RFC3339Nano, task.CreatedAt)
+	if err == nil && !created.IsZero() && !created.After(now) {
+		c.metrics.StartDelay(attemptKind(task), now.Sub(created))
+	}
+	if multica.ValidID(task.ParentTaskID) {
+		c.logger().Info("retry attempt started", "task", task.ID, "workspace", task.WorkspaceID,
+			"dispatched_at", task.DispatchedAt, "parent_task", task.ParentTaskID)
+	}
+}
+
 // finished logs and records an attempt's summary: identity, outcome, timing and
 // resources, with only the safe failure text Multica also receives. Prompts and
 // output stay out.
@@ -31,7 +43,10 @@ func (c Config) finished(f controller.Finish) {
 	kind := attemptKind(f.Task)
 	status, reason, code := outcome(f.Failure)
 	attrs := []slog.Attr{slog.String("task", f.Task.ID), slog.String("workspace", f.Task.WorkspaceID), slog.String("agent", f.Task.AgentID),
-		slog.String("kind", kind), slog.String("status", status)}
+		slog.String("kind", kind), slog.String("status", status), slog.String("dispatched_at", f.Task.DispatchedAt)}
+	if multica.ValidID(f.Task.ParentTaskID) {
+		attrs = append(attrs, slog.String("parent_task", f.Task.ParentTaskID))
+	}
 	if reason != "" {
 		attrs = append(attrs, slog.String("reason", reason))
 	}
@@ -42,6 +57,16 @@ func (c Config) finished(f controller.Finish) {
 	if f.Failure != nil {
 		var failureReason string
 		message, failureReason = failure(f.Failure)
+		stage := "run"
+		if f.Started.IsZero() {
+			stage = "prepare"
+		}
+		failureCause := reason
+		if failureCause == "" {
+			failureCause = status
+		}
+		c.metrics.Failure(stage, failureCause)
+		attrs = append(attrs, slog.String("stage", stage))
 		if failureReason != "" {
 			attrs = append(attrs, slog.String("failure_reason", failureReason))
 		}
@@ -122,6 +147,9 @@ func outcome(cause error) (status, reason string, code int) {
 	case errors.As(cause, &oom):
 		return "failed", "oom", 0
 	case errors.As(cause, &host):
+		if host.SessionUnreadable {
+			return "failed", "session_unreadable", 0
+		}
 		return "failed", "host", 0
 	case errors.As(cause, &agent) && agent.Status >= 400 && agent.Status <= 599:
 		return "failed", "inference", agent.Status

@@ -24,7 +24,7 @@ func TestRelayEventLevels(t *testing.T) {
 	}{
 		{"upstream-401", "DEBUG", "relay upstream response", "", 401, nil},
 		{"upstream-403", "DEBUG", "relay upstream response", "", 403, nil},
-		{"upstream-404", "DEBUG", "relay upstream response", "", 404, nil},
+		{"upstream-404", "INFO", "relay upstream diagnostic", "", 404, nil},
 		{"upstream-422", "DEBUG", "relay upstream response", "", 422, nil},
 		{"upstream-429", "WARN", "relay upstream error", "", 429, nil},
 		{"upstream-500", "WARN", "relay upstream error", "", 500, nil},
@@ -49,7 +49,11 @@ func TestRelayEventLevels(t *testing.T) {
 			if len(events) != 2 {
 				t.Fatalf("events: %v", events)
 			}
-			if e := events[0]; e["level"] != test.level || e["msg"] != test.message || e["path"] != "/v1/{redacted}" || e["task"] != "task" {
+			var path any = "/v1/{redacted}"
+			if test.level == "INFO" {
+				path = nil
+			}
+			if e := events[0]; e["level"] != test.level || e["msg"] != test.message || e["path"] != path || e["task"] != "task" || e["dispatched_at"] != "dispatch" {
 				t.Fatalf("detail: %v", e)
 			}
 			if e := events[1]; e["level"] != test.level || e["event"] != test.message || e["count"] != 3.0 {
@@ -239,7 +243,7 @@ func TestRelayHTTPObservation(t *testing.T) {
 				}
 				refusals.flush()
 				for _, e := range lines(t, log) {
-					if e["error_type"] != nil || (!debug && e["level"] != "WARN") {
+					if e["error_type"] != nil || (!debug && e["level"] != "WARN" && !(e["level"] == "INFO" && e["status"] == 404.0)) {
 						t.Errorf("upstream classified as local refusal: %v", e)
 					}
 				}
@@ -248,6 +252,45 @@ func TestRelayHTTPObservation(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+type namedRelayFixture struct{ relay.Authorizer }
+
+func (f namedRelayFixture) Authorize(r *http.Request) (relay.Lease, bool) {
+	lease, ok := f.Authorizer.Authorize(r)
+	lease.Connection = "fixture-connection"
+	return lease, ok
+}
+
+func TestMCPRelayLogsAuthorizedConnection(t *testing.T) {
+	c, log, _ := observed(t, false)
+	refusals := newRefusalLog(c.logger(), "mcp")
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	t.Cleanup(upstream.Close)
+	grants := relay.NewGrants("fixture_")
+	token, err := grants.Issue("ws:runtime:task:dispatch", relay.Upstream{Origin: upstream.URL, Credential: "fixture-upstream"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy, err := relay.New(namedRelayFixture{grants}, relay.Policy{Allow: func(string) bool { return true }, Limit: 1024,
+		Record: c.relayRecord("mcp", refusals)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/http/fixture-connection/private-path?key=private-query", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	proxy.ServeHTTP(httptest.NewRecorder(), req)
+
+	events := lines(t, log)
+	if len(events) != 1 || events[0]["level"] != "INFO" || events[0]["connection"] != "fixture-connection" ||
+		events[0]["route"] != "/http/{connection}/{resource}" || events[0]["status"] != 401.0 {
+		t.Fatalf("MCP diagnostic: %v", events)
+	}
+	if strings.Contains(log.String(), "private-") || strings.Contains(log.String(), token) {
+		t.Fatal("MCP diagnostic leaked request details")
 	}
 }
 

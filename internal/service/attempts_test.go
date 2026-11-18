@@ -109,6 +109,8 @@ func TestClaimsWaitWhilePoolIsUnderPressure(t *testing.T) {
 	var log bytes.Buffer
 	m, _ := metrics.New()
 	f.log, f.admit, f.metrics, f.ready = newLogger(&log, false), admission(p, m), m, map[string]string{"a": "a"}
+	now := time.Now()
+	f.clock = func() time.Time { return now }
 	execute, _, release := track()
 	defer close(release)
 	for range 3 {
@@ -126,8 +128,7 @@ func TestClaimsWaitWhilePoolIsUnderPressure(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A calm reading resumes claims only after the cooldown.
-	now := time.Now()
-	f.clock = func() time.Time { return now }
+	now = now.Add(time.Second)
 	if err := f.claim(context.Background(), execute); err != nil || len(f.active) != 0 {
 		t.Fatalf("claimed within the cooldown: %v %d", err, len(f.active))
 	}
@@ -138,7 +139,9 @@ func TestClaimsWaitWhilePoolIsUnderPressure(t *testing.T) {
 	if len(f.active) != 3 || strings.Count(log.String(), `"msg":"claims resumed"`) != 1 || strings.Count(log.String(), `"msg":"claims paused"`) != 1 {
 		t.Fatalf("claims did not resume: %d active, log %q", len(f.active), log.String())
 	}
-	if text := exposition(m); !strings.Contains(text, "sandbox_claims_paused 0") || !strings.Contains(text, "sandbox_attempt_active 3") {
+	if text := exposition(m); !strings.Contains(text, "sandbox_claims_paused 0") || !strings.Contains(text, "sandbox_attempt_active 3") ||
+		!strings.Contains(text, `sandbox_claims_pauses_total{reason="pressure"} 1`) ||
+		!strings.Contains(text, `sandbox_claims_pause_duration_seconds_sum{reason="pressure"} 16`) {
 		t.Fatalf("resume not exported:\n%s", text)
 	}
 	if err := os.Remove(filepath.Join(dir, "memory.pressure")); err != nil {
