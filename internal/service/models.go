@@ -72,6 +72,7 @@ func failure(cause error) (string, string) {
 	var timeout *execution.TimeoutError
 	var idle *execution.IdleError
 	var rejected *execution.RejectedError
+	var mcpConfig *opencode.MCPConfigurationError
 	var agent *execution.AgentFailure
 	var oom *execution.OOMError
 	var stall *execution.MemoryStallError
@@ -87,6 +88,9 @@ func failure(cause error) (string, string) {
 	case errors.As(cause, &rejected) && rejected.Transient():
 		return "Sandbox host failed to prepare the attempt; Multica retries the task", "runtime_recovery"
 	case errors.As(cause, &rejected):
+		if errors.As(rejected, &mcpConfig) {
+			return mcpConfig.Error(), "environment_prepare_failed"
+		}
 		return "Sandbox rejected the task before OpenCode started", "environment_prepare_failed"
 	case errors.As(cause, &oom):
 		return oom.Error(), memoryReason(oom.Pool)

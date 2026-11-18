@@ -16,6 +16,19 @@ import (
 
 var namePattern = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_-]{0,63}$`)
 
+// MCPConfigurationError is safe to report to Multica. It carries a validated
+// server name and a fixed explanation, with no configuration values.
+type MCPConfigurationError struct {
+	server  string
+	problem string
+}
+
+func (e *MCPConfigurationError) Error() string {
+	return fmt.Sprintf("MCP server %q: %s", e.server, e.problem)
+}
+
+func (e *MCPConfigurationError) Unwrap() error { return ErrDenied }
+
 type mcpConnection struct {
 	URL         string            `json:"url"`
 	Type        string            `json:"type,omitempty"`
@@ -92,7 +105,7 @@ func Selection(t multica.Task) (map[string]Remote, []Skipped, error) {
 		}
 		var connection mcpConnection
 		if data := servers[name]; bytes.Equal(bytes.TrimSpace(data), []byte("null")) || decodeMCP(data, &connection) != nil {
-			return nil, nil, fmt.Errorf("%w: MCP server %q has an invalid configuration", ErrDenied, name)
+			return nil, nil, &MCPConfigurationError{server: name, problem: "invalid configuration. Check the field names and JSON value types."}
 		}
 		if connection.Disabled || connection.Enabled != nil && !*connection.Enabled {
 			continue
@@ -152,12 +165,15 @@ func unsupportedMCP(c mcpConnection) string {
 }
 
 func selectMCP(name string, c mcpConnection) (Remote, error) {
+	if strings.TrimSpace(c.URL) == "" {
+		return Remote{}, &MCPConfigurationError{server: name, problem: "the URL is empty. Set the url field to a Streamable HTTP MCP endpoint."}
+	}
 	decodedURL, _ := url.QueryUnescape(c.URL)
 	if strings.Contains(c.URL, "{env:") || strings.Contains(decodedURL, "{env:") || containsIAMTemplate(c.URL) || containsIAMTemplate(decodedURL) {
 		return Remote{}, fmt.Errorf("%w: MCP server %q URL cannot contain credential templates; use HTTP headers", ErrDenied, name)
 	}
 	if !validMCPURL(c.URL) {
-		return Remote{}, fmt.Errorf("%w: MCP server %q requires an HTTP(S) URL without user information or a fragment", ErrDenied, name)
+		return Remote{}, &MCPConfigurationError{server: name, problem: "set the url field to an HTTP(S) endpoint without user information or a fragment."}
 	}
 	headers, err := mcpHeaders(c.Headers)
 	if err != nil {
