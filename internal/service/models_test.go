@@ -14,6 +14,7 @@ import (
 	"github.com/gently-whitesnow/multica-sandbox/internal/execution"
 	"github.com/gently-whitesnow/multica-sandbox/internal/inference"
 	"github.com/gently-whitesnow/multica-sandbox/internal/multica"
+	"github.com/gently-whitesnow/multica-sandbox/internal/opencode"
 )
 
 type scopedCatalog struct{ scope inference.Scope }
@@ -87,6 +88,40 @@ func TestFailureReasonsMatchUpstreamDaemon(t *testing.T) {
 		if message, reason := failure(tc.cause); message != tc.message || reason != tc.reason {
 			t.Errorf("%v -> %q %q", tc.cause, message, reason)
 		}
+	}
+}
+
+func TestMCPPreparationReportsSafeConfigErrors(t *testing.T) {
+	const agent = "20000000-0000-4000-8000-000000000001"
+	for name, tc := range map[string]struct{ config, message string }{
+		"empty URL": {
+			`{"type":"http","url":""}`,
+			`MCP server "docs": the URL is empty. Set the url field to a Streamable HTTP MCP endpoint.`,
+		},
+		"invalid URL": {
+			`{"type":"http","url":"https://private-user:private-password@example.invalid/mcp"}`,
+			`MCP server "docs": set the url field to an HTTP(S) endpoint without user information or a fragment.`,
+		},
+		"invalid entry": {
+			`{"type":"http","url":"https://example.invalid/mcp","headers":{"Authorization":["private-token"]}}`,
+			`MCP server "docs": invalid configuration. Check the field names and JSON value types.`,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			task := multica.Task{
+				ID: "40000000-0000-4000-8000-000000000001", RuntimeID: "50000000-0000-4000-8000-000000000001",
+				WorkspaceID: "10000000-0000-4000-8000-000000000001", AgentID: agent,
+				DispatchedAt: "2026-10-05T12:00:00Z", StartClaimSupported: true,
+				Agent: &multica.Agent{ID: agent, MCPConfig: json.RawMessage(`{"mcpServers":{"docs":` + tc.config + `}}`)},
+			}
+			run, err := (&opencode.Adapter{}).Start(context.Background(), task)
+			if run != nil || !errors.Is(err, opencode.ErrDenied) {
+				t.Fatalf("invalid MCP configuration did not reject the attempt: %v", err)
+			}
+			if message, reason := failure(err); message != tc.message || reason != "environment_prepare_failed" {
+				t.Errorf("got %q, %q; want %q, environment_prepare_failed", message, reason, tc.message)
+			}
+		})
 	}
 }
 
