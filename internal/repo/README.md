@@ -1,150 +1,117 @@
 # Repository checkout and Git relay
 
-Agents run the unchanged upstream `multica repo checkout <url> [--ref] [--fresh]`
-inside their attempt, then commit and `git push` as under the native runtime (ADR 0015).
-The controller serves upstream's daemon `/repo/checkout` contract and mediates Git smart
-HTTP. No Git host or Multica credential enters the attempt. With `sessions`, follow-up
-tasks on an issue or chat session reuse its workdir and checkouts ([OpenCode README](../opencode/README.md)).
-With the forge relay, the unchanged `gh` opens pull requests.
+Agents run unchanged upstream `multica repo checkout <url> [--ref] [--fresh]` inside
+attempts, then commit and `git push` as under the native runtime (ADR 0015). The
+controller serves upstream's `/repo/checkout` contract and mediates Git smart HTTP; no
+Git host or Multica credential enters the attempt. With `sessions`, follow-up tasks on
+an issue or chat reuse its workdir and checkouts ([OpenCode README](../opencode/README.md)).
+With `forge_relay`, unchanged `gh`/`glab` opens pull/merge requests.
 
 ## Configuration
 
-Add these to `opencode` (`deploy/opencode.example.json`). They require `multica_relay`:
+Add to `opencode` (`deploy/opencode.example.json`); all require `multica_relay`:
 
-- `helper`: the digest-pinned image from `docker build --target helper .`, preloaded
-  like the agent image. It is image-mounted at `/opt/multica-sandbox/helper` and kept
-  off `PATH`.
-  - `sandbox-helper init` prepares each attempt's owned volume as uid 65532 with mode
-    0700. It runs with no network, a read-only rootfs and only `CAP_CHOWN`.
-  - The volume is the agent working directory `/workspace/work`; it also holds
-    `HOME` with its caches and `TMPDIR` (ADR 0015). Projected configuration, XDG
-    config, data and state and auth stores stay in the `/workspace` tmpfs.
+- `helper`: digest-pinned preloaded image (`docker build --target helper .`), mounted
+  at `/opt/multica-sandbox/helper` off `PATH`.
+  - `sandbox-helper init` prepares each attempt's volume as uid 65532 mode 0700 (no
+    network, read-only rootfs, only `CAP_CHOWN`). The volume holds `/workspace/work`,
+    `HOME` caches and `TMPDIR` (ADR 0015); projected config, XDG config/data/state and
+    auth stores stay in `/workspace` tmpfs.
   - `sandbox-helper forward` serves `127.0.0.1:19514` (`MULTICA_DAEMON_PORT`) as the
-    attempt user, towards the Multica relay listener.
-- `git_relay` (`listen`, an `http` `url`): the Git relay, the HTTP proxy of attempt Git remotes. Give the controller the
-  `url` alias on the template network, like the other relays.
-- `git_file`: a controller-only version-1 file (`deploy/git.example.json`). Each entry
-  binds a `workspace_id` and a claim URL `host` to an `upstream` origin (default
-  `https://<host>`; `http` needs `allow_http`).
-  - With `password_file`, the relay sends basic authentication with `username`. The
-    file is reread per request, so an external issuer can rotate it, for example a
-    GitHub App installation token with `x-access-token`.
-  - Without a password file, the host is fetched anonymously.
-  - `api` (with a password file) is the forge API origin, for example
-    `https://api.github.com`, an Enterprise Server or a GitLab origin. `forge` names its
-    CLI: `github` (`gh`, default) or `gitlab` (`glab`); GitLab passwords go upstream as
-    `PRIVATE-TOKEN` or, with `api_auth: "bearer"`, as a bearer token.
-  - `commit_name` and `commit_email` set the commit identity of the host's checkouts,
-    for example a GitHub App bot. They default to the agent name and
-    `agent@multica-sandbox.invalid`.
+    attempt user towards the Multica relay listener.
+- `git_relay` (`listen`, `http` `url`): Git smart-HTTP proxy; add its alias to the
+  controller on the template network.
+- `git_file`: controller-only version-1 file (`deploy/git.example.json`) binding
+  `workspace_id` and claim `host` to `upstream` (default `https://<host>`; `http` needs
+  `allow_http`).
+  - `password_file` + `username`: basic auth, reread per request for external rotation
+    (e.g. GitHub App installation token with `x-access-token`). Omit for anonymous fetch.
+  - `api` (with `password_file`): forge API origin (e.g. `https://api.github.com`,
+    Enterprise Server or GitLab). `forge` selects `github` (`gh`, default) or `gitlab`
+    (`glab`; sends `PRIVATE-TOKEN`, or bearer with `api_auth: "bearer"`).
+  - `commit_name` / `commit_email`: checkout commit identity (default: agent name and
+    `agent@multica-sandbox.invalid`).
 
-The agent image must contain `git`; startup checks it. Official-base users add it with
-`FROM`, as `examples/agent-image/debian.Dockerfile` already does. With `mirrors`, new
-checkouts borrow objects from read-only per-workspace mirrors (ADR 0035).
+The agent image must include `git` (verified at startup; see `examples/agent-image/debian.Dockerfile`).
+With `mirrors`, new checkouts borrow objects from read-only per-workspace mirrors (ADR 0035).
 
 ## Behavior
 
-Attempts receive `GIT_CONFIG_*` entries per host the workspace binds, around the alias
-`http://<host>/` (ADR 0016):
-- `url.http://<host>/.insteadOf` maps `https://<host>/`, `git@<host>:`, `ssh://git@<host>/`
-  and the prefix of each claim URL in another upstream form (`ssh://user@<host>:port/`,
-  `user@<host>:`, `git://<host>/`); `http://<host>/` is the alias itself;
-- `http.http://<host>/.proxy` sends the alias to the relay `url` as an HTTP proxy;
-- `http.http://<host>/.extraHeader` carries a per-attempt `msg_` credential.
+Attempts receive `GIT_CONFIG_*` entries per bound workspace host around `http://<host>/` (ADR 0016):
+- `url.http://<host>/.insteadOf`: maps `https://<host>/`, `git@<host>:`, `ssh://git@<host>/`
+  and any alternate claim URL prefix (`ssh://user@<host>:port/`, `user@<host>:`, `git://<host>/`).
+- `http.http://<host>/.proxy`: routes the alias to `git_relay.url`.
+- `http.http://<host>/.extraHeader`: carries a per-attempt `msg_` credential.
 
-`origin` keeps the real URL, and `git remote -v` shows the alias on the forge host,
-so `gh` resolves the repository as natively. The relay accepts only proxy requests
-and serves only smart HTTP fetch and push (`git-upload-pack`, `git-receive-pack`) to
-the hosts the attempt's workspace binds, for any repository there, as the native host's
-credentials do. It replaces the credential and refuses redirects. Packs may reach 2 GiB, and the upstream gets 5 minutes to answer. Grants
-end at cleanup and on restart.
+`origin` keeps the real URL and `git remote -v` shows the forge host alias, so `gh`
+resolves repositories natively. The relay accepts only proxy requests for smart HTTP
+fetch/push (`git-upload-pack`, `git-receive-pack`) to bound hosts, swaps credentials,
+refuses redirects, allows packs up to 2 GiB with a 5-minute upstream timeout, and drops
+grants on cleanup or restart.
 
-`forge_relay` (`listen`, an `https` `url` on the controller alias) serves `gh`, as native
-`gh` uses host credentials:
-- Attempts resolve each `api` name (`api.github.com` for `github.com`, otherwise the
-  host, `/api/` only) to loopback, where the helper forwards port 443 to the relay.
-- `NO_PROXY`/`no_proxy` preserve image bypasses and add API names at port 443,
-  keeping Git's HTTP aliases on their relay even when the hostname is shared.
-- The relay terminates TLS with certificates from a per-process CA. The CA is
-  name-constrained to those names and trusted through `SSL_CERT_DIR`
-  (`/workspace/certs:/etc/ssl/certs`, so clients that read only that variable keep the system roots). It checks that the Host header matches the TLS name.
-- `GH_TOKEN` and `GH_ENTERPRISE_TOKEN` carry the attempt's `msg_` credential, and
-  `GH_HOST` names a single bound host. The relay sends `token <password>` upstream.
-- For GitLab hosts `GITLAB_TOKEN` carries it and `GITLAB_HOST` names a single bound host;
-  prompts, update checks and telemetry of `glab` are off. glab 1.99 sends `PRIVATE-TOKEN`
-  to `/api/v4/` and `/api/graphql`, with project paths encoded as `group%2Fproject`. The
-  forge relay admits encoded slashes inside segments, requires a clean decoded path and
-  forwards the path unchanged; `glab mr create` reads the project and posts the request.
-- GitLab token rotation (`.../personal_access_tokens/<id|self>/rotate`,
-  `.../access_tokens/<id|self>/rotate`) is refused with 403 for any method, case,
-  trailing slash or format suffix: GitLab returns the rotated token's successor and
-  revokes the password file's token. Creating tokens is left to the token's scope.
-- `gh pr create` (gh 2.46) posts three GraphQL operations: `RepositoryInfo`,
-  `PullRequestForBranch` and `PullRequestCreate`, to `https://api.github.com/graphql`
-  or `https://<host>/api/graphql`. REST calls use `/api/v3/` on Enterprise Server.
-  The relay forwards both paths unchanged to the configured `api` origin.
-- Log, artifact and archive downloads redirect to presigned storage. The relay passes `304`
-  and absolute `https` redirects; `gh` follows them through egress without the relay credential.
-- Images add `gh` or `glab` themselves; the Debian example has `gh`.
+`forge_relay` (`listen`, `https` `url` on controller alias) serves `gh`/`glab`:
+- Attempts resolve each `api` hostname (`api.github.com` for `github.com`, else host
+  `/api/` only) to loopback, forwarded by the helper on port 443 to the relay.
+- `NO_PROXY`/`no_proxy` preserve image bypasses and add API names on port 443 so Git
+  HTTP aliases stay on the Git relay.
+- The relay terminates TLS using a per-process CA name-constrained to those hosts,
+  trusted via `SSL_CERT_DIR` (`/workspace/certs:/etc/ssl/certs`), and verifies Host
+  matches TLS SNI.
+- GitHub: `GH_TOKEN`/`GH_ENTERPRISE_TOKEN` carry `msg_`, `GH_HOST` names a single bound
+  host, and the relay sends `token <password>` upstream. Forwards GraphQL (`/graphql` or
+  `/api/graphql`) and REST (`/api/v3/`) unchanged; passes `304` and absolute `https`
+  redirects for log/artifact downloads (followed without relay credentials).
+- GitLab: `GITLAB_TOKEN` carries `msg_`, `GITLAB_HOST` names a single bound host, and
+  `glab` prompts/update checks/telemetry are disabled. Admits encoded slashes
+  (`group%2Fproject`) on `/api/v4/` and `/api/graphql` after verifying a clean decoded
+  path. Refuses token rotation (`.../personal_access_tokens/<id|self>/rotate`,
+  `.../access_tokens/<id|self>/rotate`) with 403 regardless of method, case, trailing
+  slash or suffix.
+- Images provide `gh` or `glab` themselves (`examples/agent-image/debian.Dockerfile` includes `gh`).
 
-Deployment-owned bounds, as under the native runtime:
-- **Credential scope.** Pushes and `gh` may do anything the host's deployment
-  credential may do, on any repository it reaches. Use a GitHub App installation token or a
-  fine-grained token restricted to the intended repositories, with
-  `contents: write` and `pull_requests: write`, and no administration rights. On
-  GitLab, use a group or project access token with the Developer role and `api` scope.
-- **Branch protection.** Pushes may update any ref the credential allows. Protect
-  default and release branches with rulesets or branch protection on the forge.
+Deployment-owned bounds:
+- **Credential scope:** pushes and `gh`/`glab` have whatever authority the host
+  credential holds. Use a scoped GitHub App token or fine-grained token (`contents: write`,
+  `pull_requests: write`, no admin) or a GitLab group/project token (Developer, `api`).
+- **Branch protection:** protect default and release branches on the forge.
 
-Limits: apart from token rotation the relay inspects neither REST paths nor GraphQL operations;
-merges and other API actions are bounded only by the credential's role and protected branches (#62).
-`GH_HOST` is unset when a workspace binds several API hosts; `gh` then resolves only `github.com` remotes,
-so pass `--repo <host>/<owner>/<repo>` or `GH_HOST` for Enterprise Server; behavior beyond the fixture is unverified.
+Limits: beyond GitLab token rotation, the relay does not inspect REST paths or GraphQL
+operations (#62). With multiple bound API hosts, `GH_HOST` is unset (pass `--repo` or
+`GH_HOST` for Enterprise Server); behavior beyond the fixture is unverified.
 
-`/repo/checkout` authorizes requests in this order, with upstream's messages:
-1. the attempt's Multica relay credential;
-2. the claim's workspace and task;
-3. a workdir inside `/workspace/work`, resolved again in the container;
-4. an exact claim URL;
-5. a ref without option or range syntax.
+## Checkout contract
 
-It then runs the embedded `checkout.sh` with `docker exec` as uid 65532, with the
-attempt's Git environment. The script follows upstream isolated mode (`repocache` at
-v0.5.2) with a fresh clone instead of the bare cache:
-- **Path and branch:** the checkout goes to `<workdir>/<repo>`, on branch
-  `agent/<agent>/<task12>` from the requested or claim ref, or else the default branch.
-  The branch name gets a `-<unix>` suffix on collision.
-- **Kept checkouts:** an existing checkout is kept when it is on the task branch
-  (`task_branch`) or holds work (`local_work`); only its remote refs are fetched.
-- **`--fresh`:** resets and cleans, then prunes `agent/*` branches without unpushed
-  commits.
-- **Agent files:** `info/exclude` lists the upstream agent files.
-- **Busy:** a concurrent checkout waits 10 s, then returns 503 `repo-busy`.
-- **Commits:** the attempt's global Git config (`/workspace/config/git/config`) holds
-  the identity the workspace's hosts agree on, else the agent default, standing in for
-  the native host's global identity; every checkout writes its host's identity to the
-  repository config. It also reconciles
-  upstream's `prepare-commit-msg` hook, which adds
-  `Co-authored-by: multica-agent <github@multica.ai>` while the workspace's
-  `github_enabled` and `co_authored_by_enabled` are on (default).
+`/repo/checkout` authorizes requests in order with upstream messages:
+1. attempt's Multica relay credential;
+2. claim's workspace and task;
+3. workdir inside `/workspace/work` (re-verified inside the container);
+4. exact claim URL;
+5. ref without option or range syntax.
 
-The controller publishes that setting to live hooks like the native daemon:
-- It writes `1` or `0` to `/workspace/.multica_co_authored_by` in the attempt tmpfs.
-  Upstream's gated hook rereads it at every commit; a missing file keeps the trailer.
-- It rereads the setting at attempt start, before every checkout and every 10 s. The
-  poll replaces upstream's `daemon:workspaces_changed` websocket hint, which the polling
-  controller does not consume. A failed read keeps the last value.
-- On a change it reconciles checkouts up to two levels below the workdir, as upstream's
-  sweep: it removes its hook when off and installs it when on, leaving foreign hooks
-  alone. Retained checkouts converge at the next attempt's start.
-- As natively, the agent can edit the hook and file; the trailer is attribution, not a control.
+It runs embedded `checkout.sh` via `docker exec` as uid 65532 with the attempt's Git
+environment, matching upstream isolated mode (`repocache` v0.5.2) with fresh clones:
+- **Path/branch:** `<workdir>/<repo>` on `agent/<agent>/<task12>` from requested/claim
+  ref or default branch (`-<unix>` suffix on collision).
+- **Kept checkouts:** kept when on `task_branch` or holding `local_work` (remote refs fetched).
+- **`--fresh`:** resets/cleans and prunes `agent/*` branches without unpushed commits.
+- **Agent files:** excluded via `.git/info/exclude`.
+- **Busy:** concurrent checkout waits 10 s, then returns 503 `repo-busy`.
+- **Commits:** global Git config (`/workspace/config/git/config`) holds the common host
+  identity (or agent default); each checkout writes its host's identity locally and
+  reconciles `prepare-commit-msg` to add `Co-authored-by: multica-agent <github@multica.ai>`
+  while `github_enabled` and `co_authored_by_enabled` are on (default).
+
+Co-author setting propagation:
+- Controller writes `1`/`0` to `/workspace/.multica_co_authored_by` (missing keeps trailer).
+- Polls at attempt start, before checkout and every 10 s (replacing upstream websocket
+  hints; failed reads keep the last value), reconciling hooks up to two levels below
+  workdir without touching foreign hooks. Retained checkouts converge on next start.
+- As natively, the agent can edit the hook/file; the trailer is attribution, not a control.
 
 Differences from upstream:
-- checkout outside the claim admits workspace repositories after a refresh, from their
-  default branch, as upstream, but not other tasks' project repositories (`taskRepoURLs`);
-- every retained workdir pays for its own clone;
-- setting changes reach live hooks within 10 s rather than on a websocket hint, and a
-  failed settings read keeps the last value instead of failing the checkout;
-- claim URLs take upstream's forms (https, http, ssh, git, scp-like), but are fetched
-  over HTTPS from the bound `upstream`: SSH and git ports are ignored, and URLs with a
-  password, query or fragment reject the claim.
+- Checkouts outside the claim admit workspace repositories after a refresh (default
+  branch), not other tasks' project repositories (`taskRepoURLs`).
+- Each retained workdir holds its own clone.
+- Setting changes propagate within 10 s; failed reads keep the previous value.
+- Claim URLs accept https, http, ssh, git and scp-like forms, fetched over HTTPS from
+  bound `upstream` (SSH/git ports ignored; passwords, queries or fragments reject the claim).

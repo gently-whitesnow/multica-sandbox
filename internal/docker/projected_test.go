@@ -66,32 +66,7 @@ func TestProjectedAttemptIsolation(t *testing.T) {
 wget -T 1 -q -O /tmp/leak http://169.254.169.254/ && exit 1; wget -T 1 -q -O /tmp/leak http://1.1.1.1/ && exit 1; :`}); err != nil {
 		t.Fatal(err)
 	}
-	// Controls: the daemon resolves external names and the host listener answers through
-	// an ordinary bridge gateway, so the denials below are not vacuous.
-	listener := "sandbox-host-listener-" + owner
-	t.Cleanup(func() { _, _ = command(context.Background(), "rm", "-f", listener) })
-	invoke("run", "-d", "--name", listener, "--network", "host", testImage, "/bin/sh", "-c", `while true; do echo reached | nc -l -p 15353; done`)
-	if _, err := command(ctx, "run", "--rm", testImage, "/bin/sh", "-c", `set -e; timeout 3 nslookup example.com >/dev/null
-gw=$(ip route | awk '/default/ {print $3}'); for i in 1 2 3 4 5; do nc -w 2 "$gw" 15353 </dev/null | grep -q reached && exit 0; sleep 1; done; exit 1`); err != nil {
-		t.Fatal("control container cannot resolve example.com or reach the host listener:", err)
-	}
-	// The approved peer alias resolves through the embedded resolver. getent follows libc
-	// like real clients; busybox nslookup tries host search domains first and fails there.
-	if err := b.Execute(ctx, []string{"/bin/sh", "-c", `set -e; getent hosts gateway >/dev/null
-test "$(grep '^nameserver' /etc/resolv.conf)" = "nameserver 127.0.0.11"`}); err != nil {
-		t.Fatal("attempt cannot resolve its approved peer:", err)
-	}
-	// A hostile attempt reaches nothing else: no route, external DNS through the embedded
-	// or a direct resolver, host address or IPv6.
-	if err := b.Execute(ctx, []string{"/bin/sh", "-c", `set -e
-ip route | grep -q default && exit 1; ip -6 route | grep -q default && exit 1; test -z "$(ip -6 addr show scope global)"
-timeout 3 nslookup example.com && exit 1; timeout 3 nslookup -type=TXT probe.example.com && exit 1
-for dns in 1.1.1.1 8.8.8.8 2606:4700:4700::1111; do timeout 3 nslookup example.com "$dns" && exit 1; nc -w 2 "$dns" 53 </dev/null && exit 1; done
-net=$(ip -4 -o addr show eth0 | awk '{print $4}' | cut -d/ -f1 | cut -d. -f1-3)
-for host in "$net.1" "$net.254"; do nc -w 2 "$host" 15353 </dev/null | grep -q reached && exit 1; done
-wget -T 1 -q -O /tmp/leak http://[2606:4700:4700::1111]/ && exit 1; :`}); err != nil {
-		t.Fatal("attempt network allows egress beyond approved peers:", err)
-	}
+	verifyAttemptNetworkIsolation(t, ctx, owner, b, invoke)
 	// Configured limits apply; TMPDIR is executable while /tmp stays noexec.
 	if err := b.Execute(ctx, []string{"/bin/sh", "-c", `set -e; test "$(cat /sys/fs/cgroup/pids.max)" = 128; test "$(cat /sys/fs/cgroup/memory.max)" = 536870912
 test "$(cat /sys/fs/cgroup/cpu.max)" = "150000 100000"; test "$(ulimit -n)" = 1024; test "$TMPDIR" = /workspace/tmp
@@ -126,6 +101,65 @@ cp "$TMPDIR/run" /tmp/run; ! /tmp/run; df -k /workspace | awk 'NR==2 { exit !($2
 	if err := a.Execute(ctx, []string{"/bin/sh", "-c", "! wget -T 1 -q -O /tmp/other http://" + ip + ":8080/prompt.txt"}); err != nil {
 		t.Fatal(err)
 	}
+	verifyAttemptStreaming(t, ctx, a, rA.name, invoke)
+	if err := a.Write(ctx, "/etc/forbidden", []byte("secret")); err == nil {
+		t.Fatal("unapproved projection path")
+	}
+	// Skill trees land under the approved root as the attempt user, including non-ASCII paths.
+	tree := map[string][]byte{"review/SKILL.md": []byte("---\nname: review\n---\n"), "review/references/обзор.md": []byte("ok"), "deploy/SKILL.md": nil}
+	if err := a.WriteTree(ctx, "/workspace/config/opencode/skills", tree); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Execute(ctx, []string{"/bin/sh", "-c", `set -e; cd /workspace/config/opencode/skills; test "$(cat review/references/обзор.md)" = ok; test -f deploy/SKILL.md
+test "$(stat -c %u review/SKILL.md)" = 65532; test "$(find . | wc -l)" = 7`}); err != nil {
+		t.Fatal("skill tree not projected:", err)
+	}
+	if a.WriteTree(ctx, "/workspace", tree) == nil || a.WriteTree(ctx, "/workspace/config/opencode/skills", map[string][]byte{"../x": nil}) == nil {
+		t.Fatal("unapproved tree root or escaping path accepted")
+	}
+	if err := backend.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := invoke("ps", "-aq", "--filter", "label="+ownerLabel+"="+owner); got != "" {
+		t.Fatal("owned execution survived startup")
+	}
+	if got := invoke("network", "ls", "-q", "--filter", "label="+ownerLabel+"="+owner); got != "" {
+		t.Fatal("owned projection network survived startup")
+	}
+}
+
+func verifyAttemptNetworkIsolation(t *testing.T, ctx context.Context, owner string, b execution.ProjectedRun, invoke func(...string) string) {
+	t.Helper()
+	// Controls: the daemon resolves external names and the host listener answers through
+	// an ordinary bridge gateway, so the denials below are not vacuous.
+	listener := "sandbox-host-listener-" + owner
+	t.Cleanup(func() { _, _ = command(context.Background(), "rm", "-f", listener) })
+	invoke("run", "-d", "--name", listener, "--network", "host", testImage, "/bin/sh", "-c", `while true; do echo reached | nc -l -p 15353; done`)
+	if _, err := command(ctx, "run", "--rm", testImage, "/bin/sh", "-c", `set -e; timeout 3 nslookup example.com >/dev/null
+gw=$(ip route | awk '/default/ {print $3}'); for i in 1 2 3 4 5; do nc -w 2 "$gw" 15353 </dev/null | grep -q reached && exit 0; sleep 1; done; exit 1`); err != nil {
+		t.Fatal("control container cannot resolve example.com or reach the host listener:", err)
+	}
+	// The approved peer alias resolves through the embedded resolver. getent follows libc
+	// like real clients; busybox nslookup tries host search domains first and fails there.
+	if err := b.Execute(ctx, []string{"/bin/sh", "-c", `set -e; getent hosts gateway >/dev/null
+test "$(grep '^nameserver' /etc/resolv.conf)" = "nameserver 127.0.0.11"`}); err != nil {
+		t.Fatal("attempt cannot resolve its approved peer:", err)
+	}
+	// A hostile attempt reaches nothing else: no route, external DNS through the embedded
+	// or a direct resolver, host address or IPv6.
+	if err := b.Execute(ctx, []string{"/bin/sh", "-c", `set -e
+ip route | grep -q default && exit 1; ip -6 route | grep -q default && exit 1; test -z "$(ip -6 addr show scope global)"
+timeout 3 nslookup example.com && exit 1; timeout 3 nslookup -type=TXT probe.example.com && exit 1
+for dns in 1.1.1.1 8.8.8.8 2606:4700:4700::1111; do timeout 3 nslookup example.com "$dns" && exit 1; nc -w 2 "$dns" 53 </dev/null && exit 1; done
+net=$(ip -4 -o addr show eth0 | awk '{print $4}' | cut -d/ -f1 | cut -d. -f1-3)
+for host in "$net.1" "$net.254"; do nc -w 2 "$host" 15353 </dev/null | grep -q reached && exit 1; done
+wget -T 1 -q -O /tmp/leak http://[2606:4700:4700::1111]/ && exit 1; :`}); err != nil {
+		t.Fatal("attempt network allows egress beyond approved peers:", err)
+	}
+}
+
+func verifyAttemptStreaming(t *testing.T, ctx context.Context, a execution.ProjectedRun, containerName string, invoke func(...string) string) {
+	t.Helper()
 	// Stream env reaches only that exec process: not container config, sibling execs or argv.
 	const credential = "mat_relay_stream-env-sentinel"
 	var streamed strings.Builder
@@ -135,7 +169,7 @@ cp "$TMPDIR/run" /tmp/run; ! /tmp/run; df -k /workspace | awk 'NR==2 { exit !($2
 	}); err != nil || streamed.String() != credential {
 		t.Fatalf("stream env not delivered: %v", err)
 	}
-	if strings.Contains(invoke("inspect", rA.name), credential) {
+	if strings.Contains(invoke("inspect", containerName), credential) {
 		t.Fatal("stream env persisted in container configuration")
 	}
 	if err := a.Execute(ctx, []string{"/bin/sh", "-c", `test -z "${MULTICA_TOKEN-}"`}); err != nil {
@@ -184,29 +218,5 @@ cp "$TMPDIR/run" /tmp/run; ! /tmp/run; df -k /workspace | awk 'NR==2 { exit !($2
 		return err
 	}); err != nil {
 		t.Fatalf("transport ended before cancellation handshake: %v", err)
-	}
-	if err := a.Write(ctx, "/etc/forbidden", []byte("secret")); err == nil {
-		t.Fatal("unapproved projection path")
-	}
-	// Skill trees land under the approved root as the attempt user, including non-ASCII paths.
-	tree := map[string][]byte{"review/SKILL.md": []byte("---\nname: review\n---\n"), "review/references/обзор.md": []byte("ok"), "deploy/SKILL.md": nil}
-	if err := a.WriteTree(ctx, "/workspace/config/opencode/skills", tree); err != nil {
-		t.Fatal(err)
-	}
-	if err := a.Execute(ctx, []string{"/bin/sh", "-c", `set -e; cd /workspace/config/opencode/skills; test "$(cat review/references/обзор.md)" = ok; test -f deploy/SKILL.md
-test "$(stat -c %u review/SKILL.md)" = 65532; test "$(find . | wc -l)" = 7`}); err != nil {
-		t.Fatal("skill tree not projected:", err)
-	}
-	if a.WriteTree(ctx, "/workspace", tree) == nil || a.WriteTree(ctx, "/workspace/config/opencode/skills", map[string][]byte{"../x": nil}) == nil {
-		t.Fatal("unapproved tree root or escaping path accepted")
-	}
-	if err := backend.Reconcile(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if got := invoke("ps", "-aq", "--filter", "label="+ownerLabel+"="+owner); got != "" {
-		t.Fatal("owned execution survived startup")
-	}
-	if got := invoke("network", "ls", "-q", "--filter", "label="+ownerLabel+"="+owner); got != "" {
-		t.Fatal("owned projection network survived startup")
 	}
 }

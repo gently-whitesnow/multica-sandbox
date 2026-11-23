@@ -132,44 +132,8 @@ func newOpenCodeAdapter(ctx context.Context, c Config, stateDir string, api *mul
 	if err != nil {
 		return nil, nil, err
 	}
-	if s := c.OpenCode.Sessions; s != nil {
-		ttl, err := time.ParseDuration(s.TTL)
-		interval, intervalErr := optionalDuration(s.Interval, 2*time.Hour)
-		grace, graceErr := optionalDuration(s.Grace, 24*time.Hour)
-		age, ageErr := optionalDuration(s.ArtifactAge, 12*time.Hour)
-		var budget int64
-		var budgetErr error
-		if s.Budget != "" {
-			budget, budgetErr = docker.ParseSize(s.Budget)
-		}
-		if c.OpenCode.Helper == "" || errors.Join(err, intervalErr, graceErr, ageErr, budgetErr) != nil || ttl <= 0 || s.Max < 1 || s.Max > 1024 {
-			return nil, nil, fmt.Errorf("sessions require the helper, a positive ttl, interval, grace and artifact_age, max in [1,1024] and a budget size")
-		}
-		workloads.Sessions = &docker.Sessions{Dir: filepath.Join(stateDir, "sessions"), TTL: ttl, Max: s.Max, Interval: interval, Grace: grace,
-			Helper: c.OpenCode.Helper, ArtifactAge: age, Budget: budget,
-			Reclaimed: func(r docker.Reclaim) {
-				log.Info("session volumes reclaimed", "trigger", r.Trigger, "removed", r.Removed, "pruned", r.Pruned, "pruned_bytes", r.Artifacts,
-					"mirrors_removed", r.Mirrors, "mirror_bytes", r.MirrorBytes, "freed_bytes", r.Freed)
-				c.metrics.Sessions(r.Trigger, r.Removed, r.Artifacts, r.Mirrors, r.MirrorBytes)
-			},
-			Closed: func(ctx context.Context, workspace string, issues []string) map[string]time.Time {
-				// A failed check keeps the volumes (fail safe), as upstream GC skips them.
-				closed, err := api.ClosedIssues(ctx, workspace, issues)
-				if err != nil && ctx.Err() == nil {
-					log.Warn("session issue check deferred", "workspace", workspace, "error", err.Error())
-				}
-				return closed
-			}}
-		if p := c.OpenCode.Pool; p != nil && p.DiskPath != "" {
-			workloads.Sessions.Disk = func() (pool.Disk, error) { return pool.ReadDisk(p.DiskPath) }
-		}
-		if err := os.MkdirAll(workloads.Sessions.Dir, 0700); err != nil {
-			return nil, nil, err
-		}
-		// Reconciliation kept session volumes; expired ones go before any attempt starts.
-		if err := workloads.Sessions.Collect(ctx, c.Daemon); err != nil {
-			return nil, nil, err
-		}
+	if err = configureSessions(ctx, c, stateDir, api, workloads, log); err != nil {
+		return nil, nil, err
 	}
 	if (c.OpenCode.MulticaRelay == nil) != (c.OpenCode.MulticaCLI == "") {
 		return nil, nil, fmt.Errorf("multica_relay and the digest-pinned multica_cli artifact require each other")
@@ -196,30 +160,7 @@ func newOpenCodeAdapter(ctx context.Context, c Config, stateDir string, api *mul
 	if workloads.Bundles, err = bundles(c.OpenCode, c.Tools); err != nil {
 		return nil, nil, err
 	}
-	// The digest-pinned image cannot change, so one startup inspection covers every attempt.
-	report, err := workloads.Output(ctx, opencode.ImageProbe)
-	if err != nil {
-		return nil, nil, fmt.Errorf("inspect agent image: %w", err)
-	}
-	revision, err := cliRevision(c.OpenCode)
-	if err != nil {
-		return nil, nil, err
-	}
-	if err = opencode.CheckImageRevision(report, revision, git); err != nil {
-		return nil, nil, err
-	}
-	if err = opencode.CheckCompactionImage(report, c.OpenCode.CompactionMaxTokens); err != nil {
-		return nil, nil, err
-	}
-	if workloads.Runtime == docker.Sysbox {
-		if err = opencode.CheckEngine(report); err != nil {
-			return nil, nil, err
-		}
-	}
-	if err = checkTools(ctx, workloads, c.Tools); err != nil {
-		return nil, nil, err
-	}
-	if err = workloads.Preflight(ctx); err != nil {
+	if err = inspectOpenCodeImage(ctx, c, workloads, git); err != nil {
 		return nil, nil, err
 	}
 	issuer, authority, err := attemptIdentity(ctx, c)
@@ -238,36 +179,8 @@ func newOpenCodeAdapter(ctx context.Context, c Config, stateDir string, api *mul
 		}
 		adapter.MCPRelayURL = strings.TrimRight(c.OpenCode.MCPRelay.URL, "/")
 	}
-	if c.OpenCode.MulticaRelay != nil {
-		grants := relay.NewGrants(multica.RelayPrefix)
-		var routes map[string]http.Handler
-		if git {
-			hosts, err := repo.ReadConfig(c.OpenCode.GitFile)
-			if err != nil {
-				return nil, nil, err
-			}
-			adapter.GitRelay = repo.NewRelay(c.OpenCode.GitRelay.URL, hosts)
-			if err = c.serveRelay(ctx, "Git", adapter.GitRelay, *c.OpenCode.GitRelay, relay.Policy{Allow: repo.GitPath, Limit: repo.PushLimit, HeaderTimeout: repo.PushTimeout, Proxy: true}, nil, nil); err != nil {
-				return nil, nil, err
-			}
-			if err = serveForge(ctx, c, adapter.GitRelay, hosts, workloads); err != nil {
-				return nil, nil, err
-			}
-			// The upstream CLI authenticates checkout with its Multica relay credential.
-			adapter.Checkout = &repo.Checkout{Auth: grants, Hosts: hosts, Settings: api, Git: adapter.GitRelay}
-			if c.OpenCode.Mirrors != nil {
-				if workloads.Mirrors, err = referenceMirrors(*c.OpenCode.Mirrors, stateDir, workloads, adapter.GitRelay, log); err != nil {
-					return nil, nil, err
-				}
-				adapter.Checkout.Mirrors = workloads.Mirrors
-			}
-			routes = map[string]http.Handler{"/repo/checkout": adapter.Checkout}
-		}
-		if err = c.serveRelay(ctx, "Multica", grants, *c.OpenCode.MulticaRelay, relay.Policy{Allow: multica.RelayPath}, routes, nil); err != nil {
-			return nil, nil, err
-		}
-		adapter.Relay = grants
-		adapter.RelayURL = strings.TrimRight(c.OpenCode.MulticaRelay.URL, "/")
+	if err = serveMulticaAndGitRelays(ctx, c, stateDir, api, workloads, adapter, git, log); err != nil {
+		return nil, nil, err
 	}
 	source, grants, err := openCodeInference(ctx, c, api)
 	if err != nil {
@@ -281,6 +194,111 @@ func newOpenCodeAdapter(ctx context.Context, c Config, stateDir string, api *mul
 		go workloads.Sessions.Sweep(ctx, c.Daemon, func(err error) { log.Warn("session sweep failed", "error", err.Error()) })
 	}
 	return adapter, workloads, nil
+}
+
+func configureSessions(ctx context.Context, c Config, stateDir string, api *multica.Client, workloads *docker.Projected, log *slog.Logger) error {
+	s := c.OpenCode.Sessions
+	if s == nil {
+		return nil
+	}
+	ttl, err := time.ParseDuration(s.TTL)
+	interval, intervalErr := optionalDuration(s.Interval, 2*time.Hour)
+	grace, graceErr := optionalDuration(s.Grace, 24*time.Hour)
+	age, ageErr := optionalDuration(s.ArtifactAge, 12*time.Hour)
+	var budget int64
+	var budgetErr error
+	if s.Budget != "" {
+		budget, budgetErr = docker.ParseSize(s.Budget)
+	}
+	if c.OpenCode.Helper == "" || errors.Join(err, intervalErr, graceErr, ageErr, budgetErr) != nil || ttl <= 0 || s.Max < 1 || s.Max > 1024 {
+		return fmt.Errorf("sessions require the helper, a positive ttl, interval, grace and artifact_age, max in [1,1024] and a budget size")
+	}
+	workloads.Sessions = &docker.Sessions{Dir: filepath.Join(stateDir, "sessions"), TTL: ttl, Max: s.Max, Interval: interval, Grace: grace,
+		Helper: c.OpenCode.Helper, ArtifactAge: age, Budget: budget,
+		Reclaimed: func(r docker.Reclaim) {
+			log.Info("session volumes reclaimed", "trigger", r.Trigger, "removed", r.Removed, "pruned", r.Pruned, "pruned_bytes", r.Artifacts,
+				"mirrors_removed", r.Mirrors, "mirror_bytes", r.MirrorBytes, "freed_bytes", r.Freed)
+			c.metrics.Sessions(r.Trigger, r.Removed, r.Artifacts, r.Mirrors, r.MirrorBytes)
+		},
+		Closed: func(ctx context.Context, workspace string, issues []string) map[string]time.Time {
+			// A failed check keeps the volumes (fail safe), as upstream GC skips them.
+			closed, err := api.ClosedIssues(ctx, workspace, issues)
+			if err != nil && ctx.Err() == nil {
+				log.Warn("session issue check deferred", "workspace", workspace, "error", err.Error())
+			}
+			return closed
+		}}
+	if p := c.OpenCode.Pool; p != nil && p.DiskPath != "" {
+		workloads.Sessions.Disk = func() (pool.Disk, error) { return pool.ReadDisk(p.DiskPath) }
+	}
+	if err := os.MkdirAll(workloads.Sessions.Dir, 0700); err != nil {
+		return err
+	}
+	// Reconciliation kept session volumes; expired ones go before any attempt starts.
+	return workloads.Sessions.Collect(ctx, c.Daemon)
+}
+
+func inspectOpenCodeImage(ctx context.Context, c Config, workloads *docker.Projected, git bool) error {
+	// The digest-pinned image cannot change, so one startup inspection covers every attempt.
+	report, err := workloads.Output(ctx, opencode.ImageProbe)
+	if err != nil {
+		return fmt.Errorf("inspect agent image: %w", err)
+	}
+	revision, err := cliRevision(c.OpenCode)
+	if err != nil {
+		return err
+	}
+	if err = opencode.CheckImageRevision(report, revision, git); err != nil {
+		return err
+	}
+	if err = opencode.CheckCompactionImage(report, c.OpenCode.CompactionMaxTokens); err != nil {
+		return err
+	}
+	if workloads.Runtime == docker.Sysbox {
+		if err = opencode.CheckEngine(report); err != nil {
+			return err
+		}
+	}
+	if err = checkTools(ctx, workloads, c.Tools); err != nil {
+		return err
+	}
+	return workloads.Preflight(ctx)
+}
+
+func serveMulticaAndGitRelays(ctx context.Context, c Config, stateDir string, api *multica.Client, workloads *docker.Projected, adapter *opencode.Adapter, git bool, log *slog.Logger) error {
+	if c.OpenCode.MulticaRelay == nil {
+		return nil
+	}
+	grants := relay.NewGrants(multica.RelayPrefix)
+	var routes map[string]http.Handler
+	if git {
+		hosts, err := repo.ReadConfig(c.OpenCode.GitFile)
+		if err != nil {
+			return err
+		}
+		adapter.GitRelay = repo.NewRelay(c.OpenCode.GitRelay.URL, hosts)
+		if err = c.serveRelay(ctx, "Git", adapter.GitRelay, *c.OpenCode.GitRelay, relay.Policy{Allow: repo.GitPath, Limit: repo.PushLimit, HeaderTimeout: repo.PushTimeout, Proxy: true}, nil, nil); err != nil {
+			return err
+		}
+		if err = serveForge(ctx, c, adapter.GitRelay, hosts, workloads); err != nil {
+			return err
+		}
+		// The upstream CLI authenticates checkout with its Multica relay credential.
+		adapter.Checkout = &repo.Checkout{Auth: grants, Hosts: hosts, Settings: api, Git: adapter.GitRelay}
+		if c.OpenCode.Mirrors != nil {
+			if workloads.Mirrors, err = referenceMirrors(*c.OpenCode.Mirrors, stateDir, workloads, adapter.GitRelay, log); err != nil {
+				return err
+			}
+			adapter.Checkout.Mirrors = workloads.Mirrors
+		}
+		routes = map[string]http.Handler{"/repo/checkout": adapter.Checkout}
+	}
+	if err := c.serveRelay(ctx, "Multica", grants, *c.OpenCode.MulticaRelay, relay.Policy{Allow: multica.RelayPath}, routes, nil); err != nil {
+		return err
+	}
+	adapter.Relay = grants
+	adapter.RelayURL = strings.TrimRight(c.OpenCode.MulticaRelay.URL, "/")
+	return nil
 }
 
 // referenceMirrors configures reference mirrors, which the session sweep collects; their

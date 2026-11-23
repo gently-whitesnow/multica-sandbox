@@ -4,59 +4,57 @@ Multica's [security model](https://multica.ai/docs/security-model) states:
 
 > So Multica does not pretend to be the boundary. Put one around it.
 
-multica-sandbox is being built to provide that boundary: disposable environments
-for running AI coding agents in your infrastructure.
+multica-sandbox provides that boundary: disposable environments for running AI
+coding agents in your infrastructure.
 
 **Status:** experimental controller with offline probes and opt-in OpenCode MCP
-identity rotation; a separate subscription-backed lab exists.
-Docker runc/Sysbox tested; Kubernetes planned. Independent runtime, no Multica fork.
+identity rotation; a separate subscription-backed lab exists. Docker runc/Sysbox
+tested; Kubernetes planned. Independent runtime, no Multica fork.
 
 ## Design
 
 - Connect directly to Multica's Daemon API; no custom runtime profiles.
-- Run preparation and agent execution in isolated environments for each run.
-- Restrict mounts, network access, credentials, resources and execution time.
-- Reuse immutable toolchains and prepared workspace caches; give each run its
-  own writable state. Keep resumable sessions separate from disposable caches.
+- Run preparation and agent execution in isolated per-run environments with restricted
+  mounts, network access, credentials, resources and execution time.
+- Reuse immutable toolchains and prepared caches; give each run its own writable state
+  and keep resumable sessions separate from disposable caches.
 - Give sandboxes only short-lived run identity; keep service credentials outside.
-- Route external tool access through authorized MCP services; enforce egress
-  outside the sandbox. Identity alone does not authorize an action.
-- Use the project's optional base image or your own compatible OCI image.
-- Declare your own tool set in configuration: tools baked into the image or
-  pinned bundles mounted read-only, without changing sandbox code.
+- Route external tool access through authorized MCP services and enforce egress outside
+  the sandbox. Identity alone does not authorize an action.
+- Use the optional base image or a compatible OCI image; declare tools in config
+  (baked into the image or mounted read-only as pinned bundles) without changing sandbox code.
 
-Multica owns tasks and retries. The controller manages execution environments;
-the runner executes one task through a supported agent adapter.
-
-Execution backends, agent adapters and inference connections are separate.
+Multica owns tasks and retries; the controller manages environments and runs tasks
+through an agent adapter. Backends, adapters and inference connections stay separate.
 Multica selects the runtime and model; trusted workspace bindings select the gateway
-and key, which stay outside the sandbox with provider credentials. The picker shows
-the workspace's advisory catalog; the gateway enforces the key's grants. See the OpenCode [conformance report](internal/opencode/README.md#conformance).
+and key, which stay outside the sandbox. The picker shows the advisory catalog; the
+gateway enforces key grants. See the OpenCode [conformance report](internal/opencode/README.md#conformance).
 
 Containers share the host kernel; isolation depends on policy and granted credentials.
-
-Architecture: [ADR 0001](adrs/0001-isolated-task-runtime.md). Images/tools:
-[ADR 0002](adrs/0002-custom-images-and-tools.md). Access boundaries: [ADR 0003](adrs/0003-identity-and-mcp-access.md); component selection and acceptance
-gates: [ADR 0004](adrs/0004-reuse-and-security-gates.md).
+Docs: architecture ([ADR 0001](adrs/0001-isolated-task-runtime.md)), images/tools
+([ADR 0002](adrs/0002-custom-images-and-tools.md)), access boundaries
+([ADR 0003](adrs/0003-identity-and-mcp-access.md)), reuse/security gates
+([ADR 0004](adrs/0004-reuse-and-security-gates.md)).
 
 ## Controller service
 
-Use isolated test workspaces. The default runtime executes configured test
-commands; the opt-in [OpenCode path](internal/opencode/README.md) projects agent
-instructions and selected remote MCP connections. Requires Linux Docker with cgroup v2,
-builtin seccomp and resource controllers; Docker Desktop is tested for development.
-The controller creates sibling workloads through the host socket.
-Socket access is host-administrative authority; prefer a dedicated worker host.
+Use isolated test workspaces. The default runtime executes configured test commands;
+the opt-in [OpenCode path](internal/opencode/README.md) projects agent instructions
+and selected remote MCP connections. Requires Linux Docker with cgroup v2, builtin
+seccomp and resource controllers (Docker Desktop is tested for development). Because
+the controller creates sibling workloads via the host Docker socket (host-administrative
+authority), prefer a dedicated worker host.
 
 ```sh
 mkdir -p var
 cp deploy/controller.example.json var/controller.json
 ```
 
-Edit the server URL (HTTPS; `allow_http` is only for isolated fixtures; a base path such as `https://example.com/multica` is kept) and a unique, stable daemon UUID.
-Set a digest-pinned preloaded image, executable/arguments and timeout. Place the controller
-token in `var/multica-token` with restrictive permissions.
-Both files stay outside Git. The token is mounted only into the trusted controller.
+Configure the HTTPS server URL (`allow_http` is for isolated fixtures only; base paths
+like `https://example.com/multica` are preserved), a unique stable daemon UUID, a
+digest-pinned preloaded image, command and timeout. Put the controller token in
+`var/multica-token` with restrictive permissions. Keep both files outside Git; the
+token mounts only into the trusted controller.
 
 ```sh
 docker pull alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
@@ -64,65 +62,75 @@ docker compose up -d --build
 docker compose logs -f controller
 ```
 
-One controller serves all accessible workspaces. Only each Multica agent's `max_concurrent_tasks`, enforced by Multica at claim, limits concurrency: the controller claims one task per workspace per round until Multica returns none, pool admission refuses or a deploy drains it, and rejects a config that sets `concurrency` or `workspace_concurrency`. Each attempt takes one Docker network, so Docker `default-address-pools` must hold enough subnets for the expected peak, the sum of the agent limits served (for example base `10.200.0.0/16`, size 24). Offline attempts get fresh non-root, networkless containers with configurable
-resource bounds and temporary storage. The OpenCode Sysbox path starts a namespaced
-root engine supervisor and runs agent commands as uid 65532. Custom images
-need no inheritance; image-declared volumes are rejected. No service tokens or
-host mounts enter execution. Workload output/files are discarded; completion is a
-fixed test result. The opt-in OpenCode path uses per-attempt internal networks, native MCP OAuth
-rotation and external attempt leases. Optional [inference](internal/inference/README.md)
-uses a controller relay that swaps an opaque attempt credential for a workspace key. Native messages, reported usage, terminal
-text/session IDs and safe repository references are mapped to existing Multica APIs.
-See the [capability matrix and walkthrough](internal/opencode/README.md); repository checkout, mediated push/PR and retained issue/chat sessions are opt-in;
-artifact publication remains unsupported. For host-sized execution, deployment derives the bounded attempt pool from host capacity, reserving memory for trusted services and engines. `resources.cpu_mode: shared` removes per-attempt CPU quotas; `pool.auto_admission: true` with read-only Docker filesystem `disk_path` adds cold-start pacing, observed headroom and disk/inode watermarks to PSI admission; below the pause watermark idle retained sessions are pruned, then removed with reference mirrors in least recently used order (`sessions.artifact_age`, optional `sessions.budget`, ADR 0034, 0035). See [ADR 0028](adrs/0028-auto-host-resources.md) for defaults and limitations.
+One controller serves all accessible workspaces (discovery is always enabled).
+Concurrency is bounded only by each Multica agent's `max_concurrent_tasks`, enforced
+by Multica at claim; the controller claims one task per workspace per round until
+Multica returns none, pool admission refuses or a deploy drains it, and rejects configs
+setting `concurrency` or `workspace_concurrency`. Each attempt uses one Docker network,
+so size `default-address-pools` for peak concurrency (e.g. `10.200.0.0/16`, size 24).
 
-Docker restarts a crashed controller. On startup it removes its old executions
-before asking Multica to recover tasks. Persistent state binds the shared lock to
-the daemon, server and Docker Engine. Preserve the named volume across
-updates, use one controller per identity, and do not scale this Compose service.
-Never remove the state volume while the controller is active.
+Offline attempts run in fresh non-root, networkless containers with bounded resources
+and temporary storage; OpenCode under Sysbox starts a namespaced root engine supervisor
+and runs agent commands as uid 65532. Custom images need no inheritance; image-declared
+volumes are rejected. No service tokens or host mounts enter execution. The opt-in
+OpenCode path adds per-attempt internal networks, native MCP OAuth rotation, external
+attempt leases, optional [inference](internal/inference/README.md) via a controller
+relay swapping opaque attempt credentials for workspace keys, and native Multica
+reporting. Repository checkout, mediated push/PR and retained issue/chat sessions are
+opt-in; artifact publication is unsupported ([OpenCode README](internal/opencode/README.md)).
 
-Use a dedicated user PAT. It may be a workspace admin for controller operations;
-tasks use Multica's native task-token permissions through the relay (ADR 0026),
-without receiving the controller PAT. At v0.7.2 a task token inherits the runtime
-owner's workspace role, including admin; the sandbox does not downgrade it. Add that user to each workspace; the controller discovers
-membership every 10 seconds and registers a runtime. The runtime owner manually
-sets public visibility in Multica. Public does not share across workspaces.
-An mdt_ token discovers only its bound workspace; registration never sweeps active containers.
+For host-sized execution, derive the shared attempt pool from host capacity reserving
+memory for trusted services. `resources.cpu_mode: shared` removes per-attempt CPU
+quotas; `pool.auto_admission: true` with read-only `disk_path` adds cold-start pacing,
+observed headroom and disk/inode watermarks to PSI admission. Below the pause watermark,
+idle sessions are pruned then reclaimed with reference mirrors in LRU order
+(`sessions.artifact_age`, optional `sessions.budget`; [ADR 0028](adrs/0028-auto-host-resources.md),
+ADR 0034, ADR 0035).
 
-Workspace discovery is always enabled. A single accessible workspace uses the same
-execution path as many workspaces; an agent with `max_concurrent_tasks` 1 runs
-one task at a time. Membership determines which workspaces are served. The controller logs JSON lines; each attempt ends with an `attempt finished` event (status, reason, timings, session continuity). Relay refusals, transport failures, upstream 429/5xx and failed attempts are `WARN`; ordinary upstream 4xx and their sampled summaries are `DEBUG`. Metrics count every relay outcome regardless of logging. `"debug": true` also adds identity and inference diagnostics and failed Multica requests, never secrets. `"metrics_listen": "0.0.0.0:9464"` serves Prometheus metrics on `/metrics` and readiness on `/readyz` at that address; see [ADR 0025](adrs/0025-quality-metrics-and-structured-logs.md) for metrics, labels and log events.
+Docker restarts a crashed controller; on startup it removes its old executions before
+asking Multica to recover tasks. Persistent state binds the shared lock to daemon,
+server and Docker Engine. Preserve the named volume across updates, use one controller
+per identity, never scale the Compose service and never remove the state volume while
+active.
 
-`docker compose stop` gracefully removes active execution and intentionally leaves
-the controller stopped. Restart with `docker compose up -d`; interrupted tasks are
-reconciled then. No independent deadline or automatic live-hang recovery exists.
-Docker unavailability, invalid config or repeated crashes can delay cleanup.
-See [ADR 0007](adrs/0007-containerized-controller-service.md) for deployment limits
-and [ADR 0006](adrs/0006-offline-container-execution.md) for execution policy.
+Use a dedicated user PAT (workspace admin is allowed for controller operations). Tasks
+use Multica's native task-token permissions through the relay (ADR 0026) without
+receiving the controller PAT; at v0.7.2 a task token inherits the runtime owner's
+workspace role (the sandbox does not downgrade it). Add that user to each workspace:
+the controller discovers membership every 10 s and registers a runtime (public visibility
+is set manually in Multica and never crosses workspaces). An `mdt_` token discovers
+only its bound workspace.
+
+Logs are JSON lines; each attempt ends with `attempt finished` (status, reason, timings,
+continuity). Relay refusals, transport failures, upstream 429/5xx and failed attempts
+log at `WARN`; ordinary upstream 4xx and sampled summaries log at `DEBUG`. Metrics
+count every relay outcome regardless of log level. `"debug": true` adds identity,
+inference and failed Multica diagnostics (never secrets). `"metrics_listen": "0.0.0.0:9464"`
+serves `/metrics` and `/readyz` ([ADR 0025](adrs/0025-quality-metrics-and-structured-logs.md)).
+
+`docker compose stop` removes active execution and stops the controller; restart with
+`docker compose up -d` to reconcile interrupted tasks. No independent deadline or
+live-hang recovery exists; Docker unavailability, invalid config or repeated crashes
+can delay cleanup. See [ADR 0006](adrs/0006-offline-container-execution.md) and
+[ADR 0007](adrs/0007-containerized-controller-service.md).
 
 ## One-attempt probe
 
-For explicit experiments, use `go run ./cmd/sandbox-probe` with `-server`,
-`-workspace`, `-daemon`, an absolute `-lock` path and `MULTICA_PROBE_TOKEN`.
-Without `-image` it runs a timer. Add `-image IMAGE@sha256:DIGEST -duration 30s --
-/bin/sh -c 'echo test > /workspace/result'` for an offline command.
-`-recover-only` reaps/reconciles without claiming; `-fail` simulates timer failure.
-Reuse the same identity, backend and lock. See [ADR 0005](adrs/0005-upstream-lifecycle-probe.md).
+Run `go run ./cmd/sandbox-probe` with `-server`, `-workspace`, `-daemon`, an absolute
+`-lock` path and `MULTICA_PROBE_TOKEN`. Without `-image` it runs a timer; add
+`-image IMAGE@sha256:DIGEST -duration 30s -- /bin/sh -c 'echo test > /workspace/result'`
+for an offline command. `-recover-only` reconciles without claiming; `-fail` simulates
+failure. Reuse the same identity, backend and lock ([ADR 0005](adrs/0005-upstream-lifecycle-probe.md)).
 
 ## Upstream verification
 
-`./scripts/test-upstream.sh` builds unmodified Multica v0.7.2, pinned in ADR 0026, in disposable PostgreSQL/server containers. Tests seed
-generic tasks directly in the database; UI task creation is not covered. Requires Go
-1.26.9+, Docker, Git, curl and OpenSSL; upstream may download its Go toolchain.
-Set `VERIFY_SERVICE=1` to build and test the actual controller image through Compose.
-The service fixture shares only the disposable server's network namespace to use
-loopback HTTP; deployment configuration requires HTTPS for non-loopback origins.
-
-[Identity/MCP](examples/identity-mcp/README.md) and [end-to-end lab](examples/end-to-end/README.md):
-Compose fixtures and trust-boundary diagrams. The identity fixture also verifies
-the controller OpenCode path with deterministic inference. `VERIFY_INFERENCE=1` runs
-OpenCode through the relay to LiteLLM keys; combine all three flags for the controller.
+`./scripts/test-upstream.sh` builds unmodified Multica v0.7.2 (ADR 0026) in disposable
+PostgreSQL/server containers and seeds generic tasks in the database (UI creation is
+not covered). Requires Go 1.26.9+, Docker, Git, curl and OpenSSL. Set `VERIFY_SERVICE=1`
+to build and test the Compose controller (loopback HTTP is fixture-only; deployments
+require HTTPS). See [identity/MCP](examples/identity-mcp/README.md) and
+[end-to-end lab](examples/end-to-end/README.md); `VERIFY_INFERENCE=1` tests OpenCode
+through the relay to LiteLLM keys.
 
 ## Contributing
 
@@ -133,17 +141,16 @@ Install the pinned [Harness CLI](https://github.com/gently-whitesnow/harness-cli
 ./verify.sh
 ```
 
-`verify.sh` runs Harness, formatting, vet, race tests and build. Set
-`VERIFY_UPSTREAM=1` to include the disposable upstream suite, or `VERIFY_SERVICE=1`
-to also build and test the Compose controller. Set
-`VERIFY_CONTAINERS=1` for hostile-container conformance (preload the image above).
-Set `VERIFY_IDENTITY=1` for the disposable identity/MCP fixture.
-Set `VERIFY_OPENCODE=1` for native OpenCode/JWT rotation and failure tests; combine
-with `VERIFY_SERVICE=1` for the real Multica → Compose controller task.
-Set `VERIFY_COMMIT_RANGE=master..HEAD` to validate published commit messages.
-All Harness checks are required; `verify.sh` executes tests and toolchains locally.
-CI is paused; workflows run on manual dispatch only. Stage new files before verification.
-`images.yml` publishes images for one platform; `deploy.yml` rolls the controller ([AGENTS.md](AGENTS.md#controller-release)).
-Run `.git/harness/bin/harness commit-message template` for the required format.
+`verify.sh` runs Harness, formatting, vet, race tests and build. Optional flags:
+`VERIFY_UPSTREAM=1` (disposable upstream suite), `VERIFY_SERVICE=1` (Compose controller),
+`VERIFY_CONTAINERS=1` (hostile-container conformance; preload the Alpine image above),
+`VERIFY_IDENTITY=1` (identity/MCP fixture), `VERIFY_OPENCODE=1` (OpenCode/JWT rotation
+and failure tests), `VERIFY_INFERENCE=1` (inference relay), `VERIFY_DYNAMIC_MCP=1`
+(dynamic public MCP), `VERIFY_COMMIT_RANGE=master..HEAD` (commit checks).
+
+All Harness checks are required; stage new files before verification. CI is paused
+(workflows run on manual dispatch): `images.yml` publishes images for one platform;
+`deploy.yml` rolls the controller ([AGENTS.md](AGENTS.md#controller-release)). Run
+`.git/harness/bin/harness commit-message template` for the required commit format.
 
 License: [Apache-2.0](LICENSE). Independent project; not an official Multica component.

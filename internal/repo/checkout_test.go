@@ -131,6 +131,11 @@ func TestCheckoutScriptFollowsUpstream(t *testing.T) {
 	if !strings.Contains(git(t, path, "for-each-ref", "--format=%(refname)", "refs/heads/"), "refs/heads/elsewhere") {
 		t.Fatal("branch with unpushed commits was pruned")
 	}
+	verifyCheckoutRefAndErrorCases(t, bare, root, branch)
+}
+
+func verifyCheckoutRefAndErrorCases(t *testing.T, bare, root, branch string) {
+	t.Helper()
 	nested := filepath.Join(root, "nested")
 	if err := os.Mkdir(nested, 0700); err != nil {
 		t.Fatal(err)
