@@ -1,47 +1,8 @@
 {
-  "version": "3.9.2",
-  "answers": {
-    "tests.unit": {
-      "paths": [
-        "internal"
-      ]
-    },
-    "tests.integration": {
-      "paths": [
-        "integration"
-      ]
-    },
-    "tests.architecture": {
-      "applicable": false,
-      "reason": "No enforced module topology beyond Go imports; protocol and failure boundaries are tested."
-    },
-    "format": {
-      "present": true,
-      "reason": "verify.sh checks gofmt."
-    },
-    "lint": {
-      "present": true,
-      "reason": "verify.sh runs go vet, shell syntax, Harness and whitespace checks."
-    },
-    "build": {
-      "present": true,
-      "reason": "verify.sh runs go build ./..."
-    },
-    "typecheck": {
-      "present": true,
-      "reason": "Go compiler checks types during build and tests."
-    },
-    "verify": {
-      "paths": [
-        "verify.sh"
-      ]
-    }
-  },
+  "version": "4.0.0",
   "settings": {
     "adrs.shape": {
-      "wordLimit": 1000,
-      "fencedLineLimit": 10,
-      "tableRowLimit": 12
+      "fencedBlockLineLimit": 20
     },
     "commits": {
       "language": "en",
@@ -51,20 +12,15 @@
       "averageReachableFiles": 8.0,
       "largestCyclicGroupSize": 0
     },
-    "comments.go": {
-      "minimumCommentLines": 10,
-      "percentageLimit": 8
-    },
     "duplication.go": {
       "windowLines": 30,
       "minimumTokens": 90
     },
     "functions.go": {
-      "ownLines": 80
+      "ownTokens": 700
     },
-    "comments.yaml": {
-      "minimumCommentLines": 10,
-      "percentageLimit": 8
+    "verify.entrypoint": {
+      "path": "verify.sh"
     }
   },
   "policy": {
@@ -73,26 +29,14 @@
     "docs.policy": "required",
     "adrs.shape": "required",
     "commits.setup": "required",
-    "frame.tests.unit": "required",
-    "frame.tests.integration": "required",
-    "frame.tests.architecture": "required",
-    "frame.format": "required",
-    "frame.lint": "required",
-    "frame.build": "required",
-    "frame.typecheck": "required",
-    "frame.verify": "required",
     "complexity.go": "required",
-    "comments.go": "required",
     "duplication.go": "required",
     "functions.go": "required",
     "lint-suppressions.go": "required",
-    "comments.yaml": "required"
+    "verify.entrypoint": "required"
   },
   "applicability": {
     "go": {
-      "applicable": true
-    },
-    "yaml": {
       "applicable": true
     }
   }

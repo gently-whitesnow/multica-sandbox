@@ -78,23 +78,8 @@ func multicaRelayService(t *testing.T, api *multica.Client, agentImage string, n
 	project := fmt.Sprintf("sandbox-relay-%d", stamp)
 	server := os.Getenv("MULTICA_TEST_SERVER_CONTAINER")
 	network := strings.TrimSuffix(server, "-server")
-	fixture := filepath.Join(dir, "fixture.json")
 	withInference := full && os.Getenv("VERIFY_INFERENCE") == "1"
-	services := map[string]any{"seed": map[string]any{"environment": map[string]string{"ROTATION_FIXTURE": "1"}}, "provider": providerService()}
-	targets := []string{"gateway", "provider"}
-	if withInference {
-		// Agents reach inference only through the controller relay; the mock provider stays behind LiteLLM.
-		inferenceServices(services)
-		delete(services, "provider")
-		targets = []string{"litellm"}
-		dockerTest(t, "network", "create", "--internal", project+"_execution")
-		t.Cleanup(func() { dockerTest(t, "network", "rm", project+"_execution") })
-	}
-	writeJSON(t, fixture, map[string]any{"services": services, "networks": map[string]any{"fixture": map[string]any{"external": true, "name": network, "internal": nil}, "execution": map[string]any{"internal": true}}})
-	if full {
-		targets = append(targets, "git")
-	}
-	startFixture(t, project, fixture, targets)
+	startRelayFixture(t, dir, project, network, full, withInference)
 
 	controller := fmt.Sprintf("90000000-0000-4000-8000-%012d", n)
 	agent := fmt.Sprintf("a1000000-0000-4000-8000-%012d", n)
@@ -142,7 +127,33 @@ func multicaRelayService(t *testing.T, api *multica.Client, agentImage string, n
  INSERT INTO issue(id,workspace_id,title,description,status,creator_type,creator_id,number,assignee_type,assignee_id) VALUES('%s','%s','%s','Read me through the relay.','todo','member','%s',%d,'agent','%s');
  INSERT INTO agent_task_queue(id,agent_id,runtime_id,issue_id,status,max_attempts,originator_user_id,accountable_user_id) VALUES('%s','%s','%s','%s','queued',1,'%s','%s');`, agent, workspace, n, runtime, user, issue, workspace, title, user, 99900+n, agent, id, agent, runtime, issue, user, user))
 
-	opaque, inferenceOpaque, gitOpaque, secret, off := "", "", "", "", false
+	opaque, inferenceOpaque, gitOpaque, secret := probeLiveRelayAttempt(t, api, controller, id, server, project, w, full)
+	verifyEndedRelayAttempt(t, api, w, network, project, controllerName, agent, runtime, issue, id, title, opaque, inferenceOpaque, gitOpaque, secret, c.Tools != nil, full, n)
+}
+
+func startRelayFixture(t *testing.T, dir, project, network string, full, withInference bool) {
+	t.Helper()
+	fixture := filepath.Join(dir, "fixture.json")
+	services := map[string]any{"seed": map[string]any{"environment": map[string]string{"ROTATION_FIXTURE": "1"}}, "provider": providerService()}
+	targets := []string{"gateway", "provider"}
+	if withInference {
+		// Agents reach inference only through the controller relay; the mock provider stays behind LiteLLM.
+		inferenceServices(services)
+		delete(services, "provider")
+		targets = []string{"litellm"}
+		dockerTest(t, "network", "create", "--internal", project+"_execution")
+		t.Cleanup(func() { dockerTest(t, "network", "rm", project+"_execution") })
+	}
+	writeJSON(t, fixture, map[string]any{"services": services, "networks": map[string]any{"fixture": map[string]any{"external": true, "name": network, "internal": nil}, "execution": map[string]any{"internal": true}}})
+	if full {
+		targets = append(targets, "git")
+	}
+	startFixture(t, project, fixture, targets)
+}
+
+func probeLiveRelayAttempt(t *testing.T, api *multica.Client, controller, id, server, project string, w *workspaceInference, full bool) (opaque, inferenceOpaque, gitOpaque, secret string) {
+	t.Helper()
+	var off bool
 	if full {
 		secret = strings.TrimSpace(dockerTest(t, "exec", project+"-git-1", "cat", "/secrets/git"))
 	}
@@ -183,7 +194,12 @@ func multicaRelayService(t *testing.T, api *multica.Client, agentImage string, n
 	if !strings.HasPrefix(opaque, "mat_relay_") || (w != nil && inferenceOpaque == "") {
 		t.Fatalf("live attempt credential was not observed (multica %t, inference %t)", opaque != "", inferenceOpaque != "")
 	}
-	content := agentComment(t, issue, agent, title, c.Tools != nil, full, n)
+	return opaque, inferenceOpaque, gitOpaque, secret
+}
+
+func verifyEndedRelayAttempt(t *testing.T, api *multica.Client, w *workspaceInference, network, project, controllerName, agent, runtime, issue, id, title, opaque, inferenceOpaque, gitOpaque, secret string, hasTools, full bool, n int) {
+	t.Helper()
+	content := agentComment(t, issue, agent, title, hasTools, full, n)
 	// The ended attempt's credential is denied by the relay itself, not by network absence.
 	denied := exec.Command("docker", "run", "--rm", "--network", network, "--entrypoint", "/bin/sh", "-e", "T="+opaque, image, "-c", `wget -q -O /dev/null --header "Authorization: Bearer $T" http://`+controllerName+`:8091/api/issues/`+issue+` 2>&1 | grep -q ' 401 '`)
 	if out, err := denied.CombinedOutput(); err != nil {
