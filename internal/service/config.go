@@ -14,6 +14,7 @@ import (
 	"github.com/gently-whitesnow/multica-sandbox/internal/attempt"
 	"github.com/gently-whitesnow/multica-sandbox/internal/docker"
 	"github.com/gently-whitesnow/multica-sandbox/internal/metrics"
+	"github.com/gently-whitesnow/multica-sandbox/internal/opencode"
 )
 
 type Config struct {
@@ -104,6 +105,8 @@ func ReadConfig(path string) (Config, error) {
 type OpenCodeConfig struct {
 	IdentityFile string       `json:"identity_file,omitempty"`
 	MCPRelay     *RelayConfig `json:"mcp_relay,omitempty"`
+	// MCPAttemptContext signs attempt metadata for one operator-approved IAM MCP URL.
+	MCPAttemptContext *opencode.MCPAttemptContextConfig `json:"mcp_attempt_context,omitempty"`
 	// MCPPublicProxy enables arbitrary selected public MCP endpoints through trusted egress.
 	MCPPublicProxy string         `json:"mcp_public_proxy,omitempty"`
 	Authority      attempt.Config `json:"authority"`

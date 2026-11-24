@@ -20,7 +20,7 @@ from verified behavior.
   provider-neutral JWT identity (0027), auto host resources (0028), dynamic HTTP MCP (0029),
   native env and explicit IAM (0030), controller self-deploy (0031),
   OpenCode background shells and watchdogs (0032), release versions (0033),
-  session disk reclamation (0034), reference mirrors (0035).
+  session disk reclamation (0034), reference mirrors (0035), signed MCP attempt context (0036).
 - `examples/end-to-end/`: opt-in real Multica/OpenCode/inference lab.
 - `examples/identity-mcp/`: disposable identity and MCP contract fixture.
 - `examples/agent-image/`: example user-owned OpenCode Debian image (`deploy/multica-cli.Dockerfile` provides `multica`).

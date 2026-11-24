@@ -149,7 +149,12 @@ func New(auth Authorizer, p Policy) (*Relay, error) {
 			}
 			for name := range pr.Out.Header {
 				if strings.HasPrefix(strings.ToLower(name), "x-forwarded-") || reserved(name, p.Reserved) {
-					pr.Out.Header.Del(name)
+					delete(pr.Out.Header, name)
+				}
+			}
+			for name := range pr.Out.Trailer {
+				if reserved(name, p.Reserved) {
+					delete(pr.Out.Trailer, name)
 				}
 			}
 			for name, values := range lease.Header {
