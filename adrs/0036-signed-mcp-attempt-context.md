@@ -17,7 +17,9 @@ endpoint URL, with the existing explicit IAM connection and a recent running
 confirmation for the relay grant's claim. The workspace, agent, task and attempt
 come from that claim. Bind the context to the same access token sent upstream,
 including after rotation. Calls without eligible context retain their current
-IAM and routing behavior.
+IAM and routing behavior. Deployments that dedicate the issuer audience to the
+pilot can also set `restrict_iam_to_target`. This rejects IAM-selected MCP
+requests for all other URLs and preserves anonymous and static-header routes.
 
 Reserve `X-Idp-Attempt-Context` at the MCP relay; drop caller-supplied and
 configured connection values. The relay adds its own value in the form
@@ -46,7 +48,8 @@ configuration. Leave it absent to disable signing.
 "mcp_attempt_context": {
   "url": "http://postgres-mcp.example.invalid:8080/mcp",
   "audience": "idp-postgres",
-  "key_file": "/run/secrets/mcp-attempt-context"
+  "key_file": "/run/secrets/mcp-attempt-context",
+  "restrict_iam_to_target": true
 }
 ```
 

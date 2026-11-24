@@ -21,14 +21,16 @@ const mcpAttemptContextHeader = "X-Idp-Attempt-Context"
 
 // MCPAttemptContextConfig is controller-only configuration for one MCP endpoint.
 type MCPAttemptContextConfig struct {
-	URL      string `json:"url"`
-	Audience string `json:"audience"`
-	KeyFile  string `json:"key_file"`
+	URL                 string `json:"url"`
+	Audience            string `json:"audience"`
+	KeyFile             string `json:"key_file"`
+	RestrictIAMToTarget bool   `json:"restrict_iam_to_target,omitempty"`
 }
 
 type mcpAttemptContext struct {
 	url, audience, server string
 	key                   []byte
+	restrictIAMToTarget   bool
 }
 
 // NewMCPRelayWithAttemptContext loads the opt-in signer before the relay starts.
@@ -47,7 +49,9 @@ func NewMCPRelayWithAttemptContext(c MCPAttemptContextConfig, server string) (*M
 		return nil, err
 	}
 	m := NewMCPRelay()
-	m.attemptContext = &mcpAttemptContext{url: c.URL, audience: c.Audience, server: server, key: key}
+	m.attemptContext = &mcpAttemptContext{
+		url: c.URL, audience: c.Audience, server: server, key: key, restrictIAMToTarget: c.RestrictIAMToTarget,
+	}
 	return m, nil
 }
 

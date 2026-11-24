@@ -37,7 +37,7 @@ type attemptContextRelay struct {
 	upstream string
 }
 
-func newAttemptContextFixture(t *testing.T, enabled bool) (*attemptContextRelay, *MCPRelay) {
+func newAttemptContextFixture(t *testing.T, enabled, restrictIAM bool) (*attemptContextRelay, *MCPRelay) {
 	t.Helper()
 	seen := make(chan http.Header, 1)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -55,7 +55,9 @@ func newAttemptContextFixture(t *testing.T, enabled bool) (*attemptContextRelay,
 	m := NewMCPRelay()
 	if enabled {
 		var err error
-		m, err = NewMCPRelayWithAttemptContext(attemptContextConfig(t, upstream.URL+"/mcp"), attemptTestServer)
+		config := attemptContextConfig(t, upstream.URL+"/mcp")
+		config.RestrictIAMToTarget = restrictIAM
+		m, err = NewMCPRelayWithAttemptContext(config, attemptTestServer)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -116,7 +118,7 @@ func attemptContextRun(t *testing.T, url, bearer string, managed bool) *running 
 }
 
 func TestMCPAttemptContextBindsConfirmedClaimToCurrentBearer(t *testing.T) {
-	f, m := newAttemptContextFixture(t, true)
+	f, m := newAttemptContextFixture(t, true, true)
 	r := attemptContextRun(t, f.upstream+"/mcp", "test-jwt-one", true)
 	opaque, err := m.issue(r)
 	if err != nil {
@@ -188,7 +190,7 @@ func TestMCPAttemptContextStripsUntrustedHeaders(t *testing.T) {
 		{name: "ended", urlSuffix: "/mcp", enabled: true, managed: true, confirmed: time.Now(), ended: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			f, m := newAttemptContextFixture(t, tc.enabled)
+			f, m := newAttemptContextFixture(t, tc.enabled, false)
 			r := attemptContextRun(t, f.upstream+tc.urlSuffix, "test-jwt", tc.managed)
 			r.confirmed, r.ended = tc.confirmed, tc.ended
 			opaque, err := m.issue(r)
@@ -204,7 +206,7 @@ func TestMCPAttemptContextStripsUntrustedHeaders(t *testing.T) {
 }
 
 func TestMCPAttemptContextDoesNotUseHTTPServiceIdentity(t *testing.T) {
-	f, m := newAttemptContextFixture(t, true)
+	f, m := newAttemptContextFixture(t, true, true)
 	r := attemptContextRun(t, f.upstream+"/mcp", "test-mcp-jwt", true)
 	r.httpServices = map[string]identity.HTTPService{"control": {
 		Name: "control", Origin: f.upstream,
@@ -219,6 +221,29 @@ func TestMCPAttemptContextDoesNotUseHTTPServiceIdentity(t *testing.T) {
 	headers := f.request(t, "/http/control/mcp", opaque)
 	if headers.Get("Authorization") != "Bearer test-http-jwt" || len(headers.Values("X-Idp-Attempt-Context")) != 0 {
 		t.Fatal("HTTP service attribution or credential changed")
+	}
+}
+
+func TestMCPAttemptContextRestrictsIAMToExactTarget(t *testing.T) {
+	f, m := newAttemptContextFixture(t, true, true)
+	r := attemptContextRun(t, f.upstream+"/mcp?different", "test-jwt", true)
+	ordinary, err := selectMCP("ordinary", mcpConnection{URL: f.upstream + "/ordinary"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.connections["ordinary"], r.anonymous["ordinary"] = ordinary, true
+	opaque, err := m.issue(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := mcpRequest(t, http.MethodPost, f.front.URL+"/tools", opaque)
+	res.Body.Close()
+	if res.StatusCode != http.StatusForbidden || len(f.seen) != 0 {
+		t.Fatal("nonmatching IAM destination received a request")
+	}
+	headers := f.request(t, "/ordinary", opaque)
+	if headers.Get("Authorization") != "" || len(headers.Values("X-Idp-Attempt-Context")) != 0 {
+		t.Fatal("ordinary MCP received IAM or attempt context")
 	}
 }
 

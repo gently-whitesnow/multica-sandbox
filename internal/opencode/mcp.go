@@ -89,6 +89,11 @@ func (m *MCPRelay) Authorize(req *http.Request) (relay.Lease, bool) {
 		lease.WithholdErrors = r.httpServices[name].PathCredential != nil
 	} else {
 		name := strings.TrimPrefix(req.URL.Path, "/")
+		connection := r.connections[name]
+		if signing := m.attemptContext; signing != nil && signing.restrictIAMToTarget && connection.identity && connection.URL != signing.url {
+			lease.Release()
+			return relay.Lease{Attempt: lease.Attempt, Refused: relay.ErrPolicy}, false
+		}
 		target, err := r.mcpUpstream(name)
 		if err != nil {
 			lease.Release()
@@ -97,7 +102,7 @@ func (m *MCPRelay) Authorize(req *http.Request) (relay.Lease, bool) {
 		lease.Connection = name
 		lease.Origin, lease.Path, lease.Credential = target.origin, target.path, target.bearer
 		lease.Header, lease.ProxyURL, lease.WithholdErrors = target.header, target.proxy, target.withhold
-		m.attemptContext.add(&lease, r, r.connections[name])
+		m.attemptContext.add(&lease, r, connection)
 	}
 	// OpenCode adds codemode=false; no caller query may change the approved URL.
 	lease.DropQuery = !httpService || lease.WithholdErrors
