@@ -40,6 +40,7 @@ outside Git.
 - **`mcp_public_proxy`:** deployment-owned HTTP(S) proxy origin denying private/host/metadata
   destinations (including DNS) with no direct fallback. Applies to all selected MCP
   connections when set. MCP errors withhold bodies, headers, trailers and redirects.
+- **`mcp_attempt_context`:** optional [signed PostgreSQL MCP audit attribution](../../adrs/0036-signed-mcp-attempt-context.md).
 
 ## Image contract
 

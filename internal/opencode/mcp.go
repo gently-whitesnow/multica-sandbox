@@ -19,9 +19,9 @@ const MCPRelayPrefix = "mcp_relay_"
 // answer a long tool call only when it completes.
 const MCPHeaderTimeout = 15 * time.Minute
 
-// MCPReservedHeaders keeps upstream OAuth challenges from the agent: authorization is
-// the relay's, so OpenCode never starts its own OAuth flow.
-var MCPReservedHeaders = []string{"www-authenticate"}
+// MCPReservedHeaders keeps relay-owned attribution and OAuth challenges out of
+// caller and upstream headers. OpenCode must not start its own OAuth flow.
+var MCPReservedHeaders = []string{"www-authenticate", strings.ToLower(mcpAttemptContextHeader)}
 
 var mcpAlias = regexp.MustCompile(`^/[a-zA-Z][a-zA-Z0-9_-]{0,63}$`)
 
@@ -33,9 +33,10 @@ func MCPRelayPath(path string) bool {
 // MCPRelay forwards an attempt's MCP requests to the exact approved URL of the named
 // connection with its current access token (ADR 0023); tokens never enter the attempt.
 type MCPRelay struct {
-	grants   *relay.Grants
-	mu       sync.Mutex
-	attempts map[string]*running
+	grants         *relay.Grants
+	mu             sync.Mutex
+	attempts       map[string]*running
+	attemptContext *mcpAttemptContext
 }
 
 func NewMCPRelay() *MCPRelay {
@@ -84,9 +85,15 @@ func (m *MCPRelay) Authorize(req *http.Request) (relay.Lease, bool) {
 		name := strings.SplitN(strings.TrimPrefix(req.URL.Path, "/http/"), "/", 2)[0]
 		lease.Connection = name
 		lease.Header = r.httpServices[name].Header()
+		lease.Header.Del(mcpAttemptContextHeader)
 		lease.WithholdErrors = r.httpServices[name].PathCredential != nil
 	} else {
 		name := strings.TrimPrefix(req.URL.Path, "/")
+		connection := r.connections[name]
+		if signing := m.attemptContext; signing != nil && signing.restrictIAMToTarget && connection.identity && connection.URL != signing.url {
+			lease.Release()
+			return relay.Lease{Attempt: lease.Attempt, Refused: relay.ErrPolicy}, false
+		}
 		target, err := r.mcpUpstream(name)
 		if err != nil {
 			lease.Release()
@@ -95,6 +102,7 @@ func (m *MCPRelay) Authorize(req *http.Request) (relay.Lease, bool) {
 		lease.Connection = name
 		lease.Origin, lease.Path, lease.Credential = target.origin, target.path, target.bearer
 		lease.Header, lease.ProxyURL, lease.WithholdErrors = target.header, target.proxy, target.withhold
+		m.attemptContext.add(&lease, r, connection)
 	}
 	// OpenCode adds codemode=false; no caller query may change the approved URL.
 	lease.DropQuery = !httpService || lease.WithholdErrors

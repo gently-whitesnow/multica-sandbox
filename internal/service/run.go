@@ -172,7 +172,10 @@ func newOpenCodeAdapter(ctx context.Context, c Config, stateDir string, api *mul
 	}
 	adapter := &opencode.Adapter{Server: strings.TrimRight(c.Server, "/"), Controller: c.Daemon, Issuer: issuer, Authority: authority, Status: api, Reporter: api, Workloads: workloads, Command: c.Command, IdleWatchdog: watchdog, ToolWatchdog: toolWatchdog, MCPPublicProxy: publicProxy, CompactionMaxTokens: c.OpenCode.CompactionMaxTokens, Log: log}
 	if issuer != nil || publicProxy != nil {
-		adapter.MCPRelay = opencode.NewMCPRelay()
+		adapter.MCPRelay, err = newMCPRelay(c.OpenCode, adapter.Server)
+		if err != nil {
+			return nil, nil, err
+		}
 		policy := relay.Policy{Allow: opencode.MCPRelayPath, Reserved: opencode.MCPReservedHeaders, HeaderTimeout: opencode.MCPHeaderTimeout}
 		if err = c.serveRelay(ctx, "MCP", adapter.MCPRelay, *c.OpenCode.MCPRelay, policy, nil, nil); err != nil {
 			return nil, nil, err
@@ -409,6 +412,9 @@ func attemptIdentity(ctx context.Context, c Config) (opencode.Issuer, opencode.A
 	if _, err := opencode.ParseMCPPublicProxy(c.OpenCode.MCPPublicProxy); err != nil {
 		return nil, nil, err
 	}
+	if c.OpenCode.MCPAttemptContext != nil && (c.OpenCode.IdentityFile == "" || c.OpenCode.MCPRelay == nil) {
+		return nil, nil, fmt.Errorf("mcp_attempt_context requires identity_file and mcp_relay")
+	}
 	if (c.OpenCode.IdentityFile != "" || c.OpenCode.MCPPublicProxy != "") != (c.OpenCode.MCPRelay != nil) {
 		return nil, nil, fmt.Errorf("identity_file or mcp_public_proxy requires mcp_relay, and mcp_relay requires one of them")
 	}
@@ -435,4 +441,11 @@ func attemptIdentity(ctx context.Context, c Config) (opencode.Issuer, opencode.A
 		authority = a
 	}
 	return issuer, authority, nil
+}
+
+func newMCPRelay(config *OpenCodeConfig, server string) (*opencode.MCPRelay, error) {
+	if config.MCPAttemptContext == nil {
+		return opencode.NewMCPRelay(), nil
+	}
+	return opencode.NewMCPRelayWithAttemptContext(*config.MCPAttemptContext, server)
 }

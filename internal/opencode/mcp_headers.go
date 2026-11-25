@@ -42,6 +42,9 @@ func mcpHeaders(raw map[string]string) (map[string]string, error) {
 	headers := map[string]string{}
 	size := 0
 	for name, value := range raw {
+		if strings.EqualFold(name, mcpAttemptContextHeader) {
+			continue
+		}
 		if !validMCPHeaderName(name) || !validMCPHeaderValue(value) {
 			return nil, ErrDenied
 		}
